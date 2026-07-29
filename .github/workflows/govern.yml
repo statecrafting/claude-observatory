@@ -1,0 +1,35 @@
+name: govern
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  govern:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: npm install -g spec-spine@0.10.0
+      - run: bun install --frozen-lockfile
+      - run: spec-spine compile
+      - run: spec-spine index check
+      - run: spec-spine lint --fail-on-warn
+      - name: Coupling gate
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${PR_BODY:-}" > /tmp/pr-body.txt
+          spec-spine couple \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head HEAD \
+            --pr-body /tmp/pr-body.txt
+      - run: bun run typecheck
+      - name: Tests
+        run: |
+          if ls src/**/*.test.ts src/*.test.ts 2>/dev/null | grep -q .; then
+            bun test
+          else
+            echo "no tests yet; skipping (recorded, visible)"
+          fi
