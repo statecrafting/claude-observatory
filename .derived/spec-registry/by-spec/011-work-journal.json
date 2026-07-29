@@ -1,0 +1,49 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "010-orchestrator-thesis"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/journal.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/journal.test.ts"
+      }
+    ],
+    "id": "011-work-journal",
+    "implementation": "pending",
+    "kind": "kernel",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "critical",
+    "sectionHeadings": [
+      "011: Durable hash-linked work journal",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/011-work-journal/spec.md",
+    "status": "approved",
+    "summary": "The crash-consistent memory of the orchestrator: an append-only, hash-linked JSONL journal using the attest-ledger record envelope (canonical key-sorted JSON, sha256 chain, seq = line index), with the two properties the family's existing ledger lacks: real durability (fsync before acknowledge) and O(1) appends (in-memory head cache). State is recovered by folding the journal, never trusted from memory. Intent is journaled before a mutation and outcome after it, so a crash between the two is detectable and a resumed run reads exactly what was and was not done.\n",
+    "title": "Durable hash-linked work journal"
+  },
+  "shardHash": "d57624a6ac9f0c3ca3d455ae5c13aff5228dc479118498d7f681237a9989775a",
+  "specVersion": "1.1.0"
+}

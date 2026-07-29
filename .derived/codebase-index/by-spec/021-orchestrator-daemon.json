@@ -1,0 +1,53 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '021-orchestrator-daemon' file unit 'src/orchestrator/daemon.ts' does not exist",
+        "path": "src/orchestrator/daemon.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '021-orchestrator-daemon' file unit 'src/orchestrator/daemon.test.ts' does not exist",
+        "path": "src/orchestrator/daemon.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "012-spec-dag-readiness",
+      "015-quota-scheduler",
+      "016-stage-build",
+      "017-stage-ship",
+      "018-stage-shepherd",
+      "019-stage-verify",
+      "020-decision-ledger"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.ts"
+        }
+      }
+    ],
+    "specId": "021-orchestrator-daemon",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "89e74e1ba653ff080b0c0e2936ec7f370609faa5bd7704cc1cdb1f31c7a7b2a3"
+}

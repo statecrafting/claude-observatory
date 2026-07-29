@@ -1,0 +1,47 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '024-web-ui' file unit 'web/' does not exist",
+        "path": "web/"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '024-web-ui' file unit 'src/orchestrator/api/static.ts' does not exist",
+        "path": "src/orchestrator/api/static.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "022-http-api-and-events"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/static.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "web/"
+        }
+      }
+    ],
+    "specId": "024-web-ui",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "c769a97fc0e9f6d70bb3af001d8f65bd7e2a1d67603bc1d76765870b3b9e24b5"
+}

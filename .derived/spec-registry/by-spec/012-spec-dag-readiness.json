@@ -1,0 +1,40 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "010-orchestrator-thesis"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/dag.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/dag.test.ts"
+      }
+    ],
+    "id": "012-spec-dag-readiness",
+    "implementation": "pending",
+    "kind": "kernel",
+    "risk": "high",
+    "sectionHeadings": [
+      "012: Spec DAG readiness",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/012-spec-dag-readiness/spec.md",
+    "status": "approved",
+    "summary": "The DAG resolver the orchestrator schedules from. spec-spine deliberately attaches no mechanics to depends_on (no readiness, no cycle detection, no invalidation), so this spec adds them as product behavior: registry reads through spec-spine subcommands only, contract pinning as sha256 over the dependency's spec.md bytes (the same normalization spec-spine hashes use), readiness = all dependencies shipped with matching pins, amendment invalidates downstream pins, and any dependency cycle among pending specs refuses the run rather than guessing an order.\n",
+    "title": "Spec DAG readiness: pinning, invalidation, cycle refusal"
+  },
+  "shardHash": "48310387217f8dbf5049a2271a7d8cf3839e3b2ba17307877c5084ec577fb556",
+  "specVersion": "1.1.0"
+}

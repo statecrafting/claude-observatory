@@ -1,0 +1,46 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "012-spec-dag-readiness",
+      "015-quota-scheduler",
+      "016-stage-build",
+      "017-stage-ship",
+      "018-stage-shepherd",
+      "019-stage-verify",
+      "020-decision-ledger"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/daemon.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/daemon.test.ts"
+      }
+    ],
+    "id": "021-orchestrator-daemon",
+    "implementation": "pending",
+    "kind": "kernel",
+    "risk": "critical",
+    "sectionHeadings": [
+      "021: Orchestrator daemon",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/021-orchestrator-daemon/spec.md",
+    "status": "approved",
+    "summary": "The long-lived process that composes everything: recover state from the journal, reconcile any intent-without-outcome, then loop serially: pick the next ready spec (012), walk its stages (016-019) through the state machine (013), park and resume on quota (015), stop honestly on needsHuman. Identity-checked single instance (pid plus process start time), consumes no model quota itself, and hosts the HTTP API (022) in the same process.\n",
+    "title": "Orchestrator daemon: the serial run loop"
+  },
+  "shardHash": "af3d9ec7adbb3cd29849d477d217be26326a9a0de3560422bc3f6c46b1f216d9",
+  "specVersion": "1.1.0"
+}

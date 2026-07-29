@@ -1,0 +1,40 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "022-http-api-and-events"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "web/"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/api/static.ts"
+      }
+    ],
+    "id": "024-web-ui",
+    "implementation": "pending",
+    "kind": "surface",
+    "risk": "medium",
+    "sectionHeadings": [
+      "024: Localhost web UI",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/024-web-ui/spec.md",
+    "status": "approved",
+    "summary": "A read-mostly single-page app served same-origin by the daemon (built assets embedded, statecraft pattern): DAG view with status, readiness, blockers, and invalidation; live run view with current spec, stage, and streaming session output over SSE; quota state with time-to-reset (estimates marked); searchable decision-ledger browser; run history with the per-spec evidence trail (PR, CI result, verify verdict, costs); and the control verbs the API exposes, each with a confirmation that names what will be journaled. It is an observability surface, not a wizard: every number on screen is traceable to a journal record or an evidence file.\n",
+    "title": "Localhost web UI: the observability surface"
+  },
+  "shardHash": "43373ac56b83b4b45d147a0f58848d4fbd2b22c8391fe904e85a391c957d7afc",
+  "specVersion": "1.1.0"
+}

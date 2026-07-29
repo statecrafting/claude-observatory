@@ -1,0 +1,33 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '022-http-api-and-events' file unit 'src/orchestrator/api/' does not exist",
+        "path": "src/orchestrator/api/"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "021-orchestrator-daemon"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/"
+        }
+      }
+    ],
+    "specId": "022-http-api-and-events",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "1d5b64b34ae2d23a90a6628ac37ec822acf9ea8afe8e6c655a4e002c99c21932"
+}
