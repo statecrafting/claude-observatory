@@ -18,7 +18,7 @@
       }
     ],
     "id": "013-run-state-machine",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "kernel",
     "risk": "high",
     "sectionHeadings": [
@@ -28,13 +28,14 @@
       "3. Behavior",
       "4. Functional requirements",
       "5. Acceptance criteria",
-      "6. Out of scope"
+      "6. Out of scope",
+      "7. Resolved decisions"
     ],
     "specPath": "specs/013-run-state-machine/spec.md",
     "status": "approved",
     "summary": "The typed state machine for runs, spec executions, and stages, kept as data (an allowed-transitions table) after the statecraft factory pattern: unit-testable, resumable by fold, with invalid transitions as typed errors. A run holds spec executions; a spec execution walks build, ship, shepherd, verify; every stage is independently retryable; terminal and live states are explicit predicates. All transitions go through the journal's intent/outcome bracket.\n",
     "title": "Run and stage state machine (transitions as data)"
   },
-  "shardHash": "a4d6c3d75e2808eb472bf0cf7dd2d7e693e8be53c50d03db61e9d0bf8c5dafb2",
+  "shardHash": "9b1da865ef4bb887ffa706022aca400f52884d2ad560c4fa7293ddccd0d696a8",
   "specVersion": "1.1.0"
 }
