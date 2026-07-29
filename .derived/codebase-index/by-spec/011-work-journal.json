@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '011-work-journal' file unit 'src/orchestrator/journal.ts' does not exist",
-        "path": "src/orchestrator/journal.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '011-work-journal' file unit 'src/orchestrator/journal.test.ts' does not exist",
-        "path": "src/orchestrator/journal.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "010-orchestrator-thesis"
@@ -22,11 +7,23 @@
       {
         "path": "docs/design/00-ecosystem-analysis.md",
         "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/journal.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/journal.ts",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/journal.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -35,7 +32,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/journal.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -61,5 +62,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "2399f82ab39266c126d875eeed668e033646733be016b9c645a289993394045e"
+  "shardHash": "94c9870c4040a059ab39dee6b80ed406cad2f118de46f1c5d48b45d76330b736"
 }
