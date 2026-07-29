@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "011-work-journal"
@@ -80,3 +80,52 @@ machine reviewable against this spec line by line.
 
 Scheduling policy (spec 012 decides what runs; this spec only records what
 is happening) and stage semantics (specs 016-019).
+
+## 7. Resolved decisions
+
+D-1. `needsHuman` is purely state-derived, with no retry-budget or
+scheduling-policy accounting (that is this spec's own Out of scope):
+`needsHuman(run)` is true only for `paused`, `needsHuman(stageExec)` only
+for `blocked`, `needsHuman(specExec)` only for `failed`. A failed
+`SpecExec` always qualifies, full stop; whether it is later auto-retried or
+escalated to a human is spec 012's business, not this module's.
+
+D-2. `isTerminal`/`isLive` are defined per entity kind rather than as a
+single mechanical sink check, because a literal "no outgoing edge" reading
+gives SpecExec zero terminal states (`shipped` can invalidate, `failed` can
+retry, `invalidated` re-verifies) while still needing a meaningful
+predicate. `isLive` is the set B-3's own prose names "any live state" for
+SpecExec (`pending`, `building`, `shipping`, `shepherding`, `verifying`),
+extended by the same "actively self-progressing, not waiting on an
+external trigger" reading to `Run` (`idle`, `running`) and `StageExec`
+(`queued`, `running`). `isTerminal` is a true graph sink (no outgoing edge
+in that entity kind's own table): `Run` {`completed`, `failed`},
+`StageExec` {`passed`, `failed`, `blocked`}, `SpecExec` {} (none: every
+SpecExec status has a legal way forward while the pipeline is live). The
+two predicates are not required to partition every status: `Run`'s
+`parked` and `paused` are neither live nor terminal (waiting on an
+external quota/human resume, not self-progressing, not done).
+
+D-3. Ids are minted by a small monotonic helper: epoch-ms in base36 (fixed
+9 chars), a per-process counter (fixed 4 base36 chars, so many ids minted
+within one millisecond by one process still sort in creation order), and a
+4-hex-char random suffix (guards against two processes minting the same
+ms+counter pair at once). Lexicographic string sort therefore agrees with
+creation order to millisecond resolution, satisfying B-1's "ULID-like
+sortable strings" without a dependency.
+
+D-4. `SpecExec`'s attempt counter increments as a deterministic function of
+the specific transition (`failed -> building`) rather than being carried
+in the transition payload, so the journaled `state.transition.intent`/
+`.outcome` payload stays at the fixed `{entity, id, from, to}` shape B-5
+calls for while `foldOrchestratorState` still recovers the exact attempt
+`transition()` computed live, by replaying the same pure rule from the
+same `(entity kind, from, to)` triple.
+
+D-5. `StageExec` retries mint a fresh `StageExec` entity
+(`createStageExec(handle, specExecId, stage, attempt)`) rather than
+transitioning the same entity back to `queued`: B-4 names no such edge
+(unlike SpecExec's explicit `failed -> building`), and every StageExec
+status other than `queued`/`running` is a sink in this module's own
+table, consistent with "every stage can be retried" meaning a new attempt
+is a new entity.
