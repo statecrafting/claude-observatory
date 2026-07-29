@@ -1,0 +1,87 @@
+---
+id: "012-spec-dag-readiness"
+title: "Spec DAG readiness: pinning, invalidation, cycle refusal"
+status: approved
+created: "2026-07-29"
+authors: ["Bartek Kus"]
+kind: kernel
+implementation: pending
+risk: high
+depends_on:
+  - "010-orchestrator-thesis"
+summary: >
+  The DAG resolver the orchestrator schedules from. spec-spine deliberately
+  attaches no mechanics to depends_on (no readiness, no cycle detection, no
+  invalidation), so this spec adds them as product behavior: registry reads
+  through spec-spine subcommands only, contract pinning as sha256 over the
+  dependency's spec.md bytes (the same normalization spec-spine hashes use),
+  readiness = all dependencies shipped with matching pins, amendment
+  invalidates downstream pins, and any dependency cycle among pending specs
+  refuses the run rather than guessing an order.
+establishes:
+  - "src/orchestrator/dag.ts"
+  - "src/orchestrator/dag.test.ts"
+---
+
+# 012: Spec DAG readiness
+
+## 1. Purpose
+
+Scheduling needs three answers spec-spine does not give: what is ready, what
+became invalid, and whether the graph is even executable. This spec is those
+answers, computed honestly from the target repo's corpus.
+
+## 2. Territory
+
+`src/orchestrator/dag.ts` and tests. Pins live in the work journal (spec
+011), not in files of the target repo.
+
+## 3. Behavior
+
+- **B-1 (governed reads).** Structural data comes from `spec-spine registry
+  list/show/status-report --json` subprocess calls against the target repo.
+  The orchestrator never parses `.derived/**` JSON directly.
+- **B-2 (contract hash).** `pinOf(specId)` = sha256 over the bytes of
+  `specs/<id>/spec.md` after BOM strip and CRLF/CR to LF normalization
+  (identical rules to spec-spine's input hashing, so the pin equals the
+  registry shard's notion of the spec's content).
+- **B-3 (readiness).** `ready(specId)` iff every `depends_on` target is
+  shipped (spec 010 definition, tracked in the journal) AND the pin recorded
+  at that dependency's ship time equals `pinOf(dep)` now. A spec with no
+  dependencies is ready.
+- **B-4 (invalidation).** When `pinOf(dep)` drifts from the recorded pin,
+  every transitive dependent that was shipped drops to `invalidated` and
+  requires re-verification (spec 019) before counting as shipped again; the
+  transition is journaled with both hashes.
+- **B-5 (cycles).** Cycle detection runs over the full `depends_on` graph
+  before every scheduling decision. A cycle among specs that are not all
+  shipped refuses scheduling with the cycle path named. spec-spine compiles
+  cycles clean, so this is the only guard.
+- **B-6 (next).** `nextReady()` returns the lowest-numbered ready spec with
+  `implementation: pending`, mirroring the AGENTS.md backlog protocol, or
+  null with the blocking reasons per pending spec (honest blockers for the
+  UI).
+
+## 4. Functional requirements
+
+- **FR-001.** Registry subprocess failures surface as typed errors
+  (spec-spine absent, compile failing, non-zero exits) and never as empty
+  DAGs.
+- **FR-002.** All functions are pure given (registry snapshot, journal
+  state, pin function); subprocess and file reads sit behind an injected
+  reader so tests run against fixtures.
+- **FR-003.** Tests cover: readiness with and without pins, invalidation
+  cascade depth >= 2, cycle refusal naming the path, nextReady tie-break by
+  number, and blocker reporting.
+
+## 5. Acceptance criteria
+
+- **AC-1.** `bun test src/orchestrator/dag.test.ts` passes.
+- **AC-2.** Against this repo's own corpus, `nextReady()` returns
+  011-work-journal when nothing is shipped (the bootstrap order is itself
+  the fixture).
+
+## 6. Out of scope
+
+Cross-repo DAGs, parallel wavefront computation, and writing anything into
+the target repo's specs.

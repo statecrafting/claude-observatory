@@ -1,0 +1,47 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '020-decision-ledger' file unit 'src/orchestrator/decisions.ts' does not exist",
+        "path": "src/orchestrator/decisions.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '020-decision-ledger' file unit 'src/orchestrator/decisions.test.ts' does not exist",
+        "path": "src/orchestrator/decisions.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "011-work-journal"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/decisions.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/decisions.ts"
+        }
+      }
+    ],
+    "specId": "020-decision-ledger",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "4fe2baa82328e2f0bc38245ff1e888e05d49730229af7f5edf780ff28a701b9d"
+}

@@ -1,0 +1,47 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '015-quota-scheduler' file unit 'src/orchestrator/quota.ts' does not exist",
+        "path": "src/orchestrator/quota.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '015-quota-scheduler' file unit 'src/orchestrator/quota.test.ts' does not exist",
+        "path": "src/orchestrator/quota.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "014-session-driver"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/quota.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/quota.ts"
+        }
+      }
+    ],
+    "specId": "015-quota-scheduler",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "bd2a2c8d49066681695648e1e9acb768e8b2b4b26a6d35dceb2e30cc092d3fed"
+}

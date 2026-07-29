@@ -1,0 +1,42 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "012-spec-dag-readiness",
+      "014-session-driver",
+      "020-decision-ledger"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/stages/build.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/stages/build.test.ts"
+      }
+    ],
+    "id": "016-stage-build",
+    "implementation": "pending",
+    "kind": "stage",
+    "risk": "high",
+    "sectionHeadings": [
+      "016: Build stage",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/016-stage-build/spec.md",
+    "status": "approved",
+    "summary": "The first pipeline stage: assemble the context a fresh session needs (the target spec verbatim, the backlog protocol, relevant decision-ledger entries, dependency pins), flip the spec to in-progress on a fresh feature branch, drive one session to implement exactly that spec's territory, and judge completion from evidence (gate commands green, spec acceptance criteria addressed, working tree state) rather than the session's own claim.\n",
+    "title": "Build stage: implement one spec in one fresh session"
+  },
+  "shardHash": "df36b5e9c91ccb33c19ca517ef99b3019340e9f40ee84abb2da39b57c3920755",
+  "specVersion": "1.1.0"
+}

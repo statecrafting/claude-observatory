@@ -1,0 +1,57 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "constrains": [
+      {
+        "kind": "sequencing-plan",
+        "note": "Kernel specs 011-015 are hand-built (the bootstrap); 020 joins them as kernel once 011 exists. From 016 onward the orchestrator increasingly builds its own backlog; the first honest milestone is three specs driven unattended with a trustworthy ledger.\n",
+        "target_specs": [
+          "011-work-journal",
+          "012-spec-dag-readiness",
+          "013-run-state-machine",
+          "014-session-driver",
+          "015-quota-scheduler",
+          "016-stage-build",
+          "017-stage-ship",
+          "018-stage-shepherd",
+          "019-stage-verify",
+          "020-decision-ledger",
+          "021-orchestrator-daemon",
+          "022-http-api-and-events",
+          "023-orchestrator-cli",
+          "024-web-ui"
+        ]
+      }
+    ],
+    "created": "2026-07-29",
+    "id": "010-orchestrator-thesis",
+    "implementation": "n-a",
+    "kind": "thesis",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "high",
+    "sectionHeadings": [
+      "010: Orchestrator thesis",
+      "1. Purpose",
+      "2. Core model",
+      "3. Behavior (the non-negotiables)",
+      "4. Out of scope",
+      "5. Resolved decisions"
+    ],
+    "specPath": "specs/010-orchestrator-thesis/spec.md",
+    "status": "approved",
+    "summary": "claude-observatory grows into an autonomous build orchestrator: given a spec-spine DAG, it drives one spec per fresh Claude Code session through build, ship, shepherd, and verify, survives quota exhaustion, records every choice in an append-only ledger, and exposes one typed HTTP API that the CLI and a localhost web UI both consume. This spec fixes the core model, the layering, and the sequencing plan; it owns no code.\n",
+    "title": "Orchestrator thesis: governed autonomous builds, one spec per session"
+  },
+  "shardHash": "3ac6ed685ed156a2fe84b1340546eaed185a40d0f0af4a18058df9d4be591ba9",
+  "specVersion": "1.1.0"
+}

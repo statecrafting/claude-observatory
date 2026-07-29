@@ -1,0 +1,47 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '019-stage-verify' file unit 'src/orchestrator/stages/verify.ts' does not exist",
+        "path": "src/orchestrator/stages/verify.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '019-stage-verify' file unit 'src/orchestrator/stages/verify.test.ts' does not exist",
+        "path": "src/orchestrator/stages/verify.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "018-stage-shepherd"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/verify.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/verify.ts"
+        }
+      }
+    ],
+    "specId": "019-stage-verify",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "2e0847c6807d7e916cc6c4e43d73958bb87fc8bc62e6c4ed6c6c328c56e63138"
+}

@@ -1,0 +1,40 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "014-session-driver"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/quota.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/quota.test.ts"
+      }
+    ],
+    "id": "015-quota-scheduler",
+    "implementation": "pending",
+    "kind": "kernel",
+    "risk": "high",
+    "sectionHeadings": [
+      "015: Quota scheduler",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/015-quota-scheduler/spec.md",
+    "status": "approved",
+    "summary": "Long-running autonomy against a metered resource. Quota exhaustion is detected from the session driver's classification (primary) and observed ~/.claude activity (corroborating); the run parks with a countdown to the parsed or estimated reset, resumes automatically at the next spec boundary, and never probes by burning a session. The daemon itself consumes no model quota.\n",
+    "title": "Quota scheduler: detect exhaustion, park, resume at the spec boundary"
+  },
+  "shardHash": "e3d1a5e830ada3f28dbe991e2e5d7c6c74e6b36c40049d3997f41d3c071057e3",
+  "specVersion": "1.1.0"
+}

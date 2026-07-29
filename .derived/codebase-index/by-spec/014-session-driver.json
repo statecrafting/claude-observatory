@@ -1,0 +1,75 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '014-session-driver' file unit 'src/orchestrator/session.ts' does not exist",
+        "path": "src/orchestrator/session.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '014-session-driver' file unit 'src/orchestrator/session.test.ts' does not exist",
+        "path": "src/orchestrator/session.test.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '014-session-driver' file unit 'src/orchestrator/classify-termination.ts' does not exist",
+        "path": "src/orchestrator/classify-termination.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '014-session-driver' file unit 'src/orchestrator/classify-termination.test.ts' does not exist",
+        "path": "src/orchestrator/classify-termination.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "013-run-state-machine"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/classify-termination.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/classify-termination.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/session.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/session.ts"
+        }
+      }
+    ],
+    "specId": "014-session-driver",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "99d20743814ae717ab2c991958d13af4a43c5702f3300f89fac19df2465f475c"
+}

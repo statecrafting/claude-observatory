@@ -1,0 +1,36 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "021-orchestrator-daemon"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/api/"
+      }
+    ],
+    "id": "022-http-api-and-events",
+    "implementation": "pending",
+    "kind": "surface",
+    "risk": "medium",
+    "sectionHeadings": [
+      "022: HTTP API and event stream",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/022-http-api-and-events/spec.md",
+    "status": "approved",
+    "summary": "The daemon's single interface: a typed localhost HTTP API (Bun.serve) plus a server-sent-events stream with heartbeat, after the statecraft admin-stream pattern. Read endpoints cover the DAG with readiness and blockers, run state, stage evidence, quota state, decision-ledger queries, and run history; control endpoints cover start, pause, resume, skip, retry-stage, re-run-verify, and force-human-gate. Every response shape is a versioned TypeScript type shared with the clients; errors use one envelope with stable kind tokens. Localhost-only binding in v1, but nothing in the shapes assumes single-user forever.\n",
+    "title": "Typed HTTP API and event stream (the only interface)"
+  },
+  "shardHash": "8c7daaa0e60d3e44292ef75c098ca71c66d0216d312a7aafa9e3c0450f84f7a8",
+  "specVersion": "1.1.0"
+}

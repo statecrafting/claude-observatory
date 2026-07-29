@@ -1,0 +1,47 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '017-stage-ship' file unit 'src/orchestrator/stages/ship.ts' does not exist",
+        "path": "src/orchestrator/stages/ship.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '017-stage-ship' file unit 'src/orchestrator/stages/ship.test.ts' does not exist",
+        "path": "src/orchestrator/stages/ship.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "016-stage-build"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/ship.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/ship.ts"
+        }
+      }
+    ],
+    "specId": "017-stage-ship",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "a9ba3043db21afde5a42d5f126c04cb25f1842bbb892b8550c806cdc5b1ed141"
+}

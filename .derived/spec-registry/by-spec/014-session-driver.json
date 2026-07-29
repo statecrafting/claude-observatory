@@ -1,0 +1,48 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "013-run-state-machine"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/session.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/session.test.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/classify-termination.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/classify-termination.test.ts"
+      }
+    ],
+    "id": "014-session-driver",
+    "implementation": "pending",
+    "kind": "kernel",
+    "risk": "critical",
+    "sectionHeadings": [
+      "014: Session driver",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/014-session-driver/spec.md",
+    "status": "approved",
+    "summary": "The one place that spawns Claude Code. A fresh `claude` process per attempt: prompt piped on stdin (never shell-interpolated), -p with --output-format stream-json --verbose, cwd = target repo, pinned CLI version recorded, OAuth token auth with ANTHROPIC_API_KEY explicitly removed from the child env (the documented precedence trap). Streams events to subscribers, journals session start/end with cost and result, and classifies terminations: completed, auth-failure (hard stop), quota-exhausted (park, spec 015), hook-blocked, transient (bounded retry), timeout, crashed.\n",
+    "title": "Claude Code session driver (fresh process, stream-json, classified outcomes)"
+  },
+  "shardHash": "be2bb3ca00afa139bdb30215bbb8d72dcbdc3dd111156bbcf79d21c2cca5531a",
+  "specVersion": "1.1.0"
+}

@@ -1,0 +1,51 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '023-orchestrator-cli' file unit 'src/commands/orchestrator.ts' does not exist",
+        "path": "src/commands/orchestrator.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "022-http-api-and-events"
+    ],
+    "implementingPaths": [
+      {
+        "path": "src/index.ts",
+        "source": "spec-edge"
+      }
+    ],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/index.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/index.ts"
+        }
+      }
+    ],
+    "specId": "023-orchestrator-cli",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "9cb38fb093630686899583d4fda94aebff2fc9f0f9f66aeaeab61cae583e058c"
+}

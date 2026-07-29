@@ -1,0 +1,47 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '013-run-state-machine' file unit 'src/orchestrator/state.ts' does not exist",
+        "path": "src/orchestrator/state.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '013-run-state-machine' file unit 'src/orchestrator/state.test.ts' does not exist",
+        "path": "src/orchestrator/state.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "011-work-journal"
+    ],
+    "implementingPaths": [],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/state.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/state.ts"
+        }
+      }
+    ],
+    "specId": "013-run-state-machine",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "7d8f61853ae54abe3c5bcedcae15eb36b9cc010e351c33fa9544ec8f591111ef"
+}

@@ -1,0 +1,40 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "017-stage-ship"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/stages/shepherd.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/stages/shepherd.test.ts"
+      }
+    ],
+    "id": "018-stage-shepherd",
+    "implementation": "pending",
+    "kind": "stage",
+    "risk": "medium",
+    "sectionHeadings": [
+      "018: Shepherd stage",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/018-stage-shepherd/spec.md",
+    "status": "approved",
+    "summary": "From open PR to merged. Polls the PR's checks by head sha with the watch-loop discipline (backoff, change-only journaling, statusless abort, deadline), remediates a red run with at most N fresh sessions fed the failing log tail, re-enters the loop after each push, and merges when green with the repo's default merge method. Every remediation is a new attempt with evidence; flapping CI and exhausted attempts fail honestly to needsHuman.\n",
+    "title": "Shepherd stage: watch CI, remediate, merge when green"
+  },
+  "shardHash": "9f730f53ccd6203c360295d85b6d18bde9b39bc75d7556ee0303fc7270c66c9c",
+  "specVersion": "1.1.0"
+}
