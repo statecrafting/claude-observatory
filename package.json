@@ -1,0 +1,14 @@
+{
+  "name": "claude-observatory",
+  "version": "0.1.0",
+  "description": "Filesystem observability for ~/.claude: watcher daemon, event log, semantic classification",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "observatory": "./src/index.ts"
+  },
+  "scripts": {
+    "watch": "bun src/index.ts watch",
+    "snapshot": "bun src/index.ts snapshot"
+  }
+}

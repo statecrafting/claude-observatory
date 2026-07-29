@@ -1,0 +1,8 @@
+# Captured observations of ~/.claude: never committed. Baselines, event db,
+# daemon logs, and any samples may reference private paths and activity.
+data/
+*.log
+*.db
+*.db-wal
+*.db-shm
+node_modules/
