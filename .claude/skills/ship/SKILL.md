@@ -19,37 +19,30 @@ run `/setup`.
 
 - `git branch --show-current`. If on the default branch, STOP and create a
   feature branch first (`NNN-short-name` when the work belongs to spec `NNN`).
-  Never commit straight to the default branch inside /ship. (The AGENTS.md
-  backlog protocol does permit a finished single-spec session to commit and
-  push to main directly; that flow uses `/commit`, not /ship. /ship is the
-  PR path.)
+  Never commit straight to the default branch.
 - `git status --short`. Confirm the changes are the intended set; surface
   anything unexpected before proceeding.
 
 ## Step 1: run the gate locally
 
-`.derived/` shards are committed in this repo and the binary regenerates them
-deterministically: refresh first, then run the conformance and drift checks
+If `.derived/` is committed in your repo, the binary regenerates it
+deterministically: refresh it first, then run the conformance and drift checks
 in order. Stop on the first failure (orchestrator rule: halt, do not silently
 continue).
 
 ```sh
 spec-spine compile                       # specs -> the registry
-spec-spine index                         # refresh the codebase index shards
 spec-spine lint --fail-on-warn           # corpus well-formedness (exit 1 on a warn)
 spec-spine index check                   # staleness gate (exit 2 if stale)
 spec-spine couple --base origin/main --head HEAD   # the drift gate (exit 1 on drift)
 ```
 
-After spec 002 lands, source-code changes also owe the chassis gates before
-shipping: `npm run typecheck && npm test`.
-
 Outcomes:
 
 - All pass: continue to Step 2.
-- `index check` reports stale (exit 2): run `spec-spine index` to regenerate,
-  then stage and commit the regenerated shards with your change; CI runs the
-  same staleness gate.
+- `index check` reports stale (exit 2): run `spec-spine index` to regenerate. If
+  `.derived/` is committed, stage and commit the regenerated index with your
+  change; CI runs the same staleness gate.
 - `couple` reports drift (exit 1): the changed code is not covered by its owning
   spec's declared edges. Two legitimate paths, chosen explicitly, never
   silently:
@@ -60,19 +53,18 @@ Outcomes:
      design: that is a coherence-guard halt (surface the contradiction and
      stop).
   2. **Waiver.** Add a cited `Spec-Drift-Waiver:` line documenting why the drift
-     is accepted (the keyword configured in `spec-spine.toml`). CHECKPOINT:
-     requires explicit user approval.
+     is accepted. CHECKPOINT: requires explicit user approval.
 
 ## Step 2: review the diff
 
 Invoke the `code-review` skill on the working diff. Apply confirmed, actionable
 fixes. If a fix touches any gate input (a `spec.md`, a manifest, a schema, a
-workflow, `.claude/**`), re-run Step 1 before continuing.
+workflow), re-run Step 1 before continuing.
 
 ## Step 3: commit
 
-Invoke the `commit` skill (conventional, impact-focused message, spec id as
-scope for backlog work) on a feature branch.
+Invoke the `commit` skill (conventional, impact-focused message) on a feature
+branch.
 
 - Never add AI attribution: no "Generated with ...", no `Co-Authored-By`
   trailers, in commits or PR bodies.
@@ -89,13 +81,11 @@ gh pr create --title "<conventional title>" --body "<Summary + Testing>"
 ```
 
 - The PR body is Summary + Testing. Include the `Spec-Drift-Waiver:` line inline
-  in the body if Step 1 chose the waiver path with user approval. CI passes the
-  PR body to `spec-spine couple --pr-body`, so the waiver must be in the body
-  at creation time (`.github/workflows/spec-spine.yml`).
-- CI re-runs the same gate (`compile` / `index check` / `lint --fail-on-warn` /
-  `couple`) on the PR. A local pass should mean a clean CI run; if CI still
-  fails on a gate the local run passed, halt and present the divergence
-  (orchestrator rule: halt on failure).
+  in the body if Step 1 chose the waiver path with user approval.
+- CI re-runs the same gate (`compile` / `lint` / `index check` / `couple`) on
+  the PR. A local pass should mean a clean CI run; if CI still fails on a gate
+  the local run passed, halt and present the divergence (orchestrator rule: halt
+  on failure).
 
 ## Step 5: after creation
 

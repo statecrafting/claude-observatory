@@ -21,31 +21,13 @@ Identify what is staged vs unstaged, the nature of each change (feature,
 fix, refactor, docs, test, chore), and the user-visible impact. Match the
 scoping conventions visible in recent history.
 
-## 2. Gates green before committing
-
-Never commit with the gates red. Run:
-
-```
-spec-spine compile && spec-spine index && \
-  spec-spine lint --fail-on-warn && spec-spine index check
-```
-
-After spec 002 lands, code changes also need the chassis gates green:
-`npm run typecheck && npm test`.
-
-If any `specs/*/spec.md` or hashed input (manifests, `standards/**`,
-workflows, `.claude/**`) changed, `compile`/`index` regenerate the
-committed `.derived/` shards: stage them with the change that produced
-them, never as a separate follow-up commit.
-
-## 3. Draft a conventional-commit message
+## 2. Draft a conventional-commit message
 
 Format: `type(scope): subject`
 
 **Type (required):** `feat`, `fix`, `refactor`, `docs`, `test`, `chore`.
-Use the spec id as the scope when the work belongs to a backlog spec, e.g.
-`feat(004): ...` (the AGENTS.md convention); otherwise a clarifying area
-scope, e.g. `docs(standards):`, `chore(claude):`.
+Add a scope when it clarifies the affected area, e.g. `feat(compiler):`,
+`fix(coupling):`, `docs(standards):`.
 
 **Subject line:**
 - 72 characters maximum (hard limit; count them).
@@ -54,9 +36,9 @@ scope, e.g. `docs(standards):`, `chore(claude):`.
 
 **Good vs bad:**
 - BAD: `refactor: extract helper for diagnostic formatting`
-- GOOD: `fix(005): factory no longer stalls on an empty template.toml`
-- BAD: `feat: add new endpoint handler`
-- GOOD: `feat(004): tenant creation keyed off installation_id`
+- GOOD: `fix: lint no longer crashes on an empty spec body`
+- BAD: `feat: add new subcommand handler`
+- GOOD: `feat(registry): relationships query for a spec neighborhood`
 
 **Body (optional):** separate from the subject with a blank line. Use
 dash-prefixed bullets only for multiple distinct changes. Keep lines
@@ -66,14 +48,13 @@ already covers what and why.
 **Issue linking:** `Fixes #NNN` or `Closes #NNN` on its own line after
 the body, when applicable.
 
-## 4. Stage the relevant files
+## 3. Stage the relevant files
 
 Use `git add` with specific paths. Do not use `git add -A` or `git add .`
-unless every changed file belongs in this commit. Include the regenerated
-`.derived/` shards when a hashed input changed. Never stage files that
-look like secrets (`.env`, credentials, tokens, `keys/`).
+unless every changed file belongs in this commit. Never stage files that
+look like secrets (`.env`, credentials, tokens).
 
-## 5. Create the commit
+## 4. Create the commit
 
 Pass the message via heredoc:
 
@@ -86,7 +67,7 @@ EOF
 )"
 ```
 
-## 6. Verify
+## 5. Verify
 
 Run `git status` to confirm the commit succeeded and the tree is in the
 expected state.

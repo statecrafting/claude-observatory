@@ -1,0 +1,14 @@
+{
+  "mapping": {
+    "implementingPaths": [
+      {
+        "path": "",
+        "source": "manifest-metadata"
+      }
+    ],
+    "specId": "000-bootstrap",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "296b906ec15469c64cdc73c54c2d9fdaf6dd84fdd227fc5cc315aad5acb5bb64"
+}

@@ -26,16 +26,14 @@ memory: project
 
 ## spec-spine Context
 
-spec-spine is an installed CLI tool that governs this repo's spec corpus. In this repo, spec-spine is a dependency, not source code you edit.
+spec-spine is an installed CLI tool that governs your repo's spec corpus. In your repo, spec-spine is a dependency, not source code you edit.
 
 | Surface | Path | Key concerns |
 |---------|------|--------------|
-| Spec corpus | `specs/NNN-slug/spec.md` | Frontmatter schema, compiler compatibility, relationship edges, `implementation` status flips |
-| Code | pre-code until spec 002 lands; then the chassis dirs (`addon/`, `core/`, `auth/`, `idp/`, `lib/`, `hiq/`, `health/`, `web/`) plus `tenants/`, `factory/`, `fleet/`, `frontend/` (governance UI) | Correctness, error handling, public API surface, service-boundary discipline |
+| Spec corpus | `specs/NNN-slug/spec.md` | Frontmatter schema, compiler compatibility, relationship edges, status flips |
+| Your code | `src/` and `scripts/` | Correctness, error handling, public API surface |
 | Standard | `standards/spec/` | Contract and constitution alignment |
-| Derived | `.derived/` | Must not be hand-edited; only `spec-spine compile` / `spec-spine index` output, committed as shards |
-
-Domain rules worth extra scrutiny (from `CLAUDE.md`): CoreLedger is the only durable-data API (no Encore `SQLDatabase` anywhere); the factory consumes `template.toml` and nothing else (never reach into template internals); license boundaries are load-bearing (AGPL-3.0 here, Apache-2.0 in enrahitu and statecraft-cli).
+| Derived | `.derived/` | Must not be hand-edited; only `spec-spine compile` output |
 
 ## Process
 
@@ -70,15 +68,15 @@ For each changed file:
 ### 5. Validate Spec Compliance
 
 - Does the implementation match what the backing spec describes?
-- Are all spec requirements addressed, or are some deferred? Acceptance sections are satisfied verbatim, or the spec carries a dated Status note saying exactly what remains (`AGENTS.md` § Working the backlog).
-- If a spec was modified, is the frontmatter schema still valid (`spec-spine compile` + `spec-spine lint --fail-on-warn` clean)?
+- Are all spec requirements addressed, or are some deferred?
+- If a spec was modified, is the frontmatter schema still valid (`spec-spine compile` + `spec-spine lint` clean)?
 - If code and its owning spec both changed, does `spec-spine couple` stay clean?
 
 ### 6. Check Conventions
 
 - Code style matches surrounding code (naming, structure, module organization)
 - Behavioral rules respected (steps in order, derived artifacts refreshed)
-- No edits to `.derived/` (compiler output only); regenerated shards committed alongside the spec or manifest edits that produced them
+- No edits to `.derived/` (compiler output only)
 - New public APIs are documented
 
 ## Output Format
@@ -113,11 +111,11 @@ For each changed file:
 - Compliance: [matches / partial / deviates, with details]
 
 ### Verification
-- [ ] `spec-spine compile` + `spec-spine index` clean (if specs or manifests changed)
-- [ ] `spec-spine lint --fail-on-warn` clean
-- [ ] `spec-spine index check` fresh
+- [ ] Builds cleanly (`bun run typecheck`)
+- [ ] Tests pass (if applicable)
+- [ ] No new lint warnings
+- [ ] `spec-spine compile` + `lint` clean (if specs changed)
 - [ ] `spec-spine couple` clean (if code and owning spec both changed)
-- [ ] Chassis gates green (`npm run typecheck` + `npm test`, after spec 002 lands)
 
 ### Verdict
 [APPROVE / APPROVE WITH NOTES / REQUEST CHANGES]
@@ -126,7 +124,7 @@ For each changed file:
 ## Guidelines
 
 - **DO:** Review every changed file; do not skip files
-- **DO:** Run the gate chain to catch what tools can find
+- **DO:** Run the project's build check and linter to catch what tools can find
 - **DO:** Cross-reference changes against their backing spec
 - **DO:** Be specific; cite file paths and line numbers for every finding
 - **DO:** Distinguish severity: critical issues vs nice-to-have suggestions

@@ -15,10 +15,8 @@ Claude Code, Codex CLI, Cursor, Copilot, and any future agent).
    `## ` heading exclusive. That section is the step list.
 2. Execute the protocol described there, using parallel tool calls wherever it
    says "dispatch simultaneously".
-3. Emit a structured `## initialized: statecraft` summary: lifecycle counts
-   (from `spec-spine registry status-report`), the spec inventory, and the
-   next pending spec in the backlog build order (`AGENTS.md` § Working the
-   backlog).
+3. Emit the structured summary the protocol prescribes (the
+   `## initialized: claude-observatory` block).
 
 This dispatcher deliberately does not duplicate the step list: `AGENTS.md` is
 the single source of truth. Evolve the protocol by editing `AGENTS.md`, never

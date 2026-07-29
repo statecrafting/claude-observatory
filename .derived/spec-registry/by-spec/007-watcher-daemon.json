@@ -1,0 +1,39 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "001-observed-universe",
+      "005-cli-surface"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/commands/daemon.ts"
+      }
+    ],
+    "id": "007-watcher-daemon",
+    "implementation": "complete",
+    "kind": "surface",
+    "origin": {
+      "retroactive": true
+    },
+    "risk": "medium",
+    "sectionHeadings": [
+      "007: Watcher daemon",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Out of scope",
+      "5. Known defects (recorded, not blessed)"
+    ],
+    "specPath": "specs/007-watcher-daemon/spec.md",
+    "status": "approved",
+    "summary": "daemon start|stop|status|plist: a detached child process running the watch command with db persistence and NO_COLOR, both stdio streams appended to data/daemon.log, a plain-decimal pidfile at data/daemon.pid, single-SIGTERM stop, kill(pid, 0) liveness probing with stale-pidfile detection, and a launchd plist that is printed to stdout and never installed (installing a launch agent is the user's call).\n",
+    "title": "Background watcher daemon (pidfile lifecycle, plist print-only)"
+  },
+  "shardHash": "c2f4a2b38384e51300eb8fe5bc9ac53607251610191839878c4ac6fe916fb242",
+  "specVersion": "1.1.0"
+}

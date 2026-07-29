@@ -1,0 +1,32 @@
+{
+  "mapping": {
+    "dependsOn": [
+      "001-observed-universe"
+    ],
+    "implementingPaths": [
+      {
+        "path": "src/db.ts",
+        "source": "spec-edge"
+      }
+    ],
+    "resolvedUnits": [
+      {
+        "locations": [
+          {
+            "file": "src/db.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/db.ts"
+        }
+      }
+    ],
+    "specId": "004-event-store",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "f70f498a30b537f4563945cb9945a908a24c868c36d34d4e72de5ce2d03c8a89"
+}

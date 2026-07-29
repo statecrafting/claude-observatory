@@ -9,6 +9,14 @@
   },
   "scripts": {
     "watch": "bun src/index.ts watch",
-    "snapshot": "bun src/index.ts snapshot"
+    "snapshot": "bun src/index.ts snapshot",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "spec-spine": {
+    "spec": "000-bootstrap"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "@types/bun": "^1.2.0"
   }
 }

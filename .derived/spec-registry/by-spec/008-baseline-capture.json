@@ -1,0 +1,43 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "001-observed-universe",
+      "004-event-store"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "scripts/baseline.ts"
+      },
+      {
+        "kind": "file",
+        "path": "scripts/import-baseline.ts"
+      }
+    ],
+    "id": "008-baseline-capture",
+    "implementation": "complete",
+    "kind": "tooling",
+    "origin": {
+      "retroactive": true
+    },
+    "risk": "low",
+    "sectionHeadings": [
+      "008: Baseline capture and import",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Out of scope",
+      "5. Known defects (recorded, not blessed)"
+    ],
+    "specPath": "specs/008-baseline-capture/spec.md",
+    "status": "approved",
+    "summary": "Phase-1 research tooling kept as part of the product surface: baseline.ts writes a one-shot JSONL metadata snapshot of the observed universe (path, kind, size, rounded mtime, octal permission bits, inode; never content) to data/baseline-<epoch-ms>.jsonl, and import-baseline.ts loads such a file into the snapshot tables as label \"baseline\", recovering the capture time from the filename.\n",
+    "title": "Baseline capture and import scripts"
+  },
+  "shardHash": "92f53687e5e852dbd4f669a4a286135a97e2653d6651a5c5e9470dfbbf0f625a",
+  "specVersion": "1.1.0"
+}

@@ -6,3 +6,7 @@ data/
 *.db-wal
 *.db-shm
 node_modules/
+
+# spec-spine derived artifacts: shards are committed, build metadata is not
+.derived/**/build-meta.json
+.derived/attestation/

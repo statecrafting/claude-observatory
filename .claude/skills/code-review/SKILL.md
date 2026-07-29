@@ -2,7 +2,7 @@
 name: code-review
 description: "Review the current diff for correctness bugs and spec drift, then emit an evidence-oriented findings list"
 allowed-tools: Read, Grep, Glob, Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git rev-parse:*), Bash(spec-spine:*)
-argument-hint: "[scope] - e.g. \"branch\", \"working tree\", \"specs/\""
+argument-hint: "[scope] - e.g. \"branch\", \"working tree\", \"src/\""
 ---
 
 # /code-review: correctness + spec drift
@@ -21,10 +21,9 @@ git diff origin/main...HEAD --stat   # committed delta
 git diff HEAD --stat                 # uncommitted delta
 ```
 
-Note which classes changed: source code (post-002: the chassis dirs and
-the services `tenants/`, `factory/`, `fleet/`, `frontend/`), specs
-(`specs/**/spec.md`), schemas/standards (`standards/**`), docs (`*.md`),
-scripts/packaging, workflows (`.github/**`), agent kit (`.claude/**`).
+Note which classes changed: source code, specs (`specs/**/spec.md`),
+schemas/standards (`standards/**`), docs (`docs/**`, `*.md`),
+scripts/packaging, workflows (`.github/**`).
 
 ## Step 1: corpus stays green
 
@@ -37,10 +36,6 @@ spec-spine lint --fail-on-warn       # corpus well-formedness
 spec-spine index check               # staleness (exit 2 if stale)
 spec-spine couple --base origin/main --head HEAD   # drift gate (exit 1 on drift)
 ```
-
-After spec 002 lands, source-code changes also owe the chassis gates:
-`npm run typecheck && npm test`; a red gate there is a finding with the
-failing output cited verbatim.
 
 - A `couple` failure is the headline finding: cite the file the gate
   named and the owning spec whose declared edges fail to cover it.
@@ -61,17 +56,14 @@ spec-spine registry relationships <spec-id>  # its typed edges
 Flag drift where code does something the spec's narrative or owned
 authority units do not describe, even if `couple` happens to pass
 (e.g. the edge is over-broad). Cite the spec section and the `file:line`.
-Repo-specific invariants to check against: no Encore `SQLDatabase`
-(CoreLedger only), the factory reads `template.toml` and nothing else,
-license-boundary moves are noted in the PR.
 
 ## Step 3: correctness pass
 
 Read the changed source and look for each of the following, with a
 `file:line` and a one-sentence evidence claim:
 
-- Logic and edge-case bugs (off-by-one, unhandled `null`/rejection/`Err`,
-  empty input, boundary values).
+- Logic and edge-case bugs (off-by-one, unhandled `None`/`Err`, empty
+  input, boundary values).
 - Determinism hazards: unsorted map/set iteration, locale- or
   platform-dependent behavior, unstable ordering in emitted JSON or
   content hashes.
@@ -84,7 +76,7 @@ Read the changed source and look for each of the following, with a
 ```
 ## Review: <scope>
 Base: origin/main | Head: <branch> | Files: <n> | +<a>/-<d>
-Gate: compile <ok|FAIL> | lint <ok|FAIL> | index check <ok|stale> | couple <ok|drift> | chassis <ok|FAIL|n/a pre-002>
+Gate: compile <ok|FAIL> | lint <ok|FAIL> | index check <ok|stale> | couple <ok|drift>
 
 ### Findings (severity-ordered)
 - [CORRECTNESS|SPEC-DRIFT|GATE|HYGIENE] <claim> at `file:line`

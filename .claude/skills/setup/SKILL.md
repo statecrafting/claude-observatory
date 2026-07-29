@@ -15,16 +15,13 @@ ad-hoc parsing of `.derived/**/*.json` (see
 
 ### 1. Install spec-spine
 
+Install the CLI by whichever method fits your environment:
+
 ```bash
 cargo install spec-spine-cli            # from crates.io (needs a Rust toolchain)
-```
-
-No Rust toolchain: use the prebuilt installer CI uses
-(`.github/workflows/spec-spine.yml` pins the version; match it):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/statecrafting/spec-spine/main/install.sh | \
-  SPEC_SPINE_VERSION=v0.10.0 SPEC_SPINE_BIN_DIR="$HOME/.local/bin" sh
+# or, no Rust toolchain:
+npm i -D spec-spine                      # in a TS/JS repo (prebuilt binary)
+pip install spec-spine                   # or: uvx spec-spine  (Python repo)
 ```
 
 Verify with `spec-spine --version`. Halt on a non-zero exit and surface the
@@ -36,10 +33,10 @@ failing step verbatim.
 spec-spine compile
 ```
 
-`.derived/` shards are committed in this repo, and `compile` is
-deterministic: a no-op on a clean tree. Run it before any read so the
-registry reflects the working tree, and commit the regenerated registry
-whenever `specs/*/spec.md` changes.
+Whether `.derived/` is committed or gitignored is your policy. If it is
+committed, `compile` is deterministic and a no-op on a clean tree: run it
+before any read so the registry reflects the working tree, and commit the
+regenerated registry whenever `specs/*/spec.md` changes.
 
 ### 3. Verify the governed loop
 
@@ -48,7 +45,7 @@ on this clone:
 
 ```bash
 spec-spine index check       # codebase index staleness gate
-spec-spine lint --fail-on-warn                     # corpus conformance
+spec-spine lint              # corpus conformance
 spec-spine couple --base origin/main --head HEAD   # PR-time coupling gate
 ```
 
@@ -56,25 +53,12 @@ If `index check` exits non-zero the committed index is stale against current
 inputs. Run `spec-spine index`, re-commit the regenerated index, then re-check.
 Do not parse `.derived/**/*.json` directly to "verify" success.
 
-### 4. Post-002 prerequisites (application tooling)
-
-The repo is pre-code until spec 002 (app shell) lands; the spine loop above
-is the whole setup. Once spec 002 imports the EnRaHiTu chassis, contributor
-setup additionally needs Node and the chassis install/build steps from that
-spec's Acceptance section:
-
-```bash
-npm ci && npm --prefix frontend ci
-npm run build:runtime && npm run build:app
-npm run typecheck && npm test    # the chassis gates
-```
-
-### 5. Emit summary
+### 4. Emit summary
 
 Report exactly:
 
 ```
-## setup: statecraft
+## setup: claude-observatory
 
 **Install:** {ok / failed at <step>}
 **Governed loop:**
@@ -83,7 +67,6 @@ Report exactly:
   - lint: {clean / N diagnostics}
   - couple: {clean / drift surfaced}
 **Lifecycle:** {N specs across <statuses>}  (from registry status-report)
-**Chassis gates:** {green / not applicable (pre-002)}
 
 Next: run `/init` to load full session context.
 ```

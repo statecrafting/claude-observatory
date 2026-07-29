@@ -1,0 +1,33 @@
+{
+  "mapping": {
+    "dependsOn": [
+      "001-observed-universe",
+      "003-event-classification"
+    ],
+    "implementingPaths": [
+      {
+        "path": "src/watcher.ts",
+        "source": "spec-edge"
+      }
+    ],
+    "resolvedUnits": [
+      {
+        "locations": [
+          {
+            "file": "src/watcher.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/watcher.ts"
+        }
+      }
+    ],
+    "specId": "002-filesystem-watcher",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "10dc0b54c2d29e5f365c36c473bf065af6d814e7b1ca34d87bbe702066636570"
+}

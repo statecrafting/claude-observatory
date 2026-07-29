@@ -1,0 +1,52 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "dependsOn": [
+      "001-observed-universe",
+      "004-event-store"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/commands/explain.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/redact.ts"
+      }
+    ],
+    "id": "006-explain-and-redacted-peek",
+    "implementation": "complete",
+    "kind": "surface",
+    "origin": {
+      "retroactive": true
+    },
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "FINDINGS.md"
+        }
+      }
+    ],
+    "risk": "high",
+    "sectionHeadings": [
+      "006: explain and redacted peek",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Out of scope",
+      "5. Known defects (recorded, not blessed)"
+    ],
+    "specPath": "specs/006-explain-and-redacted-peek/spec.md",
+    "status": "approved",
+    "summary": "The two knowledge commands. explain joins a path against FINDINGS.md research sections (backticked path-pattern headings with <placeholder> segments) plus the path's observed event history. peek is the single content-viewing path in the tool: read-only, size-capped, contained to the observed universe, and unconditionally redacted (secret-shaped JSON fields, env assignments, known token formats, long hex and base64 runs). There is no unredacted read path and no bypass flag, by design.\n",
+    "title": "explain (FINDINGS join) and peek (redacted content viewing)"
+  },
+  "shardHash": "2646bb002388b238ff068342d48bdbb037ab7ccfafa9f2c40c856084b9f077c7",
+  "specVersion": "1.1.0"
+}

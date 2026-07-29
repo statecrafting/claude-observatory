@@ -1,0 +1,33 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "id": "000-bootstrap",
+    "origin": {
+      "retroactive": true
+    },
+    "sectionHeadings": [
+      "000: Bootstrap spec system",
+      "1. The authoring / derived boundary",
+      "2. The typed authority graph",
+      "3. Retroactive adoption",
+      "4. Corpus conventions"
+    ],
+    "specPath": "specs/000-bootstrap/spec.md",
+    "status": "approved",
+    "summary": "Foundational contract for this repository: authored truth lives only in markdown (+ YAML frontmatter); machine-consumable truth is compiler-emitted JSON only; every artifact is a deterministic function of (config, file contents); a typed authority graph governs who-owns-what. claude-observatory adopted spec-spine retroactively on 2026-07-29: the code under src/ and scripts/ predates this corpus, and specs 001-008 record its behavior as found, defects included, rather than blessing them as contract.\n",
+    "title": "Bootstrap spec system for claude-observatory",
+    "unamendable": [
+      "markdown-truth-boundary",
+      "json-truth-boundary",
+      "determinism-requirement",
+      "directory-name-equals-id",
+      "typed-authority-graph",
+      "refusal-rule"
+    ]
+  },
+  "shardHash": "08ed8b2e8e364d2b9928dba6d60866d170ade1aafe5adfa8a75f18c1cbfee903",
+  "specVersion": "1.1.0"
+}

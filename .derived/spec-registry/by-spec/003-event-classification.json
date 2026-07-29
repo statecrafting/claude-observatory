@@ -1,0 +1,35 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-07-29",
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/classify.ts"
+      }
+    ],
+    "id": "003-event-classification",
+    "implementation": "complete",
+    "kind": "engine",
+    "origin": {
+      "retroactive": true
+    },
+    "risk": "low",
+    "sectionHeadings": [
+      "003: Semantic classification",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Out of scope",
+      "5. Known defects (recorded, not blessed)"
+    ],
+    "specPath": "specs/003-event-classification/spec.md",
+    "status": "approved",
+    "summary": "The first-match-wins rule table that maps a relative path (plus action, entry kind, and delta) to a semantic kind and a human label: transcripts, subagent transcripts, memory, file-history buckets, session registry, paste cache, shell snapshots, state-file rewrites, config edits, and the rest of the ~/.claude taxonomy. Unclassified is a first-class outcome with a loud label, never an error.\n",
+    "title": "Semantic classification of observed events"
+  },
+  "shardHash": "fa454ed2d4e5a89070f77537044fb42cac8922dd6ccbe1d2c58dfd97794c13f3",
+  "specVersion": "1.1.0"
+}
