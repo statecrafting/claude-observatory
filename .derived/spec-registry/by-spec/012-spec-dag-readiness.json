@@ -18,7 +18,7 @@
       }
     ],
     "id": "012-spec-dag-readiness",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "kernel",
     "risk": "high",
     "sectionHeadings": [
@@ -28,13 +28,14 @@
       "3. Behavior",
       "4. Functional requirements",
       "5. Acceptance criteria",
-      "6. Out of scope"
+      "6. Out of scope",
+      "7. Resolved decisions"
     ],
     "specPath": "specs/012-spec-dag-readiness/spec.md",
     "status": "approved",
     "summary": "The DAG resolver the orchestrator schedules from. spec-spine deliberately attaches no mechanics to depends_on (no readiness, no cycle detection, no invalidation), so this spec adds them as product behavior: registry reads through spec-spine subcommands only, contract pinning as sha256 over the dependency's spec.md bytes (the same normalization spec-spine hashes use), readiness = all dependencies shipped with matching pins, amendment invalidates downstream pins, and any dependency cycle among pending specs refuses the run rather than guessing an order.\n",
     "title": "Spec DAG readiness: pinning, invalidation, cycle refusal"
   },
-  "shardHash": "48310387217f8dbf5049a2271a7d8cf3839e3b2ba17307877c5084ec577fb556",
+  "shardHash": "4bc504d14f474e727d1fd0199a71479fbad6eb659d5d98487ee97d40436db8f1",
   "specVersion": "1.1.0"
 }

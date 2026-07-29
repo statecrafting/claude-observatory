@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "010-orchestrator-thesis"
@@ -85,3 +85,14 @@ answers, computed honestly from the target repo's corpus.
 
 Cross-repo DAGs, parallel wavefront computation, and writing anything into
 the target repo's specs.
+
+## 7. Resolved decisions
+
+D-1. The spec is silent on how specs completed before the orchestrator
+existed count as shipped. This module does not decide provenance: it takes
+the shipped-set as an input map from spec id to `{pin, source}`, where
+source is either "pipeline" (a spec shipped through the orchestrator's own
+ship stage, journaled by spec 021) or "adopted" (a bootstrap-era spec whose
+implementation is complete or n-a, pinned at first observation).
+`adoptedShipped(registrySnapshot, pinOf)` computes the adopted half of that
+map so the daemon can journal the adoption itself.

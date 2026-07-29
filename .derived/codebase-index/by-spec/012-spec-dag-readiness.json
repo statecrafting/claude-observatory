@@ -1,27 +1,25 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '012-spec-dag-readiness' file unit 'src/orchestrator/dag.ts' does not exist",
-        "path": "src/orchestrator/dag.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '012-spec-dag-readiness' file unit 'src/orchestrator/dag.test.ts' does not exist",
-        "path": "src/orchestrator/dag.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "010-orchestrator-thesis"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "src/orchestrator/dag.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/dag.ts",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/dag.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -30,7 +28,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/dag.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -43,5 +45,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "55f47b303000a9042ef97169d2202e19bb577d7aae132f0b09914a5e4e0aa0de"
+  "shardHash": "e3d44ea461e49292602bb2265e2564b13a6c5750da8acf040c666a3e4cc01004"
 }
