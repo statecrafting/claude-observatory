@@ -18,7 +18,7 @@
       }
     ],
     "id": "011-work-journal",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "kernel",
     "references": [
       {
@@ -44,6 +44,6 @@
     "summary": "The crash-consistent memory of the orchestrator: an append-only, hash-linked JSONL journal using the attest-ledger record envelope (canonical key-sorted JSON, sha256 chain, seq = line index), with the two properties the family's existing ledger lacks: real durability (fsync before acknowledge) and O(1) appends (in-memory head cache). State is recovered by folding the journal, never trusted from memory. Intent is journaled before a mutation and outcome after it, so a crash between the two is detectable and a resumed run reads exactly what was and was not done.\n",
     "title": "Durable hash-linked work journal"
   },
-  "shardHash": "d57624a6ac9f0c3ca3d455ae5c13aff5228dc479118498d7f681237a9989775a",
+  "shardHash": "3dd31e16898b28f007ea9993b97aea8b532bc98064acce63320604a3d5ace507",
   "specVersion": "1.1.0"
 }
