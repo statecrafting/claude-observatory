@@ -10,3 +10,7 @@ node_modules/
 # spec-spine derived artifacts: shards are committed, build metadata is not
 .derived/**/build-meta.json
 .derived/attestation/
+
+# The web UI's build output: produced by `bun run web:build`, served by the
+# daemon from disk, never committed.
+web/dist/

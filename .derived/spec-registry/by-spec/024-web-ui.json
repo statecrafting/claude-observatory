@@ -17,6 +17,10 @@
         "path": "src/orchestrator/api/static.ts"
       },
       {
+        "kind": "file",
+        "path": "src/orchestrator/api/static.test.ts"
+      },
+      {
         "anchor": "scripts",
         "file": "package.json",
         "kind": "section"
@@ -27,8 +31,18 @@
         "kind": "section"
       }
     ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "022-http-api-and-events",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/server.ts"
+        }
+      }
+    ],
     "id": "024-web-ui",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "surface",
     "risk": "medium",
     "sectionHeadings": [
@@ -46,6 +60,6 @@
     "summary": "A read-mostly single-page app served same-origin by the daemon (built assets embedded, statecraft pattern): DAG view with status, readiness, blockers, and invalidation; live run view with current spec, stage, and streaming session output over SSE; quota state with time-to-reset (estimates marked); searchable decision-ledger browser; run history with the per-spec evidence trail (PR, CI result, verify verdict, costs); and the control verbs the API exposes, each with a confirmation that names what will be journaled. It is an observability surface, not a wizard: every number on screen is traceable to a journal record or an evidence file.\n",
     "title": "Localhost web UI: the observability surface"
   },
-  "shardHash": "eb183ea963e7d0025b4cc51d322be48338bf503e9bdedd493f1def8a46be430a",
+  "shardHash": "f18934f9e0eb0fff73c48616a933a07a4c2abb8d3e39af7503009b7a4bec99c5",
   "specVersion": "1.1.0"
 }
