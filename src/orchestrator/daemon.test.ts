@@ -962,3 +962,51 @@ test(
   },
   10_000
 );
+
+// --- regression: the bracket's frontmatter flip must not hide a spec from
+// its own resume (found live: ship failed past budget, retryStage was
+// issued, and nextReady skipped the spec because the registry honestly
+// reported it in-progress) ---------------------------------------------------
+
+test("a failed specExec whose spec reads in-progress in the registry is still scheduled on resume", async () => {
+  const dataDir = freshDir("resume-inprogress-data");
+  const repoDir = freshDir("resume-inprogress-repo");
+
+  // Dynamic registry: like the real build bracket, the spec flips to
+  // in-progress the moment build first runs, and stays that way.
+  let implementation = "pending";
+  const dagReader: DagReader = {
+    registryListJson: () => JSON.stringify([{ id: "900-fixture", implementation, dependsOn: [] }]),
+    registryShowJson: () => JSON.stringify({ id: "900-fixture", implementation, dependsOn: [] }),
+    readSpecFile: () => Buffer.from("fixture content for 900-fixture\n", "utf8"),
+  };
+
+  let shipAttempts = 0;
+  const stageFns: DaemonStageFns = {
+    build: async (options) => {
+      implementation = "in-progress";
+      return buildResult(options.specId, "passed");
+    },
+    ship: async (options) => {
+      shipAttempts++;
+      if (shipAttempts <= 2) return shipResult(options.specId, "failed");
+      return shipResult(options.specId, "passed");
+    },
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const deps = makeDeps({ dataDir, repoDir, dagReader, stageFns });
+  const daemon = new Daemon(deps);
+  await daemon.start();
+
+  await Bun.sleep(80);
+  expect(daemon.runStatus).toBe("paused");
+  expect(shipAttempts).toBe(2);
+
+  daemon.retryStage("900-fixture", "test-source");
+  await daemon.join();
+  expect(daemon.runStatus).toBe("completed");
+  expect(shipAttempts).toBe(3);
+  await daemon.shutdown();
+});

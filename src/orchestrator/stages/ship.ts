@@ -406,7 +406,7 @@ function toPrEvidence(pr: GitHubPr): ShipPrEvidence {
 // --- defaults ----------------------------------------------------------------
 
 export const DEFAULT_SHIP_DEADLINE_MS = 15 * 60_000;
-export const DEFAULT_SHIP_MAX_TURNS = 30;
+export const DEFAULT_SHIP_MAX_TURNS = 60;
 
 // --- the stage (B-1 through B-4) --------------------------------------------
 

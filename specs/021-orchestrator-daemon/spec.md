@@ -186,3 +186,11 @@ next" from the live `SpecExec.status`, never an in-memory cursor) already
 completes the reconciliation honestly; a stageExec's own dangling attempt
 is superseded by the fresh attempt the resumed walk creates, never resumed
 in place.
+
+D-10. Found by the first live run: the build bracket flips the target spec
+to in-progress, which made nextReady skip that same spec after a
+retryStage, dead-ending the resume (the registry honestly said
+in-progress, so the spec was neither pending nor shipped). The working
+snapshot now reads any spec with a live or failed SpecExec in the current
+run as schedulable, regardless of the registry's implementation field; the
+regression test drives the registry flip the way the real bracket does.
