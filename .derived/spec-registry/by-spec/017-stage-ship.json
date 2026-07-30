@@ -36,6 +36,6 @@
     "summary": "Turn a green build branch into an open PR. The stage drives the target repo's own /ship discipline in a session rather than reimplementing the gate, treats PreToolUse hook exit-2 refusals as the first-class hook-blocked outcome, and verifies the result from the outside: PR exists, head sha matches the built branch, body carries no waiver unless a human approved one, and no session link or AI attribution appears anywhere.\n",
     "title": "Ship stage: commit, push, open the PR through the governed discipline"
   },
-  "shardHash": "4224c38494da0613cbb2096294c56c3350ef3279d162cc71b4b25fcadafd7c32",
+  "shardHash": "46262ee793292d0f818fb5cc24c31bf604c67683413ee4cd72f80b57a7d5253f",
   "specVersion": "1.1.0"
 }

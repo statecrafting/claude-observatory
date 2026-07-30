@@ -709,12 +709,23 @@ export class Daemon {
   // shipped (or a human has skipped) is excluded here regardless of what the
   // registry currently reports, so a lagging registry read never causes the
   // same spec to be picked twice (Resolved decisions, D-5).
-  private buildWorkingSnapshot(snapshot: RegistrySnapshot, shippedSpecIds: ReadonlySet<string>): RegistrySnapshot {
-    if (this.skippedSpecIds.size === 0 && shippedSpecIds.size === 0) return snapshot;
+  private buildWorkingSnapshot(
+    snapshot: RegistrySnapshot,
+    shippedSpecIds: ReadonlySet<string>,
+    resumableSpecIds: ReadonlySet<string>
+  ): RegistrySnapshot {
+    if (this.skippedSpecIds.size === 0 && shippedSpecIds.size === 0 && resumableSpecIds.size === 0) return snapshot;
     const out = new Map<string, RegistrySpecEntry>(snapshot);
     for (const [id, entry] of snapshot) {
       if (shippedSpecIds.has(id)) out.set(id, { ...entry, implementation: "orchestrator-shipped" });
       else if (this.skippedSpecIds.has(id)) out.set(id, { ...entry, implementation: "orchestrator-skipped" });
+      // A spec whose SpecExec in this run is live or failed reads as
+      // schedulable regardless of the registry's implementation field: the
+      // build bracket flips the spec to in-progress on its branch, and that
+      // flip must not hide the spec from its own resume (the live run hit
+      // exactly this: ship failed, retryStage issued, and nextReady skipped
+      // the spec because its frontmatter honestly said in-progress).
+      else if (resumableSpecIds.has(id)) out.set(id, { ...entry, implementation: "pending" });
     }
     return out;
   }
@@ -750,7 +761,13 @@ export class Daemon {
       const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
       const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
       const shipped = this.computeShippedMap();
-      const workingSnapshot = this.buildWorkingSnapshot(snapshot, new Set(shipped.keys()));
+      const folded = foldOrchestratorState(this.workJournal.fold().records);
+      const resumable = new Set(
+        [...folded.specExecs.values()]
+          .filter((se) => se.runId === this.run.id && (isLive(se) || se.status === "failed"))
+          .map((se) => se.specId)
+      );
+      const workingSnapshot = this.buildWorkingSnapshot(snapshot, new Set(shipped.keys()), resumable);
       const next = nextReady(workingSnapshot, shipped, pinOf);
 
       if (typeof next === "string") {

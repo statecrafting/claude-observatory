@@ -138,3 +138,8 @@ seam, since watching checks and merging is still "GitHub reads and one
 governed mutation behind a typed client" in the same shape FR-001 already
 describes; `ship.ts` and `createProcessGitHubClient` remain this spec's own
 territory, and none of its existing methods or behavior change.
+
+D-8. The default ship turn budget is 60, raised from 30 after the first
+live run: two real /ship sessions each starved at the 30-turn cap doing
+legitimate work (gate, review, hygiene scans) before reaching push and PR
+creation. Callers can still override per stage.
