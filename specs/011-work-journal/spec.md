@@ -39,7 +39,11 @@ the UI and the ledger seal build on.
 
 `src/orchestrator/journal.ts` and its colocated tests. Storage lives at
 `data/orchestrator/journal.jsonl` with `data/orchestrator/anchor.json` as the
-genesis anchor (both gitignored with the rest of `data/`).
+genesis anchor (both gitignored with the rest of `data/`). The chain
+implementation is reusable under a caller-chosen basename (`openJournal(dir,
+basename)`, `verifyChain(dir, basename)`), which is how a second,
+independent chain (spec 020's decision ledger) shares this module without a
+second implementation.
 
 ## 3. Behavior
 

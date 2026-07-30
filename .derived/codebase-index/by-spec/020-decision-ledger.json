@@ -1,27 +1,25 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '020-decision-ledger' file unit 'src/orchestrator/decisions.ts' does not exist",
-        "path": "src/orchestrator/decisions.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '020-decision-ledger' file unit 'src/orchestrator/decisions.test.ts' does not exist",
-        "path": "src/orchestrator/decisions.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "011-work-journal"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "src/orchestrator/decisions.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/decisions.ts",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/decisions.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -30,7 +28,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/decisions.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -43,5 +45,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "4fe2baa82328e2f0bc38245ff1e888e05d49730229af7f5edf780ff28a701b9d"
+  "shardHash": "19842f4de77c1cb9eadb504003f24101bcb998de8848466bb16df22ddafb13a2"
 }
