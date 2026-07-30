@@ -1,27 +1,25 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '015-quota-scheduler' file unit 'src/orchestrator/quota.ts' does not exist",
-        "path": "src/orchestrator/quota.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '015-quota-scheduler' file unit 'src/orchestrator/quota.test.ts' does not exist",
-        "path": "src/orchestrator/quota.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "014-session-driver"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "src/orchestrator/quota.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/quota.ts",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/quota.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -30,7 +28,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/quota.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -43,5 +45,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "bd2a2c8d49066681695648e1e9acb768e8b2b4b26a6d35dceb2e30cc092d3fed"
+  "shardHash": "1ada5d08e62a333406efbca636e4c7ee1dd345534073ab65c1a8672bd4386964"
 }

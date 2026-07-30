@@ -18,7 +18,7 @@
       }
     ],
     "id": "015-quota-scheduler",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "kernel",
     "risk": "high",
     "sectionHeadings": [
@@ -28,13 +28,14 @@
       "3. Behavior",
       "4. Functional requirements",
       "5. Acceptance criteria",
-      "6. Out of scope"
+      "6. Out of scope",
+      "7. Resolved decisions"
     ],
     "specPath": "specs/015-quota-scheduler/spec.md",
     "status": "approved",
     "summary": "Long-running autonomy against a metered resource. Quota exhaustion is detected from the session driver's classification (primary) and observed ~/.claude activity (corroborating); the run parks with a countdown to the parsed or estimated reset, resumes automatically at the next spec boundary, and never probes by burning a session. The daemon itself consumes no model quota.\n",
     "title": "Quota scheduler: detect exhaustion, park, resume at the spec boundary"
   },
-  "shardHash": "e3d1a5e830ada3f28dbe991e2e5d7c6c74e6b36c40049d3997f41d3c071057e3",
+  "shardHash": "e607119feba655b6574bcfaeade0bd881731fcb70665535736cbceaed3d40b1d",
   "specVersion": "1.1.0"
 }

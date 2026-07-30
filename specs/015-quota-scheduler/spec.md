@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "014-session-driver"
@@ -78,3 +78,57 @@ died of quota).
 
 Multi-account rotation, API-key fallback, and cost budgeting (cost is
 recorded per session since 014; enforcement is a later spec).
+
+## 7. Resolved decisions
+
+D-1. B-1 and B-3 read literally collide on the estimated-park horizon: B-1
+says the first estimate anchors "the last known reset cadence" (5 hours)
+at the failure time, while B-3 says each consecutive re-quota "doubles the
+estimate horizon (capped at the cadence)". Doubling from a horizon that is
+already cadence-sized can never grow (it is already at its own cap), so a
+literal chain would flatline at the cadence forever after the first park,
+which makes the doubling language vacuous. Resolution, implemented
+exactly: the very first estimated park in a streak (no `lastPark`) anchors
+the full cadence per B-1; every consecutive estimated park after that
+restarts a doubling sequence from a conservative starting point
+(`QUOTA_BASE_ESTIMATE_MS`, 30 minutes, exported so the choice is visible
+and testable) and doubles from there, capped at the cadence, per B-3. This
+is the conservative reading available without either constant swallowing
+the other: cadence still governs the honest "we know nothing" case, and
+the doubling sequence still visibly grows on repeated failures until it
+saturates at the cadence.
+
+D-2. `consecutiveQuotaParks` counts every park in a streak, hinted or
+estimated, not only estimated parks. B-3's health warning ("surfaced as a
+health warning at 3") is about a run repeatedly hitting quota, which is
+true whether or not the classifier happened to find a reset hint on any
+given failure; gating the counter on "estimated only" would silently
+under-report the health signal on a run whose provider keeps supplying
+reset hints but keeps hitting the limit anyway.
+
+D-3. `resumeJitterMs(rng, minMs?, maxMs?)` accepts optional bounds
+defaulting to `RESUME_JITTER_MIN_MS`/`RESUME_JITTER_MAX_MS` (30 s / 120 s,
+B-3's own numbers). Production callers rely on the defaults; AC-2's
+integration test passes tiny bounds so the resume wait is compressed to
+milliseconds without faking global time or the exported constants
+themselves, keeping the test's own clock real and its runtime under 3 s.
+
+D-4. `planPark` throws when given a non-`quota` classification rather than
+silently returning a plan. B-1 names a quota classification as the
+"authoritative trigger"; a caller reaching `planPark` with anything else
+is a wiring bug upstream (the caller should have checked `parkDecision`
+first), and failing loudly here matches this codebase's existing pattern
+of validating before acting (state.ts's `InvalidTransitionError`) rather
+than producing a plausible-looking plan for a park that was never
+authorized.
+
+D-5. `foldQuotaState`'s `lastPark` is retained across a `quota.resumed`
+record rather than cleared back to `null`: FR-002 recovery only needs
+`lastPark` while `parked` is true, but B-3's doubling needs the same data
+after a resume, for the caller to pass as `planPark`'s `lastPark` input if
+the very next session immediately re-quotas. Whether that next quota hit
+still counts as "immediate" (versus a much later, unrelated quota event
+that should reset the streak) is a judgment this module cannot make from
+journal records alone; it is left to the caller (the daemon, spec 021),
+consistent with this spec's own Out of scope boundary around scheduling
+policy.
