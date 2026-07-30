@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: surface
-implementation: pending
+implementation: in-progress
 risk: medium
 depends_on:
   - "021-orchestrator-daemon"
