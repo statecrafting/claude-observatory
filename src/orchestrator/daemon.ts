@@ -1,0 +1,1027 @@
+// The orchestrator daemon (spec 021): the long-lived process that composes
+// every other kernel module into one serial run loop. Everything hard lives
+// elsewhere (the journal's crash consistency, the state machine's legal
+// transitions, the DAG's readiness, the quota scheduler's park/resume, the
+// four stages' own driving); this module is their disciplined composition,
+// trusted to be killed at any moment and resumed honestly from the journal
+// alone (the same "state is never trusted from memory" discipline journal.ts
+// itself establishes).
+//
+// Every side effect sits behind DaemonDeps (FR-002-style injection, mirroring
+// every stage module's own seam convention): the DAG reader, the four stage
+// seams (Runner, GitHubClient, VerifyRunner, BrowserVerifier), the session
+// driver, a process inspector for identity-checked locking, a clock, a
+// chunked sleep, an rng, and the four stage entry points themselves
+// (defaulting to the real runBuildStage/runShipStage/runShepherdStage/
+// runVerifyStage, overridable wholesale in tests). Production wiring lives in
+// createProductionDaemonDeps(); tests drive the Daemon class against fixture
+// deps, never a real `claude`, `gh`, or `spec-spine` subprocess.
+import * as fs from "fs";
+import { join } from "path";
+import type { JournalHandle, JsonValue } from "./journal";
+import { openJournal } from "./journal";
+import { openDecisionsChain } from "./decisions";
+import type {
+  Run,
+  FoldedRun,
+  FoldedSpecExec,
+  RunStatus,
+  SpecExecStatus,
+  Stage,
+} from "./state";
+import { createRun, createSpecExec, createStageExec, foldOrchestratorState, isLive, transition } from "./state";
+import type { Classification } from "./classify-termination";
+import type { LastParkInfo, ParkPlan } from "./quota";
+import { foldQuotaState, isResumeDue, journalPark, journalResume, planPark, resumeJitterMs } from "./quota";
+import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap, ShippedSource } from "./dag";
+import { adoptedShipped, createProcessDagReader, loadRegistrySnapshot, makePinLookup, nextReady, ready } from "./dag";
+import { runSession } from "./session";
+import type {
+  BuildResult,
+  ReadinessCheck,
+  Runner,
+  RunBuildStageOptions,
+} from "./stages/build";
+import { createProcessRunner, runBuildStage } from "./stages/build";
+import type { GitHubClient, RunShipStageOptions, ShipResult } from "./stages/ship";
+import { createProcessGitHubClient, runShipStage } from "./stages/ship";
+import type { RunShepherdStageOptions, ShepherdResult } from "./stages/shepherd";
+import { runShepherdStage } from "./stages/shepherd";
+import type { BrowserVerifier, RunVerifyStageOptions, VerifyResult, VerifyRunner } from "./stages/verify";
+import { createClaudeChromeBrowserVerifier, createProcessVerifyRunner, runVerifyStage } from "./stages/verify";
+
+// --- process inspector (B-1) -----------------------------------------------
+//
+// The seam that fixes spec 007's own recorded defect ("pid reuse is
+// undetected"): liveness is checked against pid AND the process's own start
+// time, never pid alone.
+
+export interface ProcessInspector {
+  isAlive(pid: number): boolean;
+  // Epoch ms the process identified by pid started, or null when it cannot
+  // be determined (the process is gone, or the inspection itself failed).
+  procStartMs(pid: number): number | null;
+}
+
+export function createProcessInspector(): ProcessInspector {
+  return {
+    isAlive(pid: number): boolean {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    procStartMs(pid: number): number | null {
+      const result = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)]);
+      if (result.exitCode !== 0) return null;
+      const text = new TextDecoder().decode(result.stdout).trim();
+      if (text.length === 0) return null;
+      const parsedMs = Date.parse(text);
+      return Number.isNaN(parsedMs) ? null : parsedMs;
+    },
+  };
+}
+
+// --- identity lock (B-1) ----------------------------------------------------
+
+export interface DaemonLockInfo {
+  readonly pid: number;
+  readonly procStartMs: number;
+}
+
+export interface LockAcquisition {
+  readonly lockPath: string;
+  readonly self: DaemonLockInfo;
+  // The lock info found on disk when it was stale (pid dead, or pid alive
+  // under a different process per procStartMs): null when no lock file was
+  // present at all. Set only when reclaim actually happened.
+  readonly reclaimedFrom: DaemonLockInfo | null;
+}
+
+function readDaemonLock(lockPath: string): DaemonLockInfo | null {
+  if (!fs.existsSync(lockPath)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  } catch (err) {
+    throw new Error(`daemon: lock file at ${lockPath} is corrupted: ${(err as Error).message}`);
+  }
+  const o = parsed as Record<string, unknown>;
+  if (typeof o?.pid !== "number" || typeof o?.procStartMs !== "number") {
+    throw new Error(`daemon: lock file at ${lockPath} is corrupted (expected {pid, procStartMs})`);
+  }
+  return { pid: o.pid, procStartMs: o.procStartMs };
+}
+
+function writeDaemonLock(lockPath: string, info: DaemonLockInfo): void {
+  fs.writeFileSync(lockPath, JSON.stringify(info));
+}
+
+// Liveness = pid alive AND the process currently holding that pid started at
+// the recorded time (B-1). A dead pid, or a live pid whose own start time no
+// longer matches (the recorded pid was reused by an unrelated process), both
+// count as stale and are reclaimed.
+export function acquireDaemonLock(
+  dataDir: string,
+  inspector: ProcessInspector,
+  pid: number = process.pid
+): LockAcquisition {
+  fs.mkdirSync(dataDir, { recursive: true });
+  const lockPath = join(dataDir, "daemon.lock");
+  const existing = readDaemonLock(lockPath);
+  let reclaimedFrom: DaemonLockInfo | null = null;
+
+  if (existing) {
+    const alive = inspector.isAlive(existing.pid);
+    const currentStart = alive ? inspector.procStartMs(existing.pid) : null;
+    const stillSameProcess = alive && currentStart !== null && currentStart === existing.procStartMs;
+    if (stillSameProcess) {
+      throw new Error(
+        `daemon: another instance holds the lock (pid ${existing.pid}, started ${new Date(existing.procStartMs).toISOString()})`
+      );
+    }
+    reclaimedFrom = existing;
+  }
+
+  const myProcStartMs = inspector.procStartMs(pid);
+  if (myProcStartMs === null) {
+    throw new Error(`daemon: cannot determine this process's own start time (pid ${pid}); refusing to acquire the lock`);
+  }
+  const self: DaemonLockInfo = { pid, procStartMs: myProcStartMs };
+  writeDaemonLock(lockPath, self);
+  return { lockPath, self, reclaimedFrom };
+}
+
+export function releaseDaemonLock(lockPath: string): void {
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    // already gone
+  }
+}
+
+// What a supervisor does once it has confirmed (by whatever means, e.g. the
+// OS reporting the pid is simply gone) that the previous daemon is dead: the
+// identity lock plus both of journal.ts's own per-chain lock files, so the
+// next start() neither trips journal.ts's "another writer holds it" refusal
+// nor daemon.lock's own liveness check unnecessarily. Never called by the
+// daemon itself (journal.ts's own convention deliberately leaves
+// multi-writer coordination to an outside supervisor, spec 011 section 6).
+export function forceReleaseDaemonLock(dataDir: string): void {
+  for (const name of ["daemon.lock", "journal.lock", "decisions.lock"]) {
+    try {
+      fs.unlinkSync(join(dataDir, name));
+    } catch {
+      // already gone
+    }
+  }
+}
+
+// --- stage seams and deps (FR every stage's own seam convention) -----------
+
+export interface DaemonStageFns {
+  build: (options: RunBuildStageOptions) => Promise<BuildResult>;
+  ship: (options: RunShipStageOptions) => Promise<ShipResult>;
+  shepherd: (options: RunShepherdStageOptions) => Promise<ShepherdResult>;
+  verify: (options: RunVerifyStageOptions) => Promise<VerifyResult>;
+}
+
+export interface DaemonDeps {
+  readonly dataDir: string;
+  readonly repoDir: string;
+  readonly dagReader: DagReader;
+  readonly runner: Runner;
+  readonly gh: GitHubClient;
+  readonly verifyRunner: VerifyRunner;
+  readonly browserVerifier: BrowserVerifier;
+  // Structural seam only (B-5): the daemon itself never calls this. It is
+  // wired here so the production factory can hand the same primitive to
+  // every stage-adjacent seam that needs it, and so a test can inject a
+  // throwing stub to prove the daemon's own code path never reaches it.
+  readonly runSession: typeof runSession;
+  readonly processInspector: ProcessInspector;
+  readonly clock: { now(): number };
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly rng: () => number;
+  readonly stageFns: DaemonStageFns;
+  // Defaults to process.pid; injectable so a test can exercise identity
+  // logic without needing a second real OS process.
+  readonly pid?: number;
+  readonly dropboxDir?: string;
+  readonly evidenceDir?: string;
+  readonly heartbeatIntervalMs?: number;
+  readonly sleepChunkMs?: number;
+  readonly stageRetryBudget?: number;
+  readonly resumeJitterMinMs?: number;
+  readonly resumeJitterMaxMs?: number;
+  readonly defaultBranch?: string;
+}
+
+export const DEFAULT_STAGE_RETRY_BUDGET = 1;
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+export const DEFAULT_SLEEP_CHUNK_MS = 250;
+
+// --- production wiring -------------------------------------------------
+
+export interface CreateProductionDaemonDepsParams {
+  readonly dataDir: string;
+  readonly repoDir: string;
+  readonly claudeBin?: string;
+  readonly ghBin?: string;
+}
+
+export function createProductionDaemonDeps(params: CreateProductionDaemonDepsParams): DaemonDeps {
+  const { dataDir, repoDir, claudeBin, ghBin } = params;
+  return {
+    dataDir,
+    repoDir,
+    dagReader: createProcessDagReader(),
+    runner: createProcessRunner({ repoDir, claudeBin }),
+    gh: createProcessGitHubClient({ repoDir, ghBin }),
+    verifyRunner: createProcessVerifyRunner({ repoDir }),
+    browserVerifier: createClaudeChromeBrowserVerifier({ repo: repoDir, claudeBin }),
+    runSession,
+    processInspector: createProcessInspector(),
+    clock: { now: () => Date.now() },
+    sleep: (ms: number) => Bun.sleep(ms),
+    rng: Math.random,
+    stageFns: { build: runBuildStage, ship: runShipStage, shepherd: runShepherdStage, verify: runVerifyStage },
+  };
+}
+
+// SIGTERM finishes the current journal write, releases the lock, and exits
+// (B-6). Never registered by tests; a fresh process is expected to call this
+// exactly once.
+export function installShutdownSignalHandler(daemon: Daemon): void {
+  process.on("SIGTERM", () => {
+    daemon
+      .shutdown()
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  });
+}
+
+// --- heartbeat (FR-002) ------------------------------------------------
+
+// Pure and directly testable: at most once per intervalMs, by clock reading
+// alone.
+export function shouldEmitHeartbeat(lastHeartbeatMs: number | null, nowMs: number, intervalMs: number): boolean {
+  return lastHeartbeatMs === null || nowMs - lastHeartbeatMs >= intervalMs;
+}
+
+// --- control queue (B-4) ------------------------------------------------
+
+export type ControlVerb = "pause" | "resume" | "skipSpec" | "retryStage" | "reverify" | "forceHumanGate" | "approve";
+
+export interface ControlCommand {
+  readonly verb: ControlVerb;
+  readonly specId?: string;
+  readonly source: string;
+}
+
+// --- small JSON helpers -------------------------------------------------
+
+function isJsonRecord(v: JsonValue): v is { [k: string]: JsonValue } {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function parseAdoptedPayload(payload: JsonValue): ShippedMap {
+  if (!isJsonRecord(payload) || !Array.isArray(payload.entries)) {
+    throw new Error("daemon: dag.adopted payload malformed (expected {entries: [...]})");
+  }
+  const out = new Map<string, ShippedEntry>();
+  for (const raw of payload.entries) {
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      Array.isArray(raw) ||
+      typeof (raw as Record<string, JsonValue>).id !== "string" ||
+      typeof (raw as Record<string, JsonValue>).pin !== "string" ||
+      ((raw as Record<string, JsonValue>).source !== "pipeline" && (raw as Record<string, JsonValue>).source !== "adopted")
+    ) {
+      throw new Error("daemon: dag.adopted entry malformed");
+    }
+    const r = raw as { id: string; pin: string; source: ShippedSource };
+    out.set(r.id, { pin: r.pin, source: r.source });
+  }
+  return out;
+}
+
+// --- stage plumbing -----------------------------------------------------
+
+const STAGE_ORDER: readonly Stage[] = ["build", "ship", "shepherd", "verify"];
+
+const STATUS_FOR_STAGE: Readonly<Record<Stage, SpecExecStatus>> = {
+  build: "building",
+  ship: "shipping",
+  shepherd: "shepherding",
+  verify: "verifying",
+};
+
+const NEXT_STATUS_AFTER_STAGE: Readonly<Record<Stage, SpecExecStatus>> = {
+  build: "shipping",
+  ship: "shepherding",
+  shepherd: "verifying",
+  verify: "shipped",
+};
+
+type TaggedStageResult =
+  | { readonly stage: "build"; readonly result: BuildResult }
+  | { readonly stage: "ship"; readonly result: ShipResult }
+  | { readonly stage: "shepherd"; readonly result: ShepherdResult }
+  | { readonly stage: "verify"; readonly result: VerifyResult };
+
+// Only shepherd's and verify's own StageOutcome enums carry a first-class
+// "quota" value; build's and ship's own evidence still carries the
+// underlying session classification (SessionEvidence.classification /
+// ShipSessionEvidence.classification), just not surfaced as a distinct
+// top-level outcome. This is the one place that unifies quota detection
+// across all four stages from whatever each one's own evidence shape
+// actually preserves. Build and ship evidence do not preserve the
+// classifier's parsed reset time (SessionEvidence has no resetAtMs field),
+// so a quota detected there always parks as an estimate; verify alone
+// preserves it (VerifyEvidence.quotaResetAtMs), since its own outcome
+// already carries it explicitly. See Resolved decisions, D-6.
+function detectQuotaClassification(tagged: TaggedStageResult): Classification | null {
+  switch (tagged.stage) {
+    case "build":
+      if (tagged.result.evidence.sessions.some((s) => s.classification === "quota")) {
+        return { kind: "quota", resetAtMs: null, detail: "quota classified during a build-stage session" };
+      }
+      return null;
+    case "ship":
+      if (tagged.result.evidence.sessions.some((s) => s.classification === "quota")) {
+        return { kind: "quota", resetAtMs: null, detail: "quota classified during a ship-stage session" };
+      }
+      return null;
+    case "shepherd":
+      if (tagged.result.outcome === "quota") {
+        return { kind: "quota", resetAtMs: null, detail: "quota classified during a shepherd remediation session" };
+      }
+      return null;
+    case "verify":
+      if (tagged.result.outcome === "quota") {
+        return {
+          kind: "quota",
+          resetAtMs: tagged.result.evidence.quotaResetAtMs,
+          detail: "quota classified during a verify browser-assertion session",
+        };
+      }
+      return null;
+  }
+}
+
+function isPassOutcome(tagged: TaggedStageResult): boolean {
+  if (tagged.stage === "verify") return tagged.result.outcome === "passed" || tagged.result.outcome === "not-declared";
+  return tagged.result.outcome === "passed";
+}
+
+function isBlockedOutcome(tagged: TaggedStageResult): boolean {
+  if (tagged.stage === "build") return tagged.result.outcome === "blocked" || tagged.result.outcome === "refused";
+  if (tagged.stage === "ship") return tagged.result.outcome === "blocked";
+  if (tagged.stage === "shepherd") return tagged.result.outcome === "blocked";
+  return false; // verify has no "blocked" outcome
+}
+
+type StageWalkOutcome =
+  | { readonly kind: "passed"; readonly result: TaggedStageResult }
+  | { readonly kind: "paused" }
+  | { readonly kind: "shutdown" };
+
+// --- the daemon ----------------------------------------------------------
+
+export class Daemon {
+  private readonly deps: DaemonDeps;
+  private readonly dropboxDir: string;
+  private readonly evidenceDir: string;
+
+  private started = false;
+  private closed = false;
+  private shutdownRequested = false;
+
+  private lockPath: string | null = null;
+  private workJournal!: JournalHandle;
+  private decisionsChain!: JournalHandle;
+  private run!: FoldedRun;
+
+  private rawLoopPromise: Promise<void> | null = null;
+  private loopPromise: Promise<void> | null = null;
+  private loopError: unknown = null;
+
+  private lastHeartbeatMs: number | null = null;
+
+  private readonly pendingControls: ControlCommand[] = [];
+  private readonly skippedSpecIds = new Set<string>();
+  private readonly forcedGateSpecIds = new Set<string>();
+  private readonly approvedGateSpecIds = new Set<string>();
+  private readonly reverifyQueue: string[] = [];
+
+  constructor(deps: DaemonDeps) {
+    this.deps = deps;
+    this.dropboxDir = deps.dropboxDir ?? join(deps.dataDir, "decisions-dropbox");
+    this.evidenceDir = deps.evidenceDir ?? join(deps.dataDir, "verify-evidence");
+  }
+
+  // --- introspection (convenience only; durable truth is the journal) ---
+
+  get runId(): string {
+    return this.run.id;
+  }
+
+  get runStatus(): RunStatus {
+    return this.run.status;
+  }
+
+  // --- lifecycle (B-1, B-2, B-6) ------------------------------------------
+
+  async start(): Promise<void> {
+    if (this.started) throw new Error("daemon: start() called twice");
+    this.started = true;
+
+    const lock = acquireDaemonLock(this.deps.dataDir, this.deps.processInspector, this.deps.pid ?? process.pid);
+    this.lockPath = lock.lockPath;
+
+    // Reclaim proved the previous writer dead by a stronger test (pid plus
+    // process start time) than journal.ts's own file-existence lock; its
+    // per-chain lock files are cleared here so opening does not trip that
+    // weaker check unnecessarily.
+    if (lock.reclaimedFrom) {
+      for (const name of ["journal.lock", "decisions.lock"]) {
+        try {
+          fs.unlinkSync(join(this.deps.dataDir, name));
+        } catch {
+          // not present
+        }
+      }
+    }
+
+    this.workJournal = openJournal(this.deps.dataDir);
+    this.decisionsChain = openDecisionsChain(this.deps.dataDir);
+
+    if (lock.reclaimedFrom) {
+      const payload: Record<string, JsonValue> = {
+        stalePid: lock.reclaimedFrom.pid,
+        staleProcStartMs: lock.reclaimedFrom.procStartMs,
+        newPid: lock.self.pid,
+        newProcStartMs: lock.self.procStartMs,
+      };
+      this.workJournal.append("daemon.lock.reclaimed", payload);
+    }
+    this.workJournal.append("daemon.lock.acquired", { pid: lock.self.pid, procStartMs: lock.self.procStartMs });
+
+    this.recover();
+
+    this.rawLoopPromise = this.runLoop();
+    this.loopPromise = this.rawLoopPromise.catch((err) => {
+      this.loopError = err;
+    });
+  }
+
+  // Resolves once the loop actually exits (run completed/failed, or shutdown
+  // honored); rethrows whatever the loop itself threw (an unhandled error
+  // inside a stage call, simulating a crash).
+  async join(): Promise<void> {
+    if (!this.loopPromise) throw new Error("daemon: join() called before start()");
+    await this.loopPromise;
+    if (this.loopError) throw this.loopError;
+  }
+
+  // B-6: interrupts the sleep, lets the current journal write finish (mid-
+  // stage shutdown waits for the stage in v1, Resolved decisions D-4),
+  // releases the lock, resolves.
+  async shutdown(): Promise<void> {
+    this.shutdownRequested = true;
+    if (this.loopPromise) await this.loopPromise;
+    this.closeResources();
+  }
+
+  private closeResources(): void {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      this.workJournal?.close();
+    } catch {
+      // already closed
+    }
+    try {
+      this.decisionsChain?.close();
+    } catch {
+      // already closed
+    }
+    if (this.lockPath) releaseDaemonLock(this.lockPath);
+  }
+
+  // --- recovery (B-2) ------------------------------------------------------
+
+  private recover(): void {
+    const records = this.workJournal.fold().records;
+    const state = foldOrchestratorState(records);
+
+    const alreadyAdopted = this.workJournal.fold().byKind["dag.adopted"];
+    if (!alreadyAdopted || alreadyAdopted.length === 0) {
+      const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
+      const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
+      const adopted = adoptedShipped(snapshot, pinOf);
+      const entries = [...adopted.entries()].map(([id, e]) => ({ id, pin: e.pin, source: e.source }));
+      this.workJournal.append("dag.adopted", { entries: entries as unknown as JsonValue });
+    }
+
+    for (const run of state.runs.values()) {
+      if (run.needsReconcile) {
+        this.workJournal.append("daemon.reconciled", { entity: "run", id: run.id, observedStatus: run.status });
+      }
+    }
+    for (const specExec of state.specExecs.values()) {
+      if (specExec.needsReconcile) {
+        this.workJournal.append("daemon.reconciled", {
+          entity: "specExec",
+          id: specExec.id,
+          specId: specExec.specId,
+          observedStatus: specExec.status,
+        });
+      }
+    }
+    for (const stageExec of state.stageExecs.values()) {
+      if (stageExec.needsReconcile) {
+        const owner = state.specExecs.get(stageExec.specExecId);
+        let observedPr: JsonValue = null;
+        if (owner) {
+          try {
+            const pr = this.deps.gh.prForBranch(owner.specId);
+            observedPr = pr ? { number: pr.number, headSha: pr.headSha } : null;
+          } catch {
+            observedPr = null;
+          }
+        }
+        this.workJournal.append("daemon.reconciled", {
+          entity: "stageExec",
+          id: stageExec.id,
+          stage: stageExec.stage,
+          observedStatus: stageExec.status,
+          observedPr,
+        });
+      }
+    }
+
+    const existingRun = [...state.runs.values()].sort((a, b) => a.createdTs.localeCompare(b.createdTs)).at(-1);
+    if (existingRun) {
+      this.run = existingRun;
+      if (this.run.status === "idle") this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+    } else {
+      const created = createRun(this.workJournal, this.deps.repoDir);
+      this.run = { ...transition(this.workJournal, created, "running"), needsReconcile: false };
+    }
+  }
+
+  // --- control API (B-4) --------------------------------------------------
+  //
+  // Each method validates minimal state, journals a control.<verb> record
+  // with its source, and queues an in-memory command applied at the next
+  // loop checkpoint (between stages, or at the top of the loop). Minimal but
+  // real: spec 022's HTTP surface calls these directly.
+
+  pause(source: string): void {
+    if (this.run.status !== "running") {
+      throw new Error(`daemon: pause() requires the run to be "running" (current: "${this.run.status}")`);
+    }
+    this.workJournal.append("control.pause", { runId: this.run.id, source });
+    this.pendingControls.push({ verb: "pause", source });
+  }
+
+  resume(source: string): void {
+    if (this.run.status !== "paused") {
+      throw new Error(`daemon: resume() requires the run to be "paused" (current: "${this.run.status}")`);
+    }
+    this.workJournal.append("control.resume", { runId: this.run.id, source });
+    this.pendingControls.push({ verb: "resume", source });
+  }
+
+  skipSpec(specId: string, source: string): void {
+    if (specId.length === 0) throw new Error("daemon: skipSpec() requires a non-empty specId");
+    this.workJournal.append("control.skipSpec", { specId, source });
+    this.pendingControls.push({ verb: "skipSpec", specId, source });
+  }
+
+  retryStage(specId: string, source: string): void {
+    if (specId.length === 0) throw new Error("daemon: retryStage() requires a non-empty specId");
+    this.workJournal.append("control.retryStage", { specId, source });
+    this.pendingControls.push({ verb: "retryStage", specId, source });
+  }
+
+  reverify(specId: string, source: string): void {
+    if (specId.length === 0) throw new Error("daemon: reverify() requires a non-empty specId");
+    this.workJournal.append("control.reverify", { specId, source });
+    this.pendingControls.push({ verb: "reverify", specId, source });
+  }
+
+  forceHumanGate(specId: string, source: string): void {
+    if (specId.length === 0) throw new Error("daemon: forceHumanGate() requires a non-empty specId");
+    this.workJournal.append("control.forceHumanGate", { specId, source });
+    this.pendingControls.push({ verb: "forceHumanGate", specId, source });
+  }
+
+  approve(specId: string, source: string): void {
+    if (specId.length === 0) throw new Error("daemon: approve() requires a non-empty specId");
+    this.workJournal.append("control.approve", { specId, source });
+    this.pendingControls.push({ verb: "approve", specId, source });
+  }
+
+  private applyPendingControls(): void {
+    while (this.pendingControls.length > 0) {
+      const cmd = this.pendingControls.shift()!;
+      switch (cmd.verb) {
+        case "pause":
+          if (this.run.status === "running") this.run = { ...transition(this.workJournal, this.run, "paused"), needsReconcile: false };
+          break;
+        case "resume":
+          if (this.run.status === "paused") this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+          break;
+        case "skipSpec":
+          if (cmd.specId) this.skippedSpecIds.add(cmd.specId);
+          break;
+        case "retryStage":
+          if (cmd.specId && this.run.status === "paused") {
+            this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+          }
+          break;
+        case "reverify":
+          if (cmd.specId) this.reverifyQueue.push(cmd.specId);
+          break;
+        case "forceHumanGate":
+          if (cmd.specId) this.forcedGateSpecIds.add(cmd.specId);
+          break;
+        case "approve":
+          if (cmd.specId) {
+            this.forcedGateSpecIds.delete(cmd.specId);
+            this.approvedGateSpecIds.add(cmd.specId);
+          }
+          break;
+      }
+    }
+  }
+
+  // --- chunked waiting (B-6: shutdown-interruptible) ----------------------
+
+  // Applies the pending-control queue on every check (not only on entry): a
+  // resume()/approve()/skipSpec() issued while this wait is in progress must
+  // still be observed before the next chunk, not only once the wait already
+  // happens to end (B-4's own "checked between stages" checkpoint, extended
+  // to every chunk of a wait so a control is never stuck behind a long park
+  // or a paused run).
+  private async chunkedSleepUntil(conditionFn: () => boolean): Promise<void> {
+    const chunkMs = this.deps.sleepChunkMs ?? DEFAULT_SLEEP_CHUNK_MS;
+    this.applyPendingControls();
+    while (!conditionFn() && !this.shutdownRequested) {
+      await this.deps.sleep(chunkMs);
+      this.applyPendingControls();
+    }
+  }
+
+  // --- heartbeat (FR-002) --------------------------------------------------
+
+  private maybeHeartbeat(): void {
+    const interval = this.deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    const now = this.deps.clock.now();
+    if (!shouldEmitHeartbeat(this.lastHeartbeatMs, now, interval)) return;
+    this.lastHeartbeatMs = now;
+    this.workJournal.append("daemon.heartbeat", { runId: this.run.id, runStatus: this.run.status, ts: now });
+  }
+
+  // --- shipped-map + working snapshot (D-1/D-5) ----------------------------
+
+  private computeShippedMap(): ShippedMap {
+    const adoptedRecord = this.workJournal.fold().byKind["dag.adopted"]?.[0];
+    const adopted: ShippedMap = adoptedRecord ? parseAdoptedPayload(adoptedRecord.payload) : new Map();
+    const state = foldOrchestratorState(this.workJournal.fold().records);
+    const merged = new Map(adopted);
+    for (const specExec of state.specExecs.values()) {
+      if (specExec.status === "shipped") merged.set(specExec.specId, { pin: specExec.pin, source: "pipeline" });
+    }
+    return merged;
+  }
+
+  // nextReady's own readiness filter trusts the target repo's registry
+  // `implementation: pending` field, which in production only flips once the
+  // build session's frontmatter edit has been merged back to the default
+  // branch and the registry re-read reflects it; a spec this run has already
+  // shipped (or a human has skipped) is excluded here regardless of what the
+  // registry currently reports, so a lagging registry read never causes the
+  // same spec to be picked twice (Resolved decisions, D-5).
+  private buildWorkingSnapshot(snapshot: RegistrySnapshot, shippedSpecIds: ReadonlySet<string>): RegistrySnapshot {
+    if (this.skippedSpecIds.size === 0 && shippedSpecIds.size === 0) return snapshot;
+    const out = new Map<string, RegistrySpecEntry>(snapshot);
+    for (const [id, entry] of snapshot) {
+      if (shippedSpecIds.has(id)) out.set(id, { ...entry, implementation: "orchestrator-shipped" });
+      else if (this.skippedSpecIds.has(id)) out.set(id, { ...entry, implementation: "orchestrator-skipped" });
+    }
+    return out;
+  }
+
+  // --- the loop (B-3) -----------------------------------------------------
+
+  private async runLoop(): Promise<void> {
+    while (!this.shutdownRequested) {
+      this.applyPendingControls();
+
+      if (this.run.status === "paused") {
+        await this.chunkedSleepUntil(() => (this.run.status as RunStatus) !== "paused");
+        continue;
+      }
+
+      if (this.run.status === "parked") {
+        await this.resumeFromParkedOnRestart();
+        continue;
+      }
+
+      if (this.run.status === "completed" || this.run.status === "failed") {
+        break;
+      }
+
+      this.maybeHeartbeat();
+
+      if (this.reverifyQueue.length > 0) {
+        const specId = this.reverifyQueue.shift()!;
+        await this.runReverify(specId);
+        continue;
+      }
+
+      const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
+      const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
+      const shipped = this.computeShippedMap();
+      const workingSnapshot = this.buildWorkingSnapshot(snapshot, new Set(shipped.keys()));
+      const next = nextReady(workingSnapshot, shipped, pinOf);
+
+      if (typeof next === "string") {
+        await this.runSpec(next, snapshot, shipped, pinOf);
+        continue;
+      }
+
+      if (next.blockers.length === 0) {
+        this.workJournal.append("run.result", { runId: this.run.id, status: "completed" });
+        this.run = { ...transition(this.workJournal, this.run, "completed"), needsReconcile: false };
+        break;
+      }
+
+      const blockersPayload = next.blockers.map((b) => ({ specId: b.specId, reasons: [...b.reasons] }));
+      this.workJournal.append("run.blocked", { runId: this.run.id, blockers: blockersPayload });
+      this.run = { ...transition(this.workJournal, this.run, "failed"), needsReconcile: false };
+      break;
+    }
+
+    if (this.shutdownRequested) {
+      this.workJournal.append("daemon.shutdown", { runId: this.run.id, runStatus: this.run.status });
+    }
+  }
+
+  private async resumeFromParkedOnRestart(): Promise<void> {
+    const folded = foldQuotaState(this.workJournal.fold().records);
+    if (!folded.parked || !folded.lastPark) {
+      // Structurally should not happen (a "parked" run always has a park
+      // record); resolve defensively rather than spin forever.
+      this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+      return;
+    }
+    const jitterMs = resumeJitterMs(this.deps.rng, this.deps.resumeJitterMinMs, this.deps.resumeJitterMaxMs);
+    const targetMs = folded.lastPark.targetMs;
+    await this.chunkedSleepUntil(() => isResumeDue(this.deps.clock.now(), targetMs, jitterMs));
+    if (this.shutdownRequested) return;
+    journalResume(this.workJournal, this.deps.clock.now());
+    this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+  }
+
+  // --- per-spec walk (B-3) -------------------------------------------------
+
+  private async runSpec(specId: string, snapshot: RegistrySnapshot, shipped: ShippedMap, pinOf: PinLookup): Promise<void> {
+    const state = foldOrchestratorState(this.workJournal.fold().records);
+    let specExec = [...state.specExecs.values()].find(
+      (se) => se.runId === this.run.id && se.specId === specId && (isLive(se) || se.status === "failed")
+    );
+
+    if (!specExec) {
+      const pin = pinOf(specId);
+      const created = createSpecExec(this.workJournal, this.run.id, specId, pin);
+      specExec = { ...created, needsReconcile: false };
+    }
+
+    if (specExec.status === "failed" || specExec.status === "pending") {
+      specExec = { ...transition(this.workJournal, specExec, "building"), needsReconcile: false };
+    }
+
+    const startIndex = STAGE_ORDER.findIndex((s) => STATUS_FOR_STAGE[s] === specExec!.status);
+    if (startIndex === -1) return; // defensive: not a live "walking a stage" status
+
+    for (let i = startIndex; i < STAGE_ORDER.length; i++) {
+      if (this.shutdownRequested) return;
+      const stage = STAGE_ORDER[i]!;
+      const outcome = await this.runStageWithRetries(stage, specExec, snapshot, shipped, pinOf, false);
+      if (outcome.kind !== "passed") return;
+
+      if (outcome.result.stage === "shepherd" && outcome.result.result.evidence.mergeSha) {
+        this.workJournal.append("daemon.merge-sha", {
+          specId: specExec.specId,
+          mergeSha: outcome.result.result.evidence.mergeSha,
+        });
+      }
+
+      specExec = { ...transition(this.workJournal, specExec, NEXT_STATUS_AFTER_STAGE[stage]), needsReconcile: false };
+    }
+  }
+
+  // B-4 (spec 022's forceHumanGate): re-verifies an already-shipped spec
+  // (spec 012 B-4's own re-qualification path), skipping straight to the
+  // verify stage rather than walking build/ship/shepherd again.
+  private async runReverify(specId: string): Promise<void> {
+    const state = foldOrchestratorState(this.workJournal.fold().records);
+    const specExec = [...state.specExecs.values()].find(
+      (se) => se.runId === this.run.id && se.specId === specId && se.status === "shipped"
+    );
+    if (!specExec) {
+      this.workJournal.append("control.reverify.refused", {
+        specId,
+        reason: "no shipped specExec found for this spec under the current run",
+      });
+      return;
+    }
+
+    let current: FoldedSpecExec = { ...transition(this.workJournal, specExec, "invalidated"), needsReconcile: false };
+    current = { ...transition(this.workJournal, current, "verifying"), needsReconcile: false };
+
+    const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
+    const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
+    const shipped = this.computeShippedMap();
+
+    const outcome = await this.runStageWithRetries("verify", current, snapshot, shipped, pinOf, true);
+    if (outcome.kind === "passed") {
+      transition(this.workJournal, current, "shipped");
+    }
+  }
+
+  // --- per-stage retry loop (B-3, B-4 gate, spec 015 park/resume) ---------
+
+  private async runStageWithRetries(
+    stage: Stage,
+    specExec: FoldedSpecExec,
+    snapshot: RegistrySnapshot,
+    shipped: ShippedMap,
+    pinOf: PinLookup,
+    isReVerification: boolean
+  ): Promise<StageWalkOutcome> {
+    let attempt = 1;
+    let budgetUsed = 0;
+    const maxBudget = this.deps.stageRetryBudget ?? DEFAULT_STAGE_RETRY_BUDGET;
+
+    while (true) {
+      if (this.shutdownRequested) return { kind: "shutdown" };
+      this.applyPendingControls();
+
+      // A pause() applied just now (this loop is the only checkpoint between
+      // one stage finishing and the next one starting, B-4) must stop a new
+      // stage attempt from starting, not merely be recorded for later.
+      if (this.run.status !== "running") return { kind: "paused" };
+
+      if (this.forcedGateSpecIds.has(specExec.specId) && !this.approvedGateSpecIds.has(specExec.specId)) {
+        this.workJournal.append("daemon.gate.waiting", { specId: specExec.specId, stage });
+        this.pauseRun(`${specExec.specId}: awaiting human approval before ${stage}`);
+        await this.chunkedSleepUntil(() => this.approvedGateSpecIds.has(specExec.specId));
+        if (this.shutdownRequested) return { kind: "shutdown" };
+        this.approvedGateSpecIds.delete(specExec.specId);
+        this.forcedGateSpecIds.delete(specExec.specId);
+        this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+      }
+
+      let stageExec = { ...createStageExec(this.workJournal, specExec.id, stage, attempt), needsReconcile: false };
+      stageExec = { ...transition(this.workJournal, stageExec, "running"), needsReconcile: false };
+
+      const tagged = await this.callStage(stage, specExec, snapshot, shipped, pinOf, isReVerification);
+      this.maybeHeartbeat();
+
+      const quota = detectQuotaClassification(tagged);
+      if (quota) {
+        transition(this.workJournal, stageExec, "failed");
+        const lastPark: LastParkInfo | undefined = foldQuotaState(this.workJournal.fold().records).lastPark ?? undefined;
+        const plan: ParkPlan = planPark({ classification: quota, now: this.deps.clock.now(), lastPark });
+        journalPark(this.workJournal, plan);
+        this.run = { ...transition(this.workJournal, this.run, "parked"), needsReconcile: false };
+
+        const jitterMs = resumeJitterMs(this.deps.rng, this.deps.resumeJitterMinMs, this.deps.resumeJitterMaxMs);
+        const targetMs = plan.targetMs;
+        await this.chunkedSleepUntil(() => isResumeDue(this.deps.clock.now(), targetMs, jitterMs));
+        if (this.shutdownRequested) return { kind: "shutdown" };
+        journalResume(this.workJournal, this.deps.clock.now());
+        this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+
+        attempt++;
+        continue; // resumes the same stage as a fresh attempt, no budget spent
+      }
+
+      if (isPassOutcome(tagged)) {
+        transition(this.workJournal, stageExec, "passed");
+        return { kind: "passed", result: tagged };
+      }
+
+      if (isBlockedOutcome(tagged)) {
+        transition(this.workJournal, stageExec, "blocked");
+        this.pauseRun(`${specExec.specId}: ${stage} outcome "${tagged.result.outcome}"`);
+        return { kind: "paused" };
+      }
+
+      // failed
+      transition(this.workJournal, stageExec, "failed");
+      budgetUsed++;
+      if (budgetUsed > maxBudget) {
+        transition(this.workJournal, specExec, "failed");
+        this.pauseRun(`${specExec.specId}: ${stage} failed after ${budgetUsed} attempt(s)`);
+        return { kind: "paused" };
+      }
+      attempt++;
+      // retries the same stage with a fresh StageExec attempt
+    }
+  }
+
+  private pauseRun(reason: string): void {
+    if (this.run.status !== "running") return;
+    this.workJournal.append("run.pause-reason", { runId: this.run.id, reason });
+    this.run = { ...transition(this.workJournal, this.run, "paused"), needsReconcile: false };
+  }
+
+  private async callStage(
+    stage: Stage,
+    specExec: FoldedSpecExec,
+    snapshot: RegistrySnapshot,
+    shipped: ShippedMap,
+    pinOf: PinLookup,
+    isReVerification: boolean
+  ): Promise<TaggedStageResult> {
+    switch (stage) {
+      case "build": {
+        const options: RunBuildStageOptions = {
+          runner: this.deps.runner,
+          specId: specExec.specId,
+          journal: this.workJournal,
+          decisionsChain: this.decisionsChain,
+          dropboxDir: this.dropboxDir,
+          knownSpecIds: new Set(snapshot.keys()),
+          isSpecReady: this.makeReadinessCheck(snapshot, shipped, pinOf),
+          defaultBranch: this.deps.defaultBranch,
+        };
+        const result = await this.deps.stageFns.build(options);
+        return { stage, result };
+      }
+      case "ship": {
+        const options: RunShipStageOptions = {
+          runner: this.deps.runner,
+          gh: this.deps.gh,
+          specId: specExec.specId,
+          journal: this.workJournal,
+        };
+        const result = await this.deps.stageFns.ship(options);
+        return { stage, result };
+      }
+      case "shepherd": {
+        const options: RunShepherdStageOptions = {
+          runner: this.deps.runner,
+          gh: this.deps.gh,
+          specId: specExec.specId,
+          journal: this.workJournal,
+          clock: { now: () => this.deps.clock.now(), sleep: (ms: number) => this.deps.sleep(ms) },
+          defaultBranch: this.deps.defaultBranch,
+        };
+        const result = await this.deps.stageFns.shepherd(options);
+        return { stage, result };
+      }
+      case "verify": {
+        const sha = this.findMergeShaForSpec(specExec.specId);
+        if (sha === null) {
+          throw new Error(`daemon: no merge sha recorded for ${specExec.specId}; cannot run the verify stage`);
+        }
+        const options: RunVerifyStageOptions = {
+          runner: this.deps.verifyRunner,
+          browserVerifier: this.deps.browserVerifier,
+          specId: specExec.specId,
+          sha,
+          journal: this.workJournal,
+          evidenceDir: this.evidenceDir,
+          isReVerification,
+        };
+        const result = await this.deps.stageFns.verify(options);
+        return { stage, result };
+      }
+    }
+  }
+
+  private makeReadinessCheck(snapshot: RegistrySnapshot, shipped: ShippedMap, pinOf: PinLookup): ReadinessCheck {
+    return (id: string) => ready(snapshot, shipped, pinOf, id);
+  }
+
+  private findMergeShaForSpec(specId: string): string | null {
+    const records = this.workJournal.fold().byKind["daemon.merge-sha"] ?? [];
+    for (let i = records.length - 1; i >= 0; i--) {
+      const payload = records[i]!.payload;
+      if (!isJsonRecord(payload)) continue;
+      if (payload.specId === specId && typeof payload.mergeSha === "string") return payload.mergeSha;
+    }
+    return null;
+  }
+}

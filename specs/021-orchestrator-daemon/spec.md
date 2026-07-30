@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: complete
 risk: critical
 depends_on:
   - "012-spec-dag-readiness"
@@ -89,3 +89,100 @@ composition, which is exactly why it is specified rather than improvised.
 
 Parallel spec execution, multi-repo runs, and daemonization ergonomics
 (launchd plist etc. follow spec 007's print-only stance later).
+
+## 7. Resolved decisions
+
+D-1. Process start time (the second half of B-1's identity check) is read
+through an injected `ProcessInspector` seam; the production implementation
+shells out to `ps -o lstart= -p <pid>` and parses the result with
+`Date.parse`, matching the local wall-clock format `ps` itself emits on the
+same host. `isAlive` is `process.kill(pid, 0)`, caught. Liveness is "pid
+alive AND the process currently holding that pid reports the same start
+time as recorded"; a live pid with a *different* start time is pid reuse,
+reclaimed exactly like a dead pid, fixing spec 007's own recorded defect.
+The daemon's own pid is also seam-injectable (`DaemonDeps.pid`, defaults to
+`process.pid`) so identity logic is testable without a second real OS
+process.
+
+D-2. Mid-stage shutdown (B-6) does not attempt to cancel an in-flight stage
+call. `shutdown()` sets a flag and awaits the loop's own promise; every
+wait point in the loop (the per-stage retry loop's top, every chunk of a
+parked or gated wait) checks the flag and unwinds honestly, but a call
+already inside `await stageFns.<stage>(...)` runs to completion first, and
+its outcome is journaled normally before the loop notices the flag and
+exits. This is deliberate for v1 (a real stage session should not be
+severed mid-write); a future spec may add cooperative cancellation.
+
+D-3. The in-memory control queue (B-4) is drained on every chunk of every
+chunked wait, not only at the top of the main loop. Without this, a
+`resume()`/`approve()` issued while the loop is inside a long parked or
+human-gated wait would sit unread until the wait's own condition happened
+to become true on its own, which for a park could be hours away. Every
+`chunkedSleepUntil` call therefore applies pending controls before its
+first condition check and after every subsequent chunk.
+
+D-4. `dag.adopted` (the bootstrap-era shipped-set from `dag.adoptedShipped`,
+spec 012 D-1) is computed once, on the first recovery that finds no prior
+`dag.adopted` record in the work journal, and is treated as immutable
+afterward: subsequent restarts read the existing record rather than
+recomputing it. Recomputing on every restart would let a spec's adoption
+silently track drift in its own file after the fact, which is exactly the
+pin-drift cascade spec 012 B-4 is supposed to catch deliberately, not
+absorb quietly into a "first observation" pin that keeps moving.
+
+D-5. `nextReady`'s own readiness filter trusts the target repo's registry
+`implementation: pending` field, which in production only flips once a
+build session's frontmatter edit has been merged to the default branch and
+a fresh registry read reflects it; nothing in this spec's territory
+refreshes the daemon's local checkout of the default branch between specs.
+To avoid ever re-selecting a spec this run has already shipped (or a human
+has skipped) because of a lagging registry read, the daemon computes a
+working snapshot for each `nextReady` call that overrides the
+`implementation` field of any spec already shipped-this-run or
+control-skipped to a non-"pending" sentinel, independent of what the
+registry currently reports. `ready()`/`invalidatedSet()` calls (build
+stage's own preflight) are unaffected: they are keyed off the shipped-map,
+not this sentinel.
+
+D-6. Only shepherd's and verify's own `StageOutcome` enums carry a
+first-class `"quota"` value; build's and ship's evidence shapes
+(`SessionEvidence`, `ShipSessionEvidence`) preserve the session
+classification kind but not its parsed reset time. The daemon's own quota
+detector therefore treats a build/ship stage whose session evidence
+classifies `"quota"` as a park trigger with `resetAtMs: null` (always an
+estimate, honestly reflecting what that evidence actually carries), and
+trusts shepherd's/verify's own explicit `"quota"` outcome directly (verify
+alone also carries `quotaResetAtMs`, since its own evidence preserves it).
+
+D-7. A quota-triggered park/resume inside the per-stage retry loop does not
+consume the stage's ordinary retry budget (default 1 retry, B-3): the
+attempt counter used for the journaled `StageExec.attempt` field still
+increments (so every attempt is distinguishable in the journal), but the
+separate budget counter that decides "has this stage failed too many times"
+only increments on a genuine `"failed"` outcome. A run can therefore be
+parked and resumed by quota indefinitely without ever exhausting a stage's
+failure budget, matching B-3's "resumes the same stage as a fresh attempt"
+literally.
+
+D-8. `reverify(specId)` (B-4) only has a run to act on while that run's own
+loop is still cycling (a completed `Run` is a terminal state per spec 013's
+own transition table, with no way back). It is therefore scoped to
+re-verifying a spec that is currently `shipped` under the *current* run,
+skipping straight to the verify stage (`invalidated -> verifying`, spec 012
+B-4's own re-qualification edge) rather than walking build/ship/shepherd
+again; a reverify request for a spec with no such shipped `SpecExec` is
+refused and journaled (`control.reverify.refused`) rather than silently
+dropped or misapplied to the wrong entity.
+
+D-9. Recovery's needsReconcile sweep (B-2) journals what it observed
+(`daemon.reconciled`, including a best-effort `gh.prForBranch` read for a
+stageExec's owning spec) but does not itself force a transition to close
+out the dangling intent. Every stage entry point (build/ship/shepherd/
+verify) was independently designed to be safely re-driven for the same
+spec (branch reuse, ship's own PR idempotency precheck, shepherd's fresh
+head-sha re-derivation, verify's fresh worktree checkout each time), so the
+loop's normal per-spec resume (which always re-derives "what stage to run
+next" from the live `SpecExec.status`, never an in-memory cursor) already
+completes the reconciliation honestly; a stageExec's own dangling attempt
+is superseded by the fresh attempt the resumed walk creates, never resumed
+in place.
