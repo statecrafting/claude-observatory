@@ -210,3 +210,9 @@ D-12. A terminal (completed or failed) latest run is history, not a verdict
 on the mission: recovery creates a fresh run and continues the backlog,
 with the whole journal retained. Only idle, running, paused, or parked runs
 are resumed as-is.
+
+D-13. Same relaunch: that bracket throw propagated out of the loop and
+killed the daemon with the identity lock left behind. A stage
+implementation throwing is now a contained failed attempt: journaled as
+stage.crashed with the error, retried within the stage budget, then an
+honest pause. The loop must outlive any single stage's bug.

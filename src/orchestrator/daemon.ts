@@ -947,7 +947,26 @@ export class Daemon {
       let stageExec = { ...createStageExec(this.workJournal, specExec.id, stage, attempt), needsReconcile: false };
       stageExec = { ...transition(this.workJournal, stageExec, "running"), needsReconcile: false };
 
-      const tagged = await this.callStage(stage, specExec, snapshot, shipped, pinOf, isReVerification);
+      // A stage implementation throwing is a failed attempt with the error
+      // as evidence, never a dead daemon: the loop must outlive any single
+      // stage's bug (the live run died to a bracket error that should have
+      // been an honest stage failure).
+      let tagged: TaggedStageResult;
+      try {
+        tagged = await this.callStage(stage, specExec, snapshot, shipped, pinOf, isReVerification);
+      } catch (err) {
+        const message = (err as Error).message ?? String(err);
+        this.workJournal.append("stage.crashed", { specId: specExec.specId, stage, attempt, error: message });
+        transition(this.workJournal, stageExec, "failed");
+        budgetUsed++;
+        if (budgetUsed > maxBudget) {
+          transition(this.workJournal, specExec, "failed");
+          this.pauseRun(`${specExec.specId}: ${stage} crashed after ${budgetUsed} attempt(s): ${message}`);
+          return { kind: "paused" };
+        }
+        attempt++;
+        continue;
+      }
       this.maybeHeartbeat();
 
       const quota = detectQuotaClassification(tagged);

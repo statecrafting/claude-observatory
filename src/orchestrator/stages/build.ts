@@ -264,12 +264,17 @@ export interface FlipResult {
   readonly changed: boolean;
 }
 
-// Idempotent (FR-003): a branch reused from a crashed attempt may already
-// carry the flip. Already at `to`: no-op. Anything other than `from`: a
-// typed error rather than silently overwriting an unexpected state.
+// Idempotent (FR-003): a branch reused from a crashed or even a completed
+// prior attempt may already carry the flip, or the finished state. Already
+// at `to`: no-op. Already `complete` while flipping toward in-progress: also
+// a no-op (a fresh attempt on a branch whose work finished simply proceeds
+// to evidence evaluation; the live run hit exactly this after a mid-pipeline
+// daemon restart). Anything else that is not `from`: a typed error rather
+// than silently overwriting an unexpected state.
 export function flipImplementation(specMd: string, from: string, to: string): FlipResult {
   const current = readImplementationStatus(specMd);
   if (current === to) return { content: specMd, changed: false };
+  if (current === "complete" && to === "in-progress") return { content: specMd, changed: false };
   if (current !== from) {
     throw new Error(`build: expected "implementation: ${from}" but found "implementation: ${current ?? "<missing>"}"`);
   }

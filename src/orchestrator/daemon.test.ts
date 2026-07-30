@@ -850,9 +850,13 @@ test(
     });
 
     const runSessionCounter = { calls: 0 };
-    const crashMarker = new Error("simulated-kill-between-a-ship-and-a-shepherd");
 
-    let shepherdShouldCrashForA = true;
+    // Simulated abrupt kill: the first shepherd attempt for spec A hangs on
+    // a promise that never settles, so daemon1 is wedged mid-stage exactly
+    // like a killed process looks to the journal (the stageExec's running
+    // transition journaled, nothing after it) and is then abandoned.
+    const hang = new Promise<never>(() => {});
+    let shepherdShouldHangForA = true;
     let buildCallCountForB = 0;
 
     const stageFns: DaemonStageFns = {
@@ -865,9 +869,9 @@ test(
       },
       ship: async (options) => shipResult(options.specId, "passed"),
       shepherd: async (options) => {
-        if (options.specId === "900-fixture-a" && shepherdShouldCrashForA) {
-          shepherdShouldCrashForA = false;
-          throw crashMarker;
+        if (options.specId === "900-fixture-a" && shepherdShouldHangForA) {
+          shepherdShouldHangForA = false;
+          return hang;
         }
         return shepherdResult(options.specId, "passed", `${options.specId}-merge-sha`);
       },
@@ -893,13 +897,11 @@ test(
     const daemon1 = new Daemon(deps1);
     await daemon1.start();
 
-    let daemon1Error: unknown = null;
-    try {
-      await daemon1.join();
-    } catch (err) {
-      daemon1Error = err;
-    }
-    expect(daemon1Error).toBe(crashMarker);
+    // Wait until daemon1 is wedged inside spec A's shepherd stage, then
+    // abandon it without shutdown or join (the abrupt-kill simulation); the
+    // journal simply stops mid-stage.
+    await Bun.sleep(80);
+    expect(shepherdShouldHangForA).toBe(false);
 
     // A supervisor that has confirmed the previous writer dead force-releases
     // the identity lock and journal.ts's own per-chain locks (this same real
@@ -1116,6 +1118,45 @@ test("recovery after a failed run creates a fresh run and continues the backlog"
       (r) => r.payload as { id: string; oldPin: string | null }
     );
     expect(late.some((p) => p.id === "777-missing" && p.oldPin === null)).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+// --- regression: a throwing stage implementation fails the attempt and
+// pauses honestly; it never kills the daemon (found live: a bracket error
+// crashed the loop with the lock left behind) --------------------------------
+
+test("a stage fn that throws is a failed attempt with journaled evidence, then an honest pause", async () => {
+  const dataDir = freshDir("stage-crash-data");
+  const repoDir = freshDir("stage-crash-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+
+  let buildCalls = 0;
+  const stageFns: DaemonStageFns = {
+    build: async () => {
+      buildCalls++;
+      throw new Error("bracket exploded");
+    },
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const daemon = new Daemon(makeDeps({ dataDir, repoDir, dagReader, stageFns }));
+  await daemon.start();
+  await Bun.sleep(80);
+  expect(daemon.runStatus).toBe("paused");
+  expect(buildCalls).toBe(2); // default budget: 1 retry = 2 attempts
+  await daemon.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const crashes = journal.fold().byKind["stage.crashed"] ?? [];
+    expect(crashes.length).toBe(2);
+    const p = crashes[0]!.payload as { error: string; stage: string };
+    expect(p.stage).toBe("build");
+    expect(p.error).toContain("bracket exploded");
   } finally {
     journal.close();
   }

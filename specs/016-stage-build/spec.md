@@ -137,3 +137,10 @@ run typecheck`, `bun test`), exported once as `GATE_COMMANDS` and reused for
 the B-1 "gate green at base" preflight check, the B-2 bracket's own compile
 call (its first element), and every post-session evaluation, rather than
 three independently maintained copies.
+
+D-6. Found by the third live relaunch: a fresh attempt on a branch whose
+prior attempt finished (frontmatter already complete) crashed the bracket,
+because flipImplementation treated complete as an unexpected state.
+Complete-toward-in-progress is now a no-op: the attempt proceeds straight
+to evidence evaluation. Genuinely unexpected states (deferred, missing)
+still throw.
