@@ -18,7 +18,7 @@
       }
     ],
     "id": "019-stage-verify",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "stage",
     "risk": "high",
     "sectionHeadings": [
@@ -28,13 +28,14 @@
       "3. Behavior",
       "4. Functional requirements",
       "5. Acceptance criteria",
-      "6. Out of scope"
+      "6. Out of scope",
+      "7. Resolved decisions"
     ],
     "specPath": "specs/019-stage-verify/spec.md",
     "status": "approved",
     "summary": "The stage that makes shipped mean something: after merge, drive a verification pass against the running artifact and assert the spec's declared observable behavior, recording pass/fail with evidence. Specs declare verifiability in a Verification section (CLI assertions the orchestrator runs directly; browser assertions driven through Claude in Chrome for UI territory); a spec with no such section records verify: not-declared, visibly, instead of a hollow pass. Verify is also the re-qualification path for invalidated specs (012 B-4).\n",
     "title": "Verify stage: assert observable behavior, record evidence"
   },
-  "shardHash": "1b76e93b032424c37f71c6d2c77b6d5ea1178851dd2835ff4efa5e3e74991c3d",
+  "shardHash": "499951c6fcc1d0b29a35a2bc3b81cce211164324faeb6f0854c949d3872f972f",
   "specVersion": "1.1.0"
 }

@@ -1,27 +1,25 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '019-stage-verify' file unit 'src/orchestrator/stages/verify.ts' does not exist",
-        "path": "src/orchestrator/stages/verify.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '019-stage-verify' file unit 'src/orchestrator/stages/verify.test.ts' does not exist",
-        "path": "src/orchestrator/stages/verify.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "018-stage-shepherd"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "src/orchestrator/stages/verify.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/stages/verify.ts",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/verify.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -30,7 +28,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/verify.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -43,5 +45,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "2e0847c6807d7e916cc6c4e43d73958bb87fc8bc62e6c4ed6c6c328c56e63138"
+  "shardHash": "eb98fa6cffe1d3d6b862904376cf71e46de4cb76e3bc7076266fec16b7fa59c4"
 }

@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: stage
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "018-stage-shepherd"
@@ -80,3 +80,73 @@ convention below becomes part of this corpus's authoring conventions.
 
 Deployment itself (the artifact is assumed reachable; deploy orchestration
 is a future spec), performance assertions, and cross-browser matrices.
+
+## 7. Resolved decisions
+
+D-1. `VerifyRunner` is a new seam declared in `verify.ts`, not an extension
+of build.ts's own `Runner` (spec 016): worktree lifecycle (`addWorktree`,
+`removeWorktree`) and a per-command timeout (`runCommand`) are operations
+that interface has no analogue for, since its `runGate` always runs in one
+fixed repoDir with no per-call timeout. The production factory
+(`createProcessVerifyRunner`) follows the same interface-plus-Bun.spawnSync
+shape the family already uses (build.ts's `createProcessRunner`,
+ship.ts's `createProcessGitHubClient`); `runSession` never appears on this
+interface at all, since B-3's browser driving lives entirely behind its own
+BrowserVerifier seam instead.
+
+D-2. Each line inside a `verify:cli` fenced block is its own CLI assertion,
+run and journaled individually (`stage.verify.cli`, one record per command);
+the fenced block itself is only a grouping unit for parsing and for
+"empty block" detection. This reconciles B-1's "fenced assertion blocks"
+language with B-2's "journal command, exit code, bounded output per block"
+(singular command per record) and with FR-001's "malformed blocks... never
+skipped" (an empty fenced block, zero commands left after stripping comments
+and blank lines, is what FR-001 calls malformed, not an empty individual
+command).
+
+D-3. CLI assertions, and separately browser assertions, each run to
+completion within their own kind rather than stopping at the first failure:
+this is what lets AC-2's "both outputs recorded" hold regardless of which
+assertion in a block fails first, and keeps the evidence "everything that
+ran," not just "the first bad thing." Once the CLI phase has any failing
+assertion, the stage returns immediately without ever starting the browser
+phase: there is no reason to spend a browser session, and therefore quota,
+verifying a spec whose CLI half already failed.
+
+D-4. `BrowserVerifier.assert()`'s signature is taken literally
+(`{pass, detail, screenshotPngBase64?}`), with no fourth field for quota. A
+driven session classified `quota` (spec 014) is instead surfaced as a typed
+throw, `BrowserVerifierQuotaError`, caught by `runVerifyStage` and mapped to
+the stage-level outcome `"quota"`; this mirrors shepherd's own
+`StatuslessAbortError` pattern (spec 018) of a typed error a seam throws
+rather than widening its return type for one abnormal path.
+
+D-5. Any browser-driving session classification other than `completed` or
+`quota` (`hook-blocked`, `auth`, `transient`, `crashed`, `timeout`) is read
+as an assertion failure (`pass: false`, `detail` naming the classification),
+not a fourth `VerifyOutcome` variant. A browser-verification session never
+touches git or the governed gate, so a hook-blocked-shaped refusal has no
+realistic path here; folding every other classification into an honest
+failed assertion is the conservative reading, since only quota is named as
+a distinct outcome to carve out.
+
+D-6. `runVerifyStage` takes `sha` as an explicit required option rather than
+deriving it from a `Runner.currentBranch()`/`headSha()` read, the same
+"explicit, never inferred" convention ship.ts's own D-6 established: verify
+runs after merge, against a merged sha the shepherd stage's evidence names,
+so there is no "current branch" of its own to infer one from.
+
+D-7. `needsHuman` on evidence is `true` only when the outcome is `"failed"`
+**and** the caller marked the call `isReVerification: true`; a first-time
+verify inside the normal build/ship/shepherd/verify pipeline that fails
+carries `needsHuman: false`. This reads B-5's literal text ("a fail on
+re-verification carries needsHuman: true") as scoped specifically to the
+re-verification path, mirroring shepherd's own needsHuman convention
+(spec 018 D-4) of reserving the flag for states the stage genuinely cannot
+resolve on its own, rather than applying it to every failure unconditionally.
+
+D-8. Evidence for one cli assertion is a single file: the command text, its
+bounded stdout, and its bounded stderr, concatenated into one text blob and
+hashed as a whole, rather than three separate files. FR-003's own shape
+(`{assertion, evidenceHash}`) names one hash per assertion, not one per
+stream.
