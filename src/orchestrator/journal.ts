@@ -354,12 +354,37 @@ class JournalHandleImpl implements JournalHandle {
   }
 }
 
-export function openJournal(dir: string): JournalHandle {
+// The four filenames a chain lives under in its directory. Default (no
+// basename argument) reproduces the exact names this module has always
+// used, so every existing caller and test is untouched; a caller-chosen
+// basename derives an analogous, non-colliding set of names, which is what
+// lets a second, independent chain (spec 020's decision ledger) share the
+// same directory as the primary journal without either implementation being
+// duplicated (spec 011 body, "reusable under a caller-chosen basename").
+function journalFilenames(basename: string | undefined): {
+  journal: string;
+  anchor: string;
+  torn: string;
+  lock: string;
+} {
+  if (basename === undefined) {
+    return { journal: "journal.jsonl", anchor: "anchor.json", torn: "journal.jsonl.torn", lock: "journal.lock" };
+  }
+  return {
+    journal: `${basename}.jsonl`,
+    anchor: `${basename}.anchor.json`,
+    torn: `${basename}.jsonl.torn`,
+    lock: `${basename}.lock`,
+  };
+}
+
+export function openJournal(dir: string, basename?: string): JournalHandle {
   fs.mkdirSync(dir, { recursive: true });
-  const journalPath = join(dir, "journal.jsonl");
-  const anchorPath = join(dir, "anchor.json");
-  const tornPath = join(dir, "journal.jsonl.torn");
-  const lockPath = join(dir, "journal.lock");
+  const names = journalFilenames(basename);
+  const journalPath = join(dir, names.journal);
+  const anchorPath = join(dir, names.anchor);
+  const tornPath = join(dir, names.torn);
+  const lockPath = join(dir, names.lock);
 
   const lockFd = acquireLock(lockPath);
   try {
@@ -380,9 +405,10 @@ export function openJournal(dir: string): JournalHandle {
 // Recomputes every record's hash and link from the anchor forward. Unlike
 // open()'s tail-only check, this is O(n) hashing and is meant to be run on
 // demand (offline, by a CLI), not on every open (B-7).
-export function verifyChain(dir: string): VerifyResult {
-  const anchorPath = join(dir, "anchor.json");
-  const journalPath = join(dir, "journal.jsonl");
+export function verifyChain(dir: string, basename?: string): VerifyResult {
+  const names = journalFilenames(basename);
+  const anchorPath = join(dir, names.anchor);
+  const journalPath = join(dir, names.journal);
   if (!fs.existsSync(anchorPath)) {
     throw new Error(`no anchor at ${anchorPath}: nothing to verify`);
   }

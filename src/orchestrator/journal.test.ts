@@ -265,3 +265,43 @@ test("unresolvedIntents is order-aware: a repeated op's latest unpaired intent i
   expect(unresolved[0]!.seq).toBe(second.seq);
   handle.close();
 });
+
+// --- basename parameterization (reuse, spec 020) --------------------------
+
+test("openJournal defaults reproduce the original filenames exactly", () => {
+  const dir = freshDir();
+  const h = openJournal(dir);
+  h.append("k", { x: 1 });
+  h.close();
+  expect(existsSync(join(dir, "journal.jsonl"))).toBe(true);
+  expect(existsSync(join(dir, "anchor.json"))).toBe(true);
+  expect(existsSync(join(dir, "journal.lock"))).toBe(false); // released on close
+});
+
+test("a caller-chosen basename opens a second, independent chain in the same directory", () => {
+  const dir = freshDir();
+  const primary = openJournal(dir);
+  primary.append("primary.k", { i: 0 });
+
+  // The primary journal's lock does not block a second chain under a
+  // different basename in the same directory: separate lockfiles, separate
+  // anchors, separate journals.
+  const secondary = openJournal(dir, "decisions");
+  secondary.append("secondary.k", { i: 0 });
+
+  expect(existsSync(join(dir, "journal.jsonl"))).toBe(true);
+  expect(existsSync(join(dir, "anchor.json"))).toBe(true);
+  expect(existsSync(join(dir, "decisions.jsonl"))).toBe(true);
+  expect(existsSync(join(dir, "decisions.anchor.json"))).toBe(true);
+
+  expect(primary.fold().records.length).toBe(1);
+  expect(secondary.fold().records.length).toBe(1);
+  expect(primary.fold().byKind["primary.k"]?.length).toBe(1);
+  expect(secondary.fold().byKind["secondary.k"]?.length).toBe(1);
+
+  primary.close();
+  secondary.close();
+
+  expect(verifyChain(dir)).toEqual({ ok: true, count: 1 });
+  expect(verifyChain(dir, "decisions")).toEqual({ ok: true, count: 1 });
+});

@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "011-work-journal"
@@ -81,3 +81,48 @@ integrity guarantees as the work journal.
 Editing or deleting decisions, human decision authoring UI (the API accepts
 operator-authored decisions through the same validated path), and
 cross-repo ledgers.
+
+## 7. Resolved decisions
+
+D-1. B-2 says "shared implementation, second chain", but `journal.ts`
+hardcoded its four filenames (`journal.jsonl`, `anchor.json`,
+`journal.jsonl.torn`, `journal.lock`) inside `openJournal`. Resolved:
+`openJournal`/`verifyChain` take an optional `basename` parameter; omitting
+it reproduces the exact filenames every existing caller already depends on,
+and a caller-chosen basename (`openDecisionsChain` uses `"decisions"`)
+derives an analogous, non-colliding set (`decisions.jsonl`,
+`decisions.anchor.json`, `decisions.jsonl.torn`, `decisions.lock`) in the
+same directory. One sentence was added to spec 011's own body (section 2)
+naming this reuse, so the two specs stay coupled to the one shared
+implementation rather than the change looking like an undocumented
+side-effect of building this one.
+
+D-2. FR-003 requires dedup "by content hash" without defining what is
+hashed. Resolved: `contentHashOf(record)` = sha256 over the canonical
+(key-sorted) JSON of exactly the `DecisionRecord`'s own B-1 fields (`id`,
+`specId`, `scope`, `title`, `decision`, `rationale`, and
+`alternatives`/`supersedes` when present), the same bytes stored as the
+`decision.sealed` chain payload; never the journal envelope (`seq`, `ts`,
+`prevHash`, `recordHash`), which necessarily differs per append attempt.
+A drop-box file re-processed after a crash between the chain append (already
+fsynced, durable) and the unlink hashes identically to the record already
+sealed, so the re-run recognizes it as already-sealed, unlinks it, and does
+not append a duplicate.
+
+D-3. B-1 lists `alternatives?` with no shape. Resolved:
+`alternatives?: readonly string[]`, one entry per alternative considered and
+rejected, matching the plural noun and `scope`'s own list precedent (a
+single free-text field would have to enumerate options inside prose).
+
+D-4. `decisionsFor` takes `records` directly (not a `JournalHandle` or
+`FoldedState`), so it needs a defined ordering contract to compute
+"newest-first" without a `seq` field on `DecisionRecord` itself. Resolved:
+`records` is documented and expected in chain (append) order, oldest first,
+exactly what `decisionRecordsFromChain(chain.fold())` returns;
+`decisionsFor` and `queryDecisions` each reverse it internally.
+
+D-5. B-4's "bounded to a prompt budget" does not define what is measured.
+Resolved: `budgetChars` measures the `stableStringify` length of each
+record's chain payload (the same canonical JSON `contentHashOf` hashes), a
+deterministic stand-in for prompt characters that needs no tokenizer
+dependency (the zero-runtime-dependency convention).
