@@ -73,6 +73,7 @@ function throwingRunner(): Runner {
     add: fail("add"),
     commit: fail("commit"),
     headSha: fail("headSha"),
+    pullFfOnly: fail("pullFfOnly"),
     runGate: fail("runGate"),
     readFile: fail("readFile"),
     writeFile: fail("writeFile"),

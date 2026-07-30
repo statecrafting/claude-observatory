@@ -56,6 +56,10 @@ export interface Runner {
   add(paths: readonly string[]): void;
   commit(message: string): void;
   headSha(): string;
+  // Fast-forward the current branch from its upstream when one exists;
+  // throws on divergence (the preflight treats that as a refusal, never a
+  // silent merge). A branch with no upstream cannot be stale: no-op.
+  pullFfOnly(): void;
 
   // --- gate commands ---
   runGate(cmd: readonly string[]): GateResult;
@@ -131,6 +135,12 @@ export function createProcessRunner(params: CreateProcessRunnerParams): Runner {
 
     checkout(branch: string): void {
       requireOk(repoDir, ["git", "checkout", branch], `git checkout ${branch}`);
+    },
+
+    pullFfOnly(): void {
+      const upstream = runProcessSync(repoDir, ["git", "rev-parse", "--abbrev-ref", "@{u}"]);
+      if (upstream.exitCode !== 0) return; // no upstream: nothing to be stale against
+      requireOk(repoDir, ["git", "pull", "--ff-only"], "git pull --ff-only");
     },
 
     add(paths: readonly string[]): void {
@@ -222,12 +232,32 @@ function preflightRefusal(
     return { kind: "dirty-tree", message: "the target repo's working tree is not clean; refusing to start" };
   }
 
+  // A clean tree on some other branch is the normal aftermath of the
+  // previous spec's pipeline (ship and shepherd act remotely; nothing else
+  // moves the local checkout back). Normalize instead of refusing: check
+  // out the default branch and fast-forward it. Only a dirty tree above, or
+  // a failed normalization here, is a genuine refusal (D-7; found live when
+  // spec 024's build refused on spec 023's leftover branch).
   const branch = runner.currentBranch();
   if (branch !== defaultBranch) {
-    return {
-      kind: "wrong-branch",
-      message: `on branch "${branch}", expected the default branch "${defaultBranch}"`,
-    };
+    try {
+      runner.checkout(defaultBranch);
+      runner.pullFfOnly();
+    } catch (err) {
+      return {
+        kind: "wrong-branch",
+        message: `on branch "${branch}" and could not normalize to "${defaultBranch}": ${(err as Error).message}`,
+      };
+    }
+  } else {
+    try {
+      runner.pullFfOnly();
+    } catch (err) {
+      return {
+        kind: "wrong-branch",
+        message: `on "${defaultBranch}" but could not fast-forward it: ${(err as Error).message}`,
+      };
+    }
   }
 
   const gates = runGateSuite(runner);
