@@ -288,10 +288,19 @@ test("B-1: refuses with dirty-tree when the target repo's working tree is not cl
   decisionsChain.close();
 });
 
-test("B-1: refuses with wrong-branch when not on the default branch", async () => {
+test("B-1: refuses with wrong-branch when normalization to the default branch fails", async () => {
   const { dir, specId } = initFixtureRepo();
   git(dir, ["checkout", "-q", "-b", "some-other-branch"]);
-  const runner: Runner = { ...createProcessRunner({ repoDir: dir }), runGate: greenGate() };
+  // The default branch named to the stage does not exist in this repo, so
+  // the clean-tree normalization (checkout + ff pull) cannot succeed and
+  // the honest refusal remains.
+  const runner: Runner = {
+    ...createProcessRunner({ repoDir: dir }),
+    runGate: greenGate(),
+    checkout: (branch: string) => {
+      throw new Error(`fixture: cannot checkout ${branch}`);
+    },
+  };
   const { journalDir } = openHandles(dir);
   const journal = openJournal(journalDir);
   const decisionsChain = openDecisionsChain(journalDir);
@@ -573,4 +582,57 @@ test("flipImplementation: complete toward in-progress is a no-op (resume after a
   const flip = flipImplementation(spec, "pending", "in-progress");
   expect(flip.changed).toBe(false);
   expect(flip.content).toBe(spec);
+});
+
+test("B-1 normalization: a clean tree on a stale feature branch checks out an updated default branch and proceeds (found live)", async () => {
+  const gitOut = (d: string, args: string[]): string => {
+    const r = Bun.spawnSync(["git", ...args], { cwd: d });
+    if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${new TextDecoder().decode(r.stderr)}`);
+    return new TextDecoder().decode(r.stdout).trim();
+  };
+  const { dir: originDir, specId } = initFixtureRepo();
+
+  // Clone the fixture so the local repo has a real upstream, leave the
+  // clone on a leftover feature branch, then advance origin's main (the
+  // previous spec's remote squash merge).
+  const cloneParent = mkdtempSync(join(tmpdir(), "build-stage-clone-"));
+  git(cloneParent, ["clone", "-q", originDir, "repo"]);
+  const dir = join(cloneParent, "repo");
+  git(dir, ["config", "user.email", "test@example.com"]);
+  git(dir, ["config", "user.name", "Test"]);
+  mkdirSync(join(dir, "src"), { recursive: true }); // empty dirs do not survive a clone
+  git(dir, ["checkout", "-q", "-b", "leftover-previous-spec"]);
+  writeFileSync(join(originDir, "advanced.txt"), "remote moved\n");
+  git(originDir, ["add", "-A"]);
+  git(originDir, ["commit", "-q", "-m", "chore: origin main advanced"]);
+  const originHead = gitOut(originDir, ["rev-parse", "HEAD"]);
+
+  const runner: Runner = {
+    ...createProcessRunner({ repoDir: dir }),
+    runGate: greenGate(),
+    runSession: fakeWritingSession(dir, specId),
+  };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+  });
+
+  expect(result.outcome).toBe("passed");
+  expect(result.evidence.refusal).toBeNull();
+  // The spec branch was based on the fast-forwarded default branch, so the
+  // advanced origin commit is in its history.
+  const mergeBase = gitOut(dir, ["merge-base", specId, originHead]);
+  expect(mergeBase).toBe(originHead);
+
+  journal.close();
+  decisionsChain.close();
 });

@@ -144,3 +144,10 @@ because flipImplementation treated complete as an unexpected state.
 Complete-toward-in-progress is now a no-op: the attempt proceeds straight
 to evidence evaluation. Genuinely unexpected states (deferred, missing)
 still throw.
+
+D-7. Found live when spec 024's build refused on spec 023's leftover
+branch: ship and shepherd act remotely, so nothing returned the local
+checkout to the default branch between specs. B-1's wrong-branch check is
+now a normalization: a clean tree on another branch checks out the default
+branch and fast-forwards it (no upstream is a no-op); only a dirty tree,
+or a failed normalization, refuses. The Runner gains pullFfOnly.

@@ -216,3 +216,7 @@ killed the daemon with the identity lock left behind. A stage
 implementation throwing is now a contained failed attempt: journaled as
 stage.crashed with the error, retried within the stage budget, then an
 honest pause. The loop must outlive any single stage's bug.
+
+D-14. The daemon's test fixtures implement the Runner seam owned by spec
+016, so interface ripples there (such as pullFfOnly, 016 D-7) touch the
+fixture fakes here without changing any daemon behavior.
