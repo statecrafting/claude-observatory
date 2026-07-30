@@ -20,7 +20,7 @@
       }
     ],
     "id": "016-stage-build",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "stage",
     "risk": "high",
     "sectionHeadings": [
@@ -30,13 +30,14 @@
       "3. Behavior",
       "4. Functional requirements",
       "5. Acceptance criteria",
-      "6. Out of scope"
+      "6. Out of scope",
+      "7. Resolved decisions"
     ],
     "specPath": "specs/016-stage-build/spec.md",
     "status": "approved",
     "summary": "The first pipeline stage: assemble the context a fresh session needs (the target spec verbatim, the backlog protocol, relevant decision-ledger entries, dependency pins), flip the spec to in-progress on a fresh feature branch, drive one session to implement exactly that spec's territory, and judge completion from evidence (gate commands green, spec acceptance criteria addressed, working tree state) rather than the session's own claim.\n",
     "title": "Build stage: implement one spec in one fresh session"
   },
-  "shardHash": "df36b5e9c91ccb33c19ca517ef99b3019340e9f40ee84abb2da39b57c3920755",
+  "shardHash": "21e379756d6293b4dadaebc4764115bf94d55524234e415f595533461f688f00",
   "specVersion": "1.1.0"
 }

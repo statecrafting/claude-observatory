@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: stage
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "012-spec-dag-readiness"
@@ -88,3 +88,52 @@ the session makes recorded.
 
 Committing to the default branch, pushing (ship's job), and multi-spec
 batching.
+
+## 7. Resolved decisions
+
+D-1. B-3 calls the prompt template "a versioned file", but
+`src/orchestrator/stages/build-prompt.ts` is not in this spec's
+`establishes` list, so a second file would only be an out-of-territory
+addition with nothing else in the corpus to couple it to. Resolved: the
+template lives inside `build.ts` itself as an exported constant
+(`BUILD_PROMPT_VERSION`) and an exported pure function (`buildPrompt`); the
+version is still journaled with every use (the `stage.build.prompt` record),
+which is what B-3 actually requires, without a second file.
+
+D-2. The stage outcome type is one flat shape,
+`{outcome: "passed" | "failed" | "refused" | "blocked", evidence: BuildEvidence}`,
+shared by every outcome, rather than a discriminated union with a different
+evidence shape per outcome. A refusal fills `evidence.refusal` and leaves
+`branch`/`headSha`/`sessions`/`gates`/`frontmatterComplete`/`decisions` at
+their null-or-empty defaults; every other outcome leaves `refusal: null` and
+fills the rest. One shape keeps journal payload construction and every
+caller's field access uniform, at the cost of a few nullable fields that are
+simply absent on a refusal, distinguishing a Refusal from a
+started-then-failed stage by outcome value rather than by a different
+evidence shape.
+
+D-3. The Runner's git methods are exactly the seven this spec's own text
+names (`statusClean, currentBranch, createBranch, add, commit, headSha,
+checkout`); there is no separate `branchExists`. FR-003's reconcile
+("idempotent: if it exists already... reuse it") is folded into
+`createBranch` itself: it checks existence and either creates-and-checks-out
+or just checks out the existing branch, returning a boolean (`true` when
+reused) so the bracket step can journal which happened without adding a
+method to the seam.
+
+D-4. B-3's decision-ledger injection needs `dependsOnClosure` and
+`territoryPaths` (spec 020's `decisionsFor` parameters), but this spec's
+territory does not include dag.ts or the registry. Resolved: both are
+parsed directly from the target spec's own frontmatter (`depends_on:` and
+`establishes:` list fields, via `parseFrontmatterListField`), the same file
+already read for the frontmatter flip, rather than shelling out to
+spec-spine a second time or reaching into spec 012's territory for a
+transitive closure this stage does not otherwise need.
+
+D-5. B-4's "gate commands" and B-5's completion gate are the same six
+commands (`spec-spine compile`, `spec-spine index check`, `spec-spine lint
+--fail-on-warn`, `spec-spine couple --base origin/main --head HEAD`, `bun
+run typecheck`, `bun test`), exported once as `GATE_COMMANDS` and reused for
+the B-1 "gate green at base" preflight check, the B-2 bracket's own compile
+call (its first element), and every post-session evaluation, rather than
+three independently maintained copies.
