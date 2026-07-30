@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: surface
-implementation: pending
+implementation: in-progress
 risk: low
 depends_on:
   - "022-http-api-and-events"
