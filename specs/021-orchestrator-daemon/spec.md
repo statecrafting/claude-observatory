@@ -194,3 +194,19 @@ in-progress, so the spec was neither pending nor shipped). The working
 snapshot now reads any spec with a live or failed SpecExec in the current
 run as schedulable, regardless of the registry's implementation field; the
 regression test drives the registry flip the way the real bracket does.
+
+D-11. Found by the second live relaunch: an amendment to spec 021 itself
+drifted the adopted pin, and the invalidation cascade blocked the entire
+backlog with no re-qualification path (reverify is scoped to
+pipeline-shipped specs, and re-verification of an adopted spec is vacuous
+anyway). Resolution: adoption tracks the registry continuously rather than
+being computed once. On every scheduling pass, a registry spec reading
+complete or n-a that is not pipeline-shipped is (re)adopted at its current
+pin, journaled as dag.adopted.refreshed with the old pin (null for a late
+first adoption). Pipeline-shipped specs never take this path; their
+invalidation and re-verification stay strict per spec 012 B-4.
+
+D-12. A terminal (completed or failed) latest run is history, not a verdict
+on the mission: recovery creates a fresh run and continues the backlog,
+with the whole journal retained. Only idle, running, paused, or parked runs
+are resumed as-is.
