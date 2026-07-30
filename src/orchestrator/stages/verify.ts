@@ -217,6 +217,15 @@ export function createProcessVerifyRunner(params: CreateProcessVerifyRunnerParam
 
   return {
     addWorktree(sha: string): string {
+      // Shepherd merges remotely; the merge sha may not exist locally until
+      // fetched (the live run failed on exactly this: invalid reference).
+      const known = Bun.spawnSync(["git", "rev-parse", "--verify", `${sha}^{commit}`], { cwd: repoDir });
+      if (known.exitCode !== 0) {
+        const fetch = Bun.spawnSync(["git", "fetch", "origin"], { cwd: repoDir });
+        if (fetch.exitCode !== 0) {
+          throw new Error(`verify: git fetch origin failed: ${new TextDecoder().decode(fetch.stderr).trim()}`);
+        }
+      }
       const target = join(tmpdir(), `verify-worktree-${randomUUID()}`);
       const result = Bun.spawnSync(["git", "worktree", "add", "--detach", target, sha], { cwd: repoDir });
       if (result.exitCode !== 0) {

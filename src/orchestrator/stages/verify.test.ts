@@ -643,3 +643,35 @@ Some assertion
 
   journal.close();
 });
+
+test("addWorktree fetches from origin when the sha is not yet local (remote squash merge)", () => {
+  // origin with two commits; the local clone only has the first, so the
+  // second sha is unknown locally until the runner fetches.
+  const originDir = mkdtempSync(join(tmpdir(), "verify-origin-"));
+  const cloneDir = mkdtempSync(join(tmpdir(), "verify-clone-"));
+  const g = (cwd: string, ...args: string[]) => {
+    const r = Bun.spawnSync(["git", ...args], { cwd });
+    if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${new TextDecoder().decode(r.stderr)}`);
+    return new TextDecoder().decode(r.stdout).trim();
+  };
+  g(originDir, "init", "-b", "main");
+  g(originDir, "config", "user.email", "t@t");
+  g(originDir, "config", "user.name", "t");
+  writeFileSync(join(originDir, "a.txt"), "one\n");
+  g(originDir, "add", "a.txt");
+  g(originDir, "commit", "-m", "one");
+  g(cloneDir, "clone", originDir, "repo");
+  const repoDir = join(cloneDir, "repo");
+  writeFileSync(join(originDir, "a.txt"), "two\n");
+  g(originDir, "add", "a.txt");
+  g(originDir, "commit", "-m", "two");
+  const remoteSha = g(originDir, "rev-parse", "HEAD");
+
+  const runner = createProcessVerifyRunner({ repoDir });
+  const worktree = runner.addWorktree(remoteSha);
+  try {
+    expect(readFileSync(join(worktree, "a.txt"), "utf8")).toBe("two\n");
+  } finally {
+    runner.removeWorktree(worktree);
+  }
+});
