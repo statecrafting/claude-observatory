@@ -28,7 +28,59 @@ test("shippedMapFromJournal merges the adoption record with pipeline-shipped spe
   }
 });
 
+// A re-adopted spec (spec 021 D-11) is journaled as a dag.adopted.refreshed
+// record, not by rewriting the immutable dag.adopted record. Replaying those
+// is what keeps this fold equal to the daemon's own computeShippedMap; a fold
+// that stopped at dag.adopted would report the superseded pin and cascade an
+// invalidation the daemon does not believe in.
+test("shippedMapFromJournal replays dag.adopted.refreshed over the adoption record", () => {
+  const world = freshWorld("readopted");
+  try {
+    seedAdoption(world, ["001-alpha"]);
+    const originalPin = world.dagReader.pin("001-alpha");
+
+    world.dagReader.amend("001-alpha", "# 001-alpha\n\namended after adoption\n");
+    const newPin = world.dagReader.pin("001-alpha");
+    world.journal.append("dag.adopted.refreshed", { id: "001-alpha", oldPin: originalPin, newPin });
+
+    const shipped = shippedMapFromJournal(world.journal.fold().records);
+    expect(shipped.get("001-alpha")).toEqual({ pin: newPin, source: "adopted" });
+  } finally {
+    world.close();
+  }
+});
+
 // --- /api/dag ---------------------------------------------------------------
+
+test("a re-adopted spec is not reported as drifted, and its dependents stay ready", () => {
+  const world = freshWorld("readopted-dag");
+  try {
+    seedAdoption(world, ["001-alpha"]);
+    const originalPin = world.dagReader.pin("001-alpha");
+
+    world.dagReader.amend("001-alpha", "# 001-alpha\n\namended after adoption\n");
+    const newPin = world.dagReader.pin("001-alpha");
+    world.journal.append("dag.adopted.refreshed", { id: "001-alpha", oldPin: originalPin, newPin });
+
+    const view = dagView({
+      records: world.journal.fold().records,
+      snapshot: snapshotOf(world),
+      reader: world.dagReader,
+      repoDir: world.repoDir,
+    });
+
+    const alpha = view.specs.find((s) => s.id === "001-alpha")!;
+    expect(alpha.shippedPin).toBe(newPin);
+    expect(alpha.drifted).toBe(false);
+    expect(alpha.invalidated).toBe(false);
+    expect(view.invalidated).toEqual([]);
+    // The whole backlog would otherwise stall behind a pin drift the daemon
+    // has already resolved.
+    expect(view.nextReady).toBe("002-beta");
+  } finally {
+    world.close();
+  }
+});
 
 test("dagView reports readiness, blockers, pins, and the next ready spec", () => {
   const world = freshWorld("dag");

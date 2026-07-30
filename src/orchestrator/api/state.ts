@@ -49,25 +49,43 @@ function numberField(payload: JsonValue, field: string): number | null {
 
 // --- shipped-set (spec 012 D-1) ---------------------------------------------
 
-// The same two sources the daemon's own loop composes: the one-time
-// `dag.adopted` record (bootstrap-era specs, pinned at first observation)
+// The same three sources the daemon's own computeShippedMap composes: the
+// one-time `dag.adopted` record (bootstrap-era specs, pinned at first
+// observation), every `dag.adopted.refreshed` re-adoption replayed over it,
 // plus every SpecExec this journal shows reaching `shipped`. Recomputed from
 // records on every request rather than read from a cached map, so the API
 // can never report a shipped-set the journal does not support (B-6).
 export function shippedMapFromJournal(records: readonly JournalRecord[]): ShippedMap {
   const out = new Map<string, ShippedEntry>();
+  let adoptionSeen = false;
 
   for (const record of records) {
-    if (record.kind !== "dag.adopted") continue;
-    if (!isJsonRecord(record.payload) || !Array.isArray(record.payload.entries)) continue;
-    for (const raw of record.payload.entries) {
-      const id = stringField(raw, "id");
-      const pin = stringField(raw, "pin");
-      const source = stringField(raw, "source");
-      if (id === null || pin === null) continue;
-      out.set(id, { pin, source: source === "pipeline" ? "pipeline" : "adopted" });
+    // Spec 021 D-4: the adoption record is written once and immutable, so
+    // only the first one counts; a later one cannot rewrite the bootstrap.
+    if (record.kind === "dag.adopted" && !adoptionSeen) {
+      if (!isJsonRecord(record.payload) || !Array.isArray(record.payload.entries)) continue;
+      adoptionSeen = true;
+      for (const raw of record.payload.entries) {
+        const id = stringField(raw, "id");
+        const pin = stringField(raw, "pin");
+        const source = stringField(raw, "source");
+        if (id === null || pin === null) continue;
+        out.set(id, { pin, source: source === "pipeline" ? "pipeline" : "adopted" });
+      }
+      continue;
     }
-    break; // spec 021 D-4: the adoption record is written once and immutable
+
+    // Spec 021 D-11: an amended bootstrap-era spec is re-adopted at its new
+    // pin rather than invalidating the backlog, and the daemon journals that
+    // as its own record instead of rewriting the immutable one above.
+    // Replaying it here is what keeps this fold equal to the daemon's; a fold
+    // that stopped at `dag.adopted` would report the superseded pin and
+    // cascade an invalidation the daemon does not believe in.
+    if (record.kind === "dag.adopted.refreshed") {
+      const id = stringField(record.payload, "id");
+      const newPin = stringField(record.payload, "newPin");
+      if (id !== null && newPin !== null) out.set(id, { pin: newPin, source: "adopted" });
+    }
   }
 
   const state = foldOrchestratorState(records);
