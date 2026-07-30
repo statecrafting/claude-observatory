@@ -5,6 +5,7 @@ import { cmdLog, cmdStats } from "./commands/query";
 import { cmdDiff, cmdSnapshot } from "./commands/snapshot";
 import { cmdExplain, cmdPeek } from "./commands/explain";
 import { cmdDaemon } from "./commands/daemon";
+import { cmdOrchestrator } from "./commands/orchestrator";
 
 const USAGE = `claude-observatory: filesystem observability for ~/.claude
 
@@ -18,6 +19,7 @@ usage: observatory <command> [options]
   explain <path>                      FINDINGS.md entry plus observed history
   peek <path> [--bytes N] [--tail]    redacted content view (opt-in, read-only)
   daemon start|stop|status|plist      background watcher management
+  orchestrator <command>              orchestrator control plane (status, dag, daemon, ...)
 `;
 
 assertLayout();
@@ -47,6 +49,9 @@ switch (cmd) {
     break;
   case "daemon":
     cmdDaemon(args);
+    break;
+  case "orchestrator":
+    await cmdOrchestrator(args);
     break;
   default:
     console.log(USAGE);

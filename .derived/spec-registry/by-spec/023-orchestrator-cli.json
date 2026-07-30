@@ -24,7 +24,7 @@
       }
     ],
     "id": "023-orchestrator-cli",
-    "implementation": "in-progress",
+    "implementation": "complete",
     "kind": "surface",
     "risk": "low",
     "sectionHeadings": [
@@ -35,6 +35,7 @@
       "4. Functional requirements",
       "5. Acceptance criteria",
       "6. Out of scope",
+      "7. Resolved decisions",
       "Verification"
     ],
     "specPath": "specs/023-orchestrator-cli/spec.md",
@@ -42,6 +43,6 @@
     "summary": "The observatory binary gains an `orchestrator` command group that is a pure client of the HTTP API: status, dag, next, start/pause/resume, spec controls (skip, retry-stage, reverify, force-gate, approve), decisions search, history, journal verify (offline, direct), and daemon start/stop/status with the identity-checked lock. Anything the UI can do, the CLI can do; several things (journal verify, daemon lifecycle) only the CLI does.\n",
     "title": "Orchestrator CLI: the primary control plane"
   },
-  "shardHash": "ebc0dbeec7231f097daf02f4e18313f2c454e5b3dda2d9d9eaeb60c9dd94bf79",
+  "shardHash": "c82da94da063fadaa8ff3782a1570715e155b12a015c2d11bcc3e9b0881ca17f",
   "specVersion": "1.1.0"
 }
