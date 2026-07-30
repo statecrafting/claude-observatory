@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: complete
 risk: critical
 depends_on:
   - "013-run-state-machine"
@@ -96,3 +96,51 @@ and their tests.
 Prompt construction (stages own their prompts, specs 016-019), PTY/TUI
 driving, resuming sessions with --resume (fresh sessions are the model;
 remediation is a new session with context injected).
+
+## 7. Resolved decisions
+
+D-1. `--model` and `--max-turns` are only added to the `claude` invocation
+when the caller supplies them; an omitted `maxTurns` leaves claude's own
+default in effect rather than the driver inventing a number to put on the
+command line. `timeoutMs` is different: it is never a CLI flag (claude has
+none), always has a driver-side default (`DEFAULT_TIMEOUT_MS`, 30 minutes),
+and is always enforced by the driver's own deadline timer, satisfying B-5's
+"every session carries a wall-clock deadline... with safe defaults" without
+conflating it with B-1's "only when given" flag rule.
+
+D-2. `claudeVersion(claudeBin)` is exposed as a standalone primitive rather
+than invoked automatically inside `runSession`, per this spec's own
+implementation notes ("the caller journals `--version` once per run").
+Spawning `claude --version` on every single session would re-read the same
+string every time; the caller (a future daemon, spec 021) decides what
+"once per run" means at its own lifetime scope and journals it itself.
+`runSession`'s own `session.init` journal record still carries `claudeBin`
+(the binary path used), which is the half of B-2's "binary path and
+--version output are journaled" that belongs to this module.
+
+D-3. Reset-time extraction (FR-002) checks patterns in order from least to
+most guess-prone: an absolute ISO instant, then a relative duration
+("resets in N minutes/hours", computed against the driver's own clock),
+then a bare epoch number (10 digits read as seconds, 13 as milliseconds),
+then a bare clock time ("resets at HH:MM[am/pm]"). Only the last pattern
+has to assume anything: no timezone or date ever accompanies a bare clock
+hint, so it is read as UTC on the current UTC day, rolling to the next day
+when that time has already passed. The first pattern that matches wins;
+no match returns null, never a guess.
+
+D-4. `session.result`'s journal payload records the overflow buffer as two
+integer counts (`overflowLineCount`, `overflowTruncatedCount`) rather than
+the raw unparseable lines themselves, so the durable evidence record stays
+small regardless of how noisy a run's stdout got. The full bounded lines
+array (capped at `OVERFLOW_LINE_CAP`) is still returned on the in-memory
+`SessionResult` per B-6's "overflow info"; only the journal copy is
+summarized.
+
+D-5. Mutable per-session state (session id, the captured result event, the
+overflow buffer, the deadline/grace timers, the timed-out flag) is grouped
+on one object rather than kept as separate closured `let` bindings.
+TypeScript's control-flow narrowing otherwise mis-narrows a `let` that is
+only ever reassigned from inside a nested closure to `never` at a later
+read site (reproduced independently of this module); grouping the state on
+an object sidesteps the false positive. This is purely a code-shape
+decision with no behavioral effect.

@@ -1,37 +1,33 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '014-session-driver' file unit 'src/orchestrator/session.ts' does not exist",
-        "path": "src/orchestrator/session.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '014-session-driver' file unit 'src/orchestrator/session.test.ts' does not exist",
-        "path": "src/orchestrator/session.test.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '014-session-driver' file unit 'src/orchestrator/classify-termination.ts' does not exist",
-        "path": "src/orchestrator/classify-termination.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '014-session-driver' file unit 'src/orchestrator/classify-termination.test.ts' does not exist",
-        "path": "src/orchestrator/classify-termination.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "013-run-state-machine"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "src/orchestrator/classify-termination.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/classify-termination.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/session.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/session.ts",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/classify-termination.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -40,7 +36,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/classify-termination.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -49,7 +49,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/session.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -58,7 +62,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/session.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -71,5 +79,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "99d20743814ae717ab2c991958d13af4a43c5702f3300f89fac19df2465f475c"
+  "shardHash": "5aaa088d96b45be2aaf5978e3c0886b72aa471dec4beb66b7770db2042708df7"
 }
