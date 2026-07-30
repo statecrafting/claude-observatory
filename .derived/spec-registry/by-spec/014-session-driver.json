@@ -44,6 +44,6 @@
     "summary": "The one place that spawns Claude Code. A fresh `claude` process per attempt: prompt piped on stdin (never shell-interpolated), -p with --output-format stream-json --verbose, cwd = target repo, pinned CLI version recorded, OAuth token auth with ANTHROPIC_API_KEY explicitly removed from the child env (the documented precedence trap). Streams events to subscribers, journals session start/end with cost and result, and classifies terminations: completed, auth-failure (hard stop), quota-exhausted (park, spec 015), hook-blocked, transient (bounded retry), timeout, crashed.\n",
     "title": "Claude Code session driver (fresh process, stream-json, classified outcomes)"
   },
-  "shardHash": "d9047cbaaaccaf96b8251f118e95aa1229d3733fde12e2c58274d8334a16be1f",
+  "shardHash": "e24725bf025ff18a94663751c58e4852d77bec2b9845fa96f4ecfbd81c7dd241",
   "specVersion": "1.1.0"
 }

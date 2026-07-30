@@ -65,7 +65,10 @@ and their tests.
   SIGTERM-then-SIGKILL), `crashed` (anything else). The rule table is data,
   exported, and unit-tested against captured fixtures.
 - **B-5 (bounds).** Every session carries a wall-clock deadline and a
-  max-turns cap; both configurable per stage with safe defaults. A killed
+  max-turns cap; both configurable per stage with safe defaults. The
+  SIGTERM-to-SIGKILL grace at the deadline is likewise configurable
+  (default 5000 ms), and the escalation decision keys on whether the child
+  actually exited, never on whether a signal was merely sent. A killed
   session journals `timeout` with partial cost if a result never arrived.
 - **B-6 (evidence).** Session end journals: classification, exit code,
   duration, num_turns, total_cost_usd and usage when reported, session id,
@@ -144,3 +147,12 @@ only ever reassigned from inside a nested closure to `never` at a later
 read site (reproduced independently of this module); grouping the state on
 an object sidesteps the false positive. This is purely a code-shape
 decision with no behavioral effect.
+
+D-6. CI exposed two timing defects the first landing shipped: the SIGKILL
+escalation guarded on the runtime's "a signal was sent" flag (which our own
+SIGTERM sets, so escalation could never fire exactly when the child ignored
+SIGTERM), and the timeout tests relied on the 5000 ms default grace fitting
+inside the test runner's own 5000 ms default deadline. Resolution: the
+escalation keys on an explicit exited flag, the grace is configurable
+(killGraceMs, default unchanged), and the tests pin a short grace with
+explicit test deadlines. Recorded because it changed B-5's wording.

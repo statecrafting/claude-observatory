@@ -56,6 +56,9 @@ export interface RunSessionOptions {
   readonly model?: string;
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
+  // SIGTERM-to-SIGKILL grace at the deadline (B-5). Configurable so tests can
+  // exercise the escalation deterministically; defaults to KILL_GRACE_MS.
+  readonly killGraceMs?: number;
   readonly journal?: JournalHandle;
   readonly sink?: SessionEventSink;
 }
@@ -212,6 +215,7 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     overflowLines: string[];
     overflowTruncated: number;
     killedForTimeout: boolean;
+    exited: boolean;
     deadlineTimer: ReturnType<typeof setTimeout> | null;
     graceTimer: ReturnType<typeof setTimeout> | null;
   } = {
@@ -221,6 +225,7 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     overflowLines: [],
     overflowTruncated: 0,
     killedForTimeout: false,
+    exited: false,
     deadlineTimer: null,
     graceTimer: null,
   };
@@ -236,13 +241,17 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     }
   }
 
-  // B-5: wall-clock deadline, SIGTERM then a grace period then SIGKILL.
+  // B-5: wall-clock deadline, SIGTERM then a grace period then SIGKILL. The
+  // escalation guards on our own exited flag, not proc.killed: killed only
+  // says a signal was sent (our SIGTERM sets it), which would skip the
+  // escalation exactly when the child ignored the SIGTERM.
+  const killGraceMs = opts.killGraceMs ?? KILL_GRACE_MS;
   state.deadlineTimer = setTimeout(() => {
     state.killedForTimeout = true;
     proc.kill("SIGTERM");
     state.graceTimer = setTimeout(() => {
-      if (!proc.killed) proc.kill("SIGKILL");
-    }, KILL_GRACE_MS);
+      if (!state.exited) proc.kill("SIGKILL");
+    }, killGraceMs);
   }, timeoutMs);
 
   function handleLine(line: string): void {
@@ -306,7 +315,11 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     }
   }
 
-  const [, stderrFull, exitCode] = await Promise.all([readStdout(), new Response(proc.stderr).text(), proc.exited]);
+  const exitedPromise = proc.exited.then((code) => {
+    state.exited = true;
+    return code;
+  });
+  const [, stderrFull, exitCode] = await Promise.all([readStdout(), new Response(proc.stderr).text(), exitedPromise]);
 
   // The process has exited one way or another; no deadline kill is relevant
   // any more.
