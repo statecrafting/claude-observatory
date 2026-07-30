@@ -26,6 +26,10 @@ jobs:
             --head HEAD \
             --pr-body /tmp/pr-body.txt
       - run: bun run typecheck
+      # Spec 024 FR-001: the SPA the daemon serves has to build in CI, not just
+      # on the machine that wrote it. The output is never committed (.gitignore).
+      - name: Build web UI
+        run: bun run web:build
       - name: Tests
         run: |
           if ls src/**/*.test.ts src/*.test.ts 2>/dev/null | grep -q .; then

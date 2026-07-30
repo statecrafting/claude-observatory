@@ -10,13 +10,23 @@
   "scripts": {
     "watch": "bun src/index.ts watch",
     "snapshot": "bun src/index.ts snapshot",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p web/tsconfig.json",
+    "web:dev": "bunx vite --config web/vite.config.ts",
+    "web:build": "bunx vite build --config web/vite.config.ts"
   },
   "spec-spine": {
     "spec": "000-bootstrap"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^20.11.1",
+    "@types/bun": "^1.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "happy-dom": "^20.11.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "^5.9.2",
-    "@types/bun": "^1.2.0"
+    "vite": "^8.2.0"
   }
 }

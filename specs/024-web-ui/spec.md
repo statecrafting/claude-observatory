@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: surface
-implementation: in-progress
+implementation: complete
 risk: medium
 depends_on:
   - "022-http-api-and-events"
@@ -23,11 +23,17 @@ summary: >
 establishes:
   - "web/"
   - "src/orchestrator/api/static.ts"
+  - "src/orchestrator/api/static.test.ts"
   # Pre-authorized manifest touches for the build session: the SPA needs a
   # web:build script and frontend devDependencies. Section units keep the
   # claim narrow (the rest of package.json stays under the bootstrap floor).
   - { kind: section, file: "package.json", anchor: "scripts" }
   - { kind: section, file: "package.json", anchor: "devDependencies" }
+extends:
+  # B-1 needs the daemon's own server to fall through to the built SPA.
+  # Additive: an optional `staticDir` dep plus a final non-`/api` handler;
+  # every route and response shape spec 022 declares is untouched.
+  - { spec: "022-http-api-and-events", unit: "src/orchestrator/api/server.ts", nature: additive }
 ---
 
 # 024: Localhost web UI
@@ -41,7 +47,9 @@ without ssh-ing into a terminal. Honesty over polish.
 
 `web/` (Vite + React SPA, no server-side code) and
 `src/orchestrator/api/static.ts` (same-origin static serving of the built
-assets by the daemon).
+assets by the daemon). One additive touch outside that territory:
+`src/orchestrator/api/server.ts` (spec 022) gains the `staticDir` dep and
+the fall-through that hands non-`/api` paths to the static handler.
 
 ## 3. Behavior
 

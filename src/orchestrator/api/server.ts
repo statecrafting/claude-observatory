@@ -28,6 +28,7 @@ import {
   type JournalSource,
 } from "./events";
 import { dagView, decisionsView, historyView, quotaView, runView } from "./state";
+import { createStaticHandler, defaultWebDistDir, type StaticHandler } from "./static";
 import {
   API_ROUTES,
   API_VERSION,
@@ -106,6 +107,11 @@ export interface ApiDeps {
   readonly pumpIntervalMs?: number;
   readonly quotaTickMs?: number;
   readonly eventRingCapacity?: number;
+  // The built web UI (spec 024 B-1), served same-origin by this same server:
+  // no second port, no CORS, one thing to trust. Omitted resolves the
+  // checkout's own `web/dist`; `null` disables static serving entirely,
+  // leaving a pure-API daemon. Nothing under `/api` is ever served from disk.
+  readonly staticDir?: string | null;
   // The seam B-1 promises: an auth layer slots in front of every route by
   // returning an ApiError, without any response shape changing. v1 wires
   // nothing here (loopback trust).
@@ -442,7 +448,13 @@ function metaView(deps: ApiDeps): ApiMeta {
   };
 }
 
-async function route(deps: ApiDeps, request: Request, hub: EventHub, closers: Set<() => void>): Promise<Response> {
+async function route(
+  deps: ApiDeps,
+  request: Request,
+  hub: EventHub,
+  closers: Set<() => void>,
+  staticHandler: StaticHandler | null
+): Promise<Response> {
   const mismatch = versionMismatch(request);
   if (mismatch) return mismatch;
 
@@ -522,6 +534,12 @@ async function route(deps: ApiDeps, request: Request, hub: EventHub, closers: Se
     return handleSpecControl(deps, verb as SpecControlVerb, specId, await controlSource(request));
   }
 
+  // Last, and never for `/api`: the built SPA (spec 024 B-1). static.ts
+  // refuses the API namespace itself, so every unknown API path still leaves
+  // through the envelope below rather than as an HTML shell.
+  const asset = staticHandler?.(request, path) ?? null;
+  if (asset !== null) return asset;
+
   return fail("not-found", `no route for ${method} ${path}`);
 }
 
@@ -548,13 +566,15 @@ export function createApiServer(deps: ApiDeps): ApiServer {
   });
 
   const closers = new Set<() => void>();
+  const staticHandler =
+    deps.staticDir === null ? null : createStaticHandler({ distDir: deps.staticDir ?? defaultWebDistDir() });
 
   const server = Bun.serve({
     hostname: host,
     port: deps.port ?? DEFAULT_API_PORT,
     async fetch(request: Request): Promise<Response> {
       try {
-        return await route(deps, request, hub, closers);
+        return await route(deps, request, hub, closers, staticHandler);
       } catch (err) {
         // Every unexpected throw still leaves through the one envelope, so a
         // client never has to parse an HTML error page or a bare stack.
