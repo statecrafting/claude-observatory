@@ -1010,3 +1010,113 @@ test("a failed specExec whose spec reads in-progress in the registry is still sc
   expect(shipAttempts).toBe(3);
   await daemon.shutdown();
 });
+
+// --- regression: an amended adopted spec re-adopts at its current pin
+// (found live: a spec 021 amendment invalidated the adopted entry and
+// blocked the whole backlog with no re-qualification path) -------------------
+
+test("an adopted spec whose spec.md was amended refreshes its pin instead of blocking dependents", async () => {
+  const dataDir = freshDir("adopted-refresh-data");
+  const repoDir = freshDir("adopted-refresh-repo");
+
+  // 800-kernel is bootstrap-adopted (complete). Its content changes between
+  // daemon lifetimes, like an amendment landing on main after adoption.
+  let kernelContent = "original kernel spec\n";
+  let includeFixture = false;
+  const dagReader: DagReader = {
+    registryListJson: () => {
+      const list: unknown[] = [{ id: "800-kernel", implementation: "complete", dependsOn: [] }];
+      if (includeFixture) list.push({ id: "900-fixture", implementation: "pending", dependsOn: ["800-kernel"] });
+      return JSON.stringify(list);
+    },
+    registryShowJson: () => {
+      throw new Error("not used");
+    },
+    readSpecFile: (_repo: string, specId: string) =>
+      Buffer.from(specId === "800-kernel" ? kernelContent : "fixture spec\n", "utf8"),
+  };
+
+  // First lifetime: adopt 800-kernel at its original pin; with nothing
+  // pending the run completes immediately.
+  const daemon1 = new Daemon(makeDeps({ dataDir, repoDir, dagReader, stageFns: neverCalledStageFns() }));
+  await daemon1.start();
+  await daemon1.join();
+  expect(daemon1.runStatus).toBe("completed");
+  await daemon1.shutdown();
+
+  // Amendment lands between lifetimes, and the backlog gains a dependent.
+  kernelContent = "amended kernel spec\n";
+  includeFixture = true;
+
+  const stageFns: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+  const daemon2 = new Daemon(makeDeps({ dataDir, repoDir, dagReader, stageFns }));
+  await daemon2.start();
+  await daemon2.join();
+  expect(daemon2.runStatus).toBe("completed");
+  await daemon2.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const refreshes = (journal.fold().byKind["dag.adopted.refreshed"] ?? []).map(
+      (r) => r.payload as { id: string; oldPin: string | null; newPin: string }
+    );
+    const kernelRefresh = refreshes.filter((p) => p.id === "800-kernel");
+    expect(kernelRefresh.length).toBe(1);
+    expect(kernelRefresh[0]!.oldPin).not.toBeNull();
+    expect(kernelRefresh[0]!.oldPin).not.toBe(kernelRefresh[0]!.newPin);
+  } finally {
+    journal.close();
+  }
+});
+
+// --- regression: a terminal latest run is history; restart continues the
+// backlog under a fresh run --------------------------------------------------
+
+test("recovery after a failed run creates a fresh run and continues the backlog", async () => {
+  const dataDir = freshDir("fresh-run-data");
+  const repoDir = freshDir("fresh-run-repo");
+
+  // First lifetime fails its run: the only pending spec depends on a spec
+  // the registry does not know, so the loop journals run.blocked and fails.
+  const badReader = fixtureDagReader({ "900-fixture": { dependsOn: ["777-missing"] } });
+  const daemon1 = new Daemon(makeDeps({ dataDir, repoDir, dagReader: badReader, stageFns: neverCalledStageFns() }));
+  await daemon1.start();
+  await daemon1.join();
+  expect(daemon1.runStatus).toBe("failed");
+  await daemon1.shutdown();
+
+  // Second lifetime: the registry now lists the dependency as complete; it
+  // is late-adopted at observation, a fresh run is created, and the backlog
+  // completes.
+  const goodReader = fixtureDagReader({
+    "777-missing": { implementation: "complete" },
+    "900-fixture": { dependsOn: ["777-missing"] },
+  });
+  const stageFns: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+  const daemon2 = new Daemon(makeDeps({ dataDir, repoDir, dagReader: goodReader, stageFns }));
+  await daemon2.start();
+  await daemon2.join();
+  expect(daemon2.runStatus).toBe("completed");
+  await daemon2.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    expect(journal.fold().byKind["run.created"]?.length).toBe(2);
+    const late = (journal.fold().byKind["dag.adopted.refreshed"] ?? []).map(
+      (r) => r.payload as { id: string; oldPin: string | null }
+    );
+    expect(late.some((p) => p.id === "777-missing" && p.oldPin === null)).toBe(true);
+  } finally {
+    journal.close();
+  }
+});

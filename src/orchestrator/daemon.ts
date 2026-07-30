@@ -566,7 +566,10 @@ export class Daemon {
     }
 
     const existingRun = [...state.runs.values()].sort((a, b) => a.createdTs.localeCompare(b.createdTs)).at(-1);
-    if (existingRun) {
+    // A terminal latest run is history, not a verdict on the mission: a
+    // restart continues the backlog under a fresh run (D-12) with the full
+    // journal retained. Only a live (or idle/paused/parked) run is resumed.
+    if (existingRun && existingRun.status !== "completed" && existingRun.status !== "failed") {
       this.run = existingRun;
       if (this.run.status === "idle") this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
     } else {
@@ -691,11 +694,44 @@ export class Daemon {
 
   // --- shipped-map + working snapshot (D-1/D-5) ----------------------------
 
-  private computeShippedMap(): ShippedMap {
-    const adoptedRecord = this.workJournal.fold().byKind["dag.adopted"]?.[0];
-    const adopted: ShippedMap = adoptedRecord ? parseAdoptedPayload(adoptedRecord.payload) : new Map();
-    const state = foldOrchestratorState(this.workJournal.fold().records);
-    const merged = new Map(adopted);
+  private computeShippedMap(snapshot: RegistrySnapshot, pinOf: PinLookup): ShippedMap {
+    const fold = this.workJournal.fold();
+    const adoptedRecord = fold.byKind["dag.adopted"]?.[0];
+    const adopted = new Map(adoptedRecord ? parseAdoptedPayload(adoptedRecord.payload) : new Map());
+
+    // Refreshes are re-adoptions of amended bootstrap-era specs (D-11): an
+    // adopted spec's amendment gets the same trust at next observation that
+    // its original content got at first observation, provided the registry
+    // still reports it complete or n-a. Pipeline-shipped specs never take
+    // this path; their invalidation stays strict (spec 012 B-4).
+    for (const rec of fold.byKind["dag.adopted.refreshed"] ?? []) {
+      const p = rec.payload as { id?: string; newPin?: string };
+      if (typeof p?.id === "string" && typeof p?.newPin === "string") {
+        adopted.set(p.id, { pin: p.newPin, source: "adopted" });
+      }
+    }
+
+    const state = foldOrchestratorState(fold.records);
+    const pipelineShipped = new Set(
+      [...state.specExecs.values()].filter((se) => se.status === "shipped").map((se) => se.specId)
+    );
+
+    for (const [id, registryEntry] of snapshot) {
+      const adoptable = registryEntry.implementation === "complete" || registryEntry.implementation === "n-a";
+      if (!adoptable || pipelineShipped.has(id)) continue;
+      const currentPin = pinOf(id);
+      const existing = adopted.get(id);
+      if (!existing || existing.pin !== currentPin) {
+        this.workJournal.append("dag.adopted.refreshed", {
+          id,
+          oldPin: existing?.pin ?? null,
+          newPin: currentPin,
+        });
+        adopted.set(id, { pin: currentPin, source: "adopted" });
+      }
+    }
+
+    const merged: Map<string, ShippedEntry> = new Map(adopted);
     for (const specExec of state.specExecs.values()) {
       if (specExec.status === "shipped") merged.set(specExec.specId, { pin: specExec.pin, source: "pipeline" });
     }
@@ -760,7 +796,7 @@ export class Daemon {
 
       const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
       const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
-      const shipped = this.computeShippedMap();
+      const shipped = this.computeShippedMap(snapshot, pinOf);
       const folded = foldOrchestratorState(this.workJournal.fold().records);
       const resumable = new Set(
         [...folded.specExecs.values()]
@@ -867,7 +903,7 @@ export class Daemon {
 
     const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
     const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
-    const shipped = this.computeShippedMap();
+    const shipped = this.computeShippedMap(snapshot, pinOf);
 
     const outcome = await this.runStageWithRetries("verify", current, snapshot, shipped, pinOf, true);
     if (outcome.kind === "passed") {
