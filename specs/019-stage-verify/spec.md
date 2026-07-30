@@ -150,3 +150,9 @@ bounded stdout, and its bounded stderr, concatenated into one text blob and
 hashed as a whole, rather than three separate files. FR-003's own shape
 (`{assertion, evidenceHash}`) names one hash per assertion, not one per
 stream.
+
+D-9. Found live: shepherd merges remotely, so the merge sha does not exist
+in the local repo until fetched, and the worktree add for cli assertions
+failed with an invalid reference. The production VerifyRunner now verifies
+the sha locally first and runs one git fetch origin when it is unknown,
+before creating the worktree.

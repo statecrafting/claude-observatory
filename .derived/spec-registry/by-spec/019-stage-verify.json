@@ -36,6 +36,6 @@
     "summary": "The stage that makes shipped mean something: after merge, drive a verification pass against the running artifact and assert the spec's declared observable behavior, recording pass/fail with evidence. Specs declare verifiability in a Verification section (CLI assertions the orchestrator runs directly; browser assertions driven through Claude in Chrome for UI territory); a spec with no such section records verify: not-declared, visibly, instead of a hollow pass. Verify is also the re-qualification path for invalidated specs (012 B-4).\n",
     "title": "Verify stage: assert observable behavior, record evidence"
   },
-  "shardHash": "499951c6fcc1d0b29a35a2bc3b81cce211164324faeb6f0854c949d3872f972f",
+  "shardHash": "74def0793dc22eb21401ed97404bf1db78e0366c04d34a5e93cfc86bc68722cc",
   "specVersion": "1.1.0"
 }
