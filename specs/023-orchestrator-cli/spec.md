@@ -69,3 +69,15 @@ automation and tests.
 ## 6. Out of scope
 
 Interactive TUI, shell completions, and configuration profiles.
+
+## Verification
+
+```verify:cli
+bun test src/commands/orchestrator.test.ts
+```
+
+```verify:cli
+# With no daemon serving HTTP, the client must exit 2 (unreachable), the
+# documented honest outcome, never a crash.
+bun src/index.ts orchestrator status --json > /dev/null 2>&1; test $? -eq 2
+```

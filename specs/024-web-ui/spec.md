@@ -23,6 +23,11 @@ summary: >
 establishes:
   - "web/"
   - "src/orchestrator/api/static.ts"
+  # Pre-authorized manifest touches for the build session: the SPA needs a
+  # web:build script and frontend devDependencies. Section units keep the
+  # claim narrow (the rest of package.json stays under the bootstrap floor).
+  - { kind: section, file: "package.json", anchor: "scripts" }
+  - { kind: section, file: "package.json", anchor: "devDependencies" }
 ---
 
 # 024: Localhost web UI
@@ -81,3 +86,9 @@ assets by the daemon).
 Authentication and remote access (spec 022 B-1 governs), historical
 analytics/charts beyond the history list, and any spec-editing capability
 (specs are authored in the repo, reviewed as code).
+
+## Verification
+
+```verify:cli
+bun install --frozen-lockfile && bun run web:build
+```

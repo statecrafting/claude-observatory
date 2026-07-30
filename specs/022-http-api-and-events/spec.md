@@ -79,3 +79,9 @@ API. One interface means state honesty has one place to live.
 
 Authentication, TLS, remote binding, GraphQL-style querying, and API
 stability guarantees beyond `apiVersion` gating.
+
+## Verification
+
+```verify:cli
+bun test src/orchestrator/api/
+```

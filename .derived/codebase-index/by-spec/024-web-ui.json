@@ -18,7 +18,12 @@
     "dependsOn": [
       "022-http-api-and-events"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "package.json",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
         "locations": [],
@@ -37,11 +42,47 @@
           "kind": "file",
           "path": "web/"
         }
+      },
+      {
+        "locations": [
+          {
+            "file": "package.json",
+            "span": {
+              "endLine": 21,
+              "startLine": 18
+            }
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "anchor": "devDependencies",
+          "file": "package.json",
+          "kind": "section"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "package.json",
+            "span": {
+              "endLine": 14,
+              "startLine": 10
+            }
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "anchor": "scripts",
+          "file": "package.json",
+          "kind": "section"
+        }
       }
     ],
     "specId": "024-web-ui",
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "c769a97fc0e9f6d70bb3af001d8f65bd7e2a1d67603bc1d76765870b3b9e24b5"
+  "shardHash": "7aa3510eb067601bc75054e583299980c4fe3bd0ba690f39124e3dcbc3527cc2"
 }
