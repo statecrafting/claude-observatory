@@ -156,3 +156,9 @@ inside the test runner's own 5000 ms default deadline. Resolution: the
 escalation keys on an explicit exited flag, the grace is configurable
 (killGraceMs, default unchanged), and the tests pin a short grace with
 explicit test deadlines. Recorded because it changed B-5's wording.
+The same CI round exposed a third defect: the driver waited for stdout and
+stderr EOF, but a killed child's orphaned grandchild inherits those pipe
+descriptors and can hold them open indefinitely (Linux showed this; macOS
+timing masked it). Process exit is now the authoritative boundary; streams
+are captured incrementally and drained for at most a bounded grace
+(PIPE_DRAIN_GRACE_MS) after exit.

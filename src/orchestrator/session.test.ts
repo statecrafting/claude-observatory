@@ -373,3 +373,22 @@ test("deriveTranscriptPath: resolves a relative repo path before slugging", () =
   const path = deriveTranscriptPath(".", "sess-xyz");
   expect(path).toBe(join(homedir(), ".claude", "projects", cwdSlug, "sess-xyz.jsonl"));
 });
+
+test(
+  "runSession: a background grandchild holding the inherited pipes does not hang the driver past the drain grace",
+  async () => {
+    const dir = freshDir();
+    // bash exits immediately; the disowned sleep inherits our stdout/stderr
+    // pipes and holds them open, so pipe EOF arrives ~30s after process exit.
+    const script = writeFakeClaude(dir, ["sleep 30 &", "disown", "exit 0"].join("\n"));
+
+    const start = Date.now();
+    const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script, timeoutMs: 20_000 });
+    const elapsed = Date.now() - start;
+
+    expect(result.exitCode).toBe(0);
+    expect(result.classification.kind).toBe("crashed");
+    expect(elapsed).toBeLessThan(8_000);
+  },
+  15_000
+);
