@@ -14,7 +14,7 @@
       }
     ],
     "id": "022-http-api-and-events",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "surface",
     "risk": "medium",
     "sectionHeadings": [
@@ -25,6 +25,7 @@
       "4. Functional requirements",
       "5. Acceptance criteria",
       "6. Out of scope",
+      "7. Resolved decisions",
       "Verification"
     ],
     "specPath": "specs/022-http-api-and-events/spec.md",
@@ -32,6 +33,6 @@
     "summary": "The daemon's single interface: a typed localhost HTTP API (Bun.serve) plus a server-sent-events stream with heartbeat, after the statecraft admin-stream pattern. Read endpoints cover the DAG with readiness and blockers, run state, stage evidence, quota state, decision-ledger queries, and run history; control endpoints cover start, pause, resume, skip, retry-stage, re-run-verify, and force-human-gate. Every response shape is a versioned TypeScript type shared with the clients; errors use one envelope with stable kind tokens. Localhost-only binding in v1, but nothing in the shapes assumes single-user forever.\n",
     "title": "Typed HTTP API and event stream (the only interface)"
   },
-  "shardHash": "1d39cf5ca4ab0751e73b7bb4633fda4f5ca03d468ca418d58a665441943e3c3f",
+  "shardHash": "3e163e67af5332c27ebb065fcab2d713e0e9b9927ab4d1dcd95f823a26aea9d3",
   "specVersion": "1.1.0"
 }
