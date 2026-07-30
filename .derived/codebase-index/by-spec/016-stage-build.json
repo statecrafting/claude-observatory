@@ -1,29 +1,27 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '016-stage-build' file unit 'src/orchestrator/stages/build.ts' does not exist",
-        "path": "src/orchestrator/stages/build.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '016-stage-build' file unit 'src/orchestrator/stages/build.test.ts' does not exist",
-        "path": "src/orchestrator/stages/build.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "012-spec-dag-readiness",
       "014-session-driver",
       "020-decision-ledger"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "src/orchestrator/stages/build.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/stages/build.ts",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/build.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -32,7 +30,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/build.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -45,5 +47,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "23bc8eff9db8a05a7d023b047cef4a7eedc13e8b83e924e4502163130f1a97d3"
+  "shardHash": "bfe43fda76434e3c497b8234c09fd092c5f6f819fca08fbaa6570020c73d9853"
 }
