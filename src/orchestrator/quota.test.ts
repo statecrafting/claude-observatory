@@ -281,9 +281,13 @@ test(
     const dir = freshDir();
     const journalDir = join(dir, "journal");
 
-    // A reset hint a few hundred ms in the future, expressed as an absolute
-    // ISO instant the classifier's own reset-time extraction understands.
-    const resetAtMs = Date.now() + 300;
+    // A reset hint a bit over a second in the future, expressed as an
+    // absolute ISO instant the classifier's own reset-time extraction
+    // understands. The offset needs enough runway for two real process
+    // spawns and a journal round trip (session.result "not yet due" would
+    // otherwise race against fake-claude spawn overhead); 1200 ms leaves
+    // that headroom while the whole test still finishes well under 3 s.
+    const resetAtMs = Date.now() + 1200;
     const resetIso = new Date(resetAtMs).toISOString();
     const quotaScript = writeFakeClaude(
       dir,
