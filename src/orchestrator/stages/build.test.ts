@@ -156,7 +156,7 @@ test("flipImplementation is a no-op (changed: false) when already at the target 
 });
 
 test("flipImplementation throws when the current status is neither from nor to", () => {
-  const content = specFixture("x", "complete");
+  const content = specFixture("x", "deferred");
   expect(() => flipImplementation(content, "pending", "in-progress")).toThrow(/expected "implementation: pending"/);
 });
 
@@ -566,4 +566,11 @@ test("B-6: decisions dropped in the drop-box during the session are sealed into 
 
   journal.close();
   decisionsChain.close();
+});
+
+test("flipImplementation: complete toward in-progress is a no-op (resume after a finished attempt)", () => {
+  const spec = ["---", 'id: "900-fixture"', "implementation: complete", "---", "", "# body"].join("\n");
+  const flip = flipImplementation(spec, "pending", "in-progress");
+  expect(flip.changed).toBe(false);
+  expect(flip.content).toBe(spec);
 });
