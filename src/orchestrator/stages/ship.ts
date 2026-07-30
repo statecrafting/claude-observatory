@@ -42,10 +42,40 @@ export interface GitHubCommit {
   readonly message: string;
 }
 
+// --- shepherd extensions (spec 018, additive) --------------------------------
+//
+// The shepherd stage (spec 018) watches checks by sha, remediates a red run,
+// and merges when green; it reuses this client seam rather than declaring a
+// second one (see specs/017-stage-ship/spec.md's Resolved decisions D-7).
+// `required` is optional because this seam's `checkRunsForSha` cannot always
+// resolve branch-protection membership; a run with `required` absent or
+// `true` counts toward the merge gate, only an explicit `false` excludes it
+// (spec 018's own Resolved decisions).
+
+export interface CheckRun {
+  readonly id: number;
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly required?: boolean;
+}
+
+export type MergeMethod = "squash" | "merge" | "rebase";
+
+export interface MergeOutcome {
+  readonly mergeSha: string;
+}
+
 export interface GitHubClient {
   prForBranch(branch: string): GitHubPr | null;
   commitsForPr(number: number): readonly GitHubCommit[];
   checksTriggered(headSha: string): boolean;
+  // --- shepherd extensions (spec 018) ---
+  checkRunsForSha(sha: string): readonly CheckRun[];
+  jobLogTail(runId: number, maxBytes: number): string;
+  mergePr(number: number, method: MergeMethod): MergeOutcome;
+  branchContains(branch: string, sha: string): boolean;
+  deleteRemoteBranch(branch: string): void;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -59,6 +89,12 @@ function runGhSync(cwd: string, cmd: readonly string[]): { exitCode: number; std
     stdout: new TextDecoder().decode(result.stdout),
     stderr: new TextDecoder().decode(result.stderr),
   };
+}
+
+function tailText(text: string, maxBytes: number): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= maxBytes) return text;
+  return new TextDecoder().decode(bytes.subarray(bytes.length - maxBytes));
 }
 
 export interface CreateGitHubClientParams {
@@ -135,6 +171,83 @@ export function createProcessGitHubClient(params: CreateGitHubClientParams): Git
         return false;
       }
       return isRecord(parsed) && typeof parsed.total_count === "number" && parsed.total_count > 0;
+    },
+
+    // --- shepherd extensions (spec 018) ---
+
+    checkRunsForSha(sha: string): readonly CheckRun[] {
+      const result = runGhSync(repoDir, [ghBin, "api", `repos/{owner}/{repo}/commits/${sha}/check-runs`]);
+      if (result.exitCode !== 0) return [];
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout);
+      } catch {
+        return [];
+      }
+      if (!isRecord(parsed) || !Array.isArray(parsed.check_runs)) return [];
+      const runs: CheckRun[] = [];
+      for (const raw of parsed.check_runs) {
+        if (!isRecord(raw) || typeof raw.id !== "number" || typeof raw.name !== "string") continue;
+        const status = typeof raw.status === "string" ? raw.status : "unknown";
+        const conclusion = typeof raw.conclusion === "string" ? raw.conclusion : null;
+        // This endpoint carries no branch-protection membership; `required`
+        // is left unset here (the seam's own default reading treats an
+        // unset flag as required, see the GitHubClient doc comment above).
+        runs.push({ id: raw.id, name: raw.name, status, conclusion });
+      }
+      return runs;
+    },
+
+    jobLogTail(runId: number, maxBytes: number): string {
+      const result = runGhSync(repoDir, [ghBin, "run", "view", String(runId), "--log"]);
+      if (result.exitCode !== 0) return tailText(result.stderr, maxBytes);
+      return tailText(result.stdout, maxBytes);
+    },
+
+    mergePr(number: number, method: MergeMethod): MergeOutcome {
+      const result = runGhSync(repoDir, [
+        ghBin,
+        "api",
+        "-X",
+        "PUT",
+        `repos/{owner}/{repo}/pulls/${number}/merge`,
+        "-f",
+        `merge_method=${method}`,
+      ]);
+      if (result.exitCode !== 0) {
+        throw new Error(`ship: gh pr merge (#${number}, ${method}) failed: ${result.stderr.trim()}`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout);
+      } catch {
+        throw new Error(`ship: gh pr merge (#${number}, ${method}) returned unparseable output`);
+      }
+      if (!isRecord(parsed) || typeof parsed.sha !== "string") {
+        throw new Error(`ship: gh pr merge (#${number}, ${method}) response carried no merge sha`);
+      }
+      return { mergeSha: parsed.sha };
+    },
+
+    branchContains(branch: string, sha: string): boolean {
+      const result = runGhSync(repoDir, [ghBin, "api", `repos/{owner}/{repo}/compare/${branch}...${sha}`]);
+      if (result.exitCode !== 0) return false;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout);
+      } catch {
+        return false;
+      }
+      // ahead_by counts commits reachable from `sha` but not from `branch`;
+      // zero means `sha` is already fully contained in `branch`'s history.
+      return isRecord(parsed) && typeof parsed.ahead_by === "number" && parsed.ahead_by === 0;
+    },
+
+    deleteRemoteBranch(branch: string): void {
+      const result = runGhSync(repoDir, [ghBin, "api", "-X", "DELETE", `repos/{owner}/{repo}/git/refs/heads/${branch}`]);
+      if (result.exitCode !== 0) {
+        throw new Error(`ship: deleting remote branch "${branch}" failed: ${result.stderr.trim()}`);
+      }
     },
   };
 }

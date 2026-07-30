@@ -110,6 +110,24 @@ function makeFakeGh(
       state.checksTriggeredCalls++;
       return ciTriggered;
     },
+    // --- shepherd extensions (spec 018): unused by this spec's own
+    // scenarios, so these stubs exist only to satisfy the shared
+    // GitHubClient shape (see specs/017-stage-ship/spec.md D-7).
+    checkRunsForSha(_sha: string) {
+      throw new Error("ship.test.ts: checkRunsForSha is a shepherd-stage seam, not exercised here");
+    },
+    jobLogTail(_runId: number, _maxBytes: number): string {
+      throw new Error("ship.test.ts: jobLogTail is a shepherd-stage seam, not exercised here");
+    },
+    mergePr(_number: number, _method) {
+      throw new Error("ship.test.ts: mergePr is a shepherd-stage seam, not exercised here");
+    },
+    branchContains(_branch: string, _sha: string): boolean {
+      throw new Error("ship.test.ts: branchContains is a shepherd-stage seam, not exercised here");
+    },
+    deleteRemoteBranch(_branch: string): void {
+      throw new Error("ship.test.ts: deleteRemoteBranch is a shepherd-stage seam, not exercised here");
+    },
   };
 }
 
