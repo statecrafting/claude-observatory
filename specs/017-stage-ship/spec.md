@@ -5,7 +5,7 @@ status: approved
 created: "2026-07-29"
 authors: ["Bartek Kus"]
 kind: stage
-implementation: pending
+implementation: complete
 risk: medium
 depends_on:
   - "016-stage-build"
@@ -71,3 +71,62 @@ outcomes independently.
 ## 6. Out of scope
 
 Merging (shepherd's job), release tagging, and multi-remote setups.
+
+## 7. Resolved decisions
+
+D-1. The Runner seam is imported from `build.ts` (spec 016) rather than
+redeclared: `runShipStage` only needs `currentBranch`, `headSha`, and
+`runSession`, all already part of that interface, and `createProcessRunner`
+is reused wholesale for the git half of the test fixtures (the same pattern
+build.ts's own tests already use for AC-2's real-git flow). GitHubClient
+(FR-001) is the one genuinely new seam this spec adds: a typed read-only
+wrapper over the `gh` CLI, following the same interface-plus-Bun.spawnSync
+production factory shape as `createProcessRunner`, so the two seams read as
+one family without one duplicating the other.
+
+D-2. B-4's idempotency pre-check (`gh.prForBranch(branch)`) runs
+unconditionally as the stage's first action, before any session is driven.
+When it finds a PR that already verifies (B-3's own check, reused), the
+stage passes with `sessions: []`, satisfying "retrying a ship...is a pass,
+not a duplicate PR" without needing a session at all. When it finds a PR
+that does not yet verify (for example new local commits since the PR
+opened), the mismatch is journaled but does not fail the stage outright:
+only the post-session check is allowed to produce a `failed` outcome. This
+keeps "found a stale PR" and "verified after driving a session" as two
+distinct failure surfaces, matching B-3's own text ("after the session").
+
+D-3. AC-2's "no PR-existence check attempted" is read as: once a session
+classifies `hook-blocked`, the stage never proceeds to the post-session
+outside-verification step (B-3) that would otherwise call `commitsForPr`
+and `checksTriggered` and produce pass/fail evidence with a diff. The B-4
+idempotency pre-check described in D-2 still runs before the session (it
+has to, in order to decide whether a session is needed at all), so a
+fixture exercising AC-2 legitimately sees exactly one `prForBranch` call
+(the pre-check, finding nothing) and zero calls to `commitsForPr` or
+`checksTriggered`, ever. `ship.test.ts`'s AC-2 test asserts this call
+breakdown explicitly rather than a bare "gh was never called", and the
+in-code comment at the block-handling branch cross-references this
+decision.
+
+D-4. `GitHubClient.checksTriggered` returns a bare boolean (FR-001's own
+literal signature), with no CI run id. FR-002 asks for "CI run id when
+visible" in evidence; since this seam version cannot surface one,
+`ShipEvidence.ciRunId` is always `null` rather than fabricated from
+`checksTriggered`'s boolean. A future seam revision that adds a run id to
+the interface can fill this field without changing `ShipEvidence`'s shape.
+
+D-5. Ship's own `ShipSessionEvidence` is a distinct shape from build.ts's
+`SessionEvidence`, not a reuse: it additionally carries `detail` (the
+termination classifier's own explanation) and `stderrTail` (the process's
+captured stderr), because B-2's "refusal text is stage evidence" needs the
+actual refusal wording, not just the classification's kind string that
+`SessionEvidence` exposes. Duplicating six fields to add two is cheaper than
+widening build.ts's own evidence shape for a field only this stage reads.
+
+D-6. `runShipStage` takes `specId` as an explicit option rather than
+deriving it from `runner.currentBranch()`, even though build.ts's own
+convention makes them equal in practice (branch names are spec ids). This
+keeps ship.ts's journal payloads self-describing without assuming the
+branch-naming convention holds forever, and matches every other stage's
+journal records (`specId` is always an explicit field, never inferred from
+the branch string).
