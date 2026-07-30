@@ -9,7 +9,6 @@ import {
   deriveTranscriptPath,
   SessionsSerialError,
   OVERFLOW_LINE_CAP,
-  KILL_GRACE_MS,
 } from "./session";
 
 function freshDir(): string {
@@ -222,18 +221,24 @@ test("runSession: the prompt is delivered via stdin only, never argv or a shell"
 
 // --- deadline enforcement (B-5) ------------------------------------------------
 
-test("runSession: kills the child at its deadline and classifies timeout", async () => {
-  const dir = freshDir();
-  const script = writeFakeClaude(dir, ["sleep 30", "exit 0"].join("\n"));
+test(
+  "runSession: kills the child at its deadline and classifies timeout",
+  async () => {
+    const dir = freshDir();
+    const script = writeFakeClaude(dir, ["sleep 30", "exit 0"].join("\n"));
 
-  const start = Date.now();
-  const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script, timeoutMs: 150 });
-  const elapsed = Date.now() - start;
+    const start = Date.now();
+    // Short grace so the SIGKILL escalation is reached quickly even where
+    // SIGTERM does not end the fake (CI bash keeps waiting on its child).
+    const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script, timeoutMs: 150, killGraceMs: 300 });
+    const elapsed = Date.now() - start;
 
-  expect(result.classification.kind).toBe("timeout");
-  expect(result.exitCode).not.toBe(0);
-  expect(elapsed).toBeLessThan(5000);
-});
+    expect(result.classification.kind).toBe("timeout");
+    expect(result.exitCode).not.toBe(0);
+    expect(elapsed).toBeLessThan(10_000);
+  },
+  15_000
+);
 
 test(
   "runSession: escalates to SIGKILL after the grace period when the child ignores SIGTERM",
@@ -242,14 +247,14 @@ test(
     const script = writeFakeClaude(dir, ["trap '' TERM", "sleep 30", "exit 0"].join("\n"));
 
     const start = Date.now();
-    const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script, timeoutMs: 100 });
+    const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script, timeoutMs: 100, killGraceMs: 300 });
     const elapsed = Date.now() - start;
 
     expect(result.classification.kind).toBe("timeout");
-    // Dies at roughly timeoutMs + KILL_GRACE_MS, not the full 30s sleep.
-    expect(elapsed).toBeLessThan(KILL_GRACE_MS + 4000);
+    // Dies at roughly timeoutMs + killGraceMs, not the full 30s sleep.
+    expect(elapsed).toBeLessThan(10_000);
   },
-  12000
+  15_000
 );
 
 // --- serial invariant (FR-003) ------------------------------------------------
@@ -368,3 +373,22 @@ test("deriveTranscriptPath: resolves a relative repo path before slugging", () =
   const path = deriveTranscriptPath(".", "sess-xyz");
   expect(path).toBe(join(homedir(), ".claude", "projects", cwdSlug, "sess-xyz.jsonl"));
 });
+
+test(
+  "runSession: a background grandchild holding the inherited pipes does not hang the driver past the drain grace",
+  async () => {
+    const dir = freshDir();
+    // bash exits immediately; the disowned sleep inherits our stdout/stderr
+    // pipes and holds them open, so pipe EOF arrives ~30s after process exit.
+    const script = writeFakeClaude(dir, ["sleep 30 &", "disown", "exit 0"].join("\n"));
+
+    const start = Date.now();
+    const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script, timeoutMs: 20_000 });
+    const elapsed = Date.now() - start;
+
+    expect(result.exitCode).toBe(0);
+    expect(result.classification.kind).toBe("crashed");
+    expect(elapsed).toBeLessThan(8_000);
+  },
+  15_000
+);

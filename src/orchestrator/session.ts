@@ -56,6 +56,9 @@ export interface RunSessionOptions {
   readonly model?: string;
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
+  // SIGTERM-to-SIGKILL grace at the deadline (B-5). Configurable so tests can
+  // exercise the escalation deterministically; defaults to KILL_GRACE_MS.
+  readonly killGraceMs?: number;
   readonly journal?: JournalHandle;
   readonly sink?: SessionEventSink;
 }
@@ -87,6 +90,10 @@ export interface SessionResult {
 
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 export const KILL_GRACE_MS = 5000;
+// How long to keep draining stdout/stderr after the child has exited. An
+// orphaned grandchild that inherited the pipes can hold them open forever;
+// waiting on EOF unconditionally would hang the driver with it.
+export const PIPE_DRAIN_GRACE_MS = 2000;
 export const STDERR_TAIL_BYTES = 16 * 1024;
 export const OVERFLOW_LINE_CAP = 256;
 
@@ -212,6 +219,7 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     overflowLines: string[];
     overflowTruncated: number;
     killedForTimeout: boolean;
+    exited: boolean;
     deadlineTimer: ReturnType<typeof setTimeout> | null;
     graceTimer: ReturnType<typeof setTimeout> | null;
   } = {
@@ -221,6 +229,7 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     overflowLines: [],
     overflowTruncated: 0,
     killedForTimeout: false,
+    exited: false,
     deadlineTimer: null,
     graceTimer: null,
   };
@@ -236,13 +245,17 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     }
   }
 
-  // B-5: wall-clock deadline, SIGTERM then a grace period then SIGKILL.
+  // B-5: wall-clock deadline, SIGTERM then a grace period then SIGKILL. The
+  // escalation guards on our own exited flag, not proc.killed: killed only
+  // says a signal was sent (our SIGTERM sets it), which would skip the
+  // escalation exactly when the child ignored the SIGTERM.
+  const killGraceMs = opts.killGraceMs ?? KILL_GRACE_MS;
   state.deadlineTimer = setTimeout(() => {
     state.killedForTimeout = true;
     proc.kill("SIGTERM");
     state.graceTimer = setTimeout(() => {
-      if (!proc.killed) proc.kill("SIGKILL");
-    }, KILL_GRACE_MS);
+      if (!state.exited) proc.kill("SIGKILL");
+    }, killGraceMs);
   }, timeoutMs);
 
   function handleLine(line: string): void {
@@ -306,14 +319,40 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     }
   }
 
-  const [, stderrFull, exitCode] = await Promise.all([readStdout(), new Response(proc.stderr).text(), proc.exited]);
+  // stderr is captured incrementally (tail-bounded as it arrives) rather
+  // than via one read-to-EOF: a killed child can leave an orphaned
+  // grandchild holding the inherited pipe descriptors open long after the
+  // child itself died, so EOF is not a boundary this driver may wait on
+  // unconditionally.
+  let stderrText = "";
+  async function readStderr(): Promise<void> {
+    const reader = proc.stderr.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        stderrText = tailBytes(stderrText + decoder.decode(value, { stream: true }), STDERR_TAIL_BYTES);
+      }
+    } finally {
+      stderrText = tailBytes(stderrText + decoder.decode(), STDERR_TAIL_BYTES);
+    }
+  }
 
-  // The process has exited one way or another; no deadline kill is relevant
-  // any more.
+  const exitedPromise = proc.exited.then((code) => {
+    state.exited = true;
+    return code;
+  });
+  const streamsDone = Promise.all([readStdout(), readStderr()]);
+
+  // Process exit is the boundary that matters; pipe EOF is only a bounded
+  // courtesy afterwards (see the orphaned-grandchild note above).
+  const exitCode = await exitedPromise;
   clearTimers();
+  await Promise.race([streamsDone, Bun.sleep(PIPE_DRAIN_GRACE_MS)]);
 
   const durationMs = Date.now() - startedAtMs;
-  const stderrTail = tailBytes(stderrFull, STDERR_TAIL_BYTES);
+  const stderrTail = stderrText;
   const { resultEvent, sessionId, overflowLines, overflowTruncated } = state;
 
   const classification = classifyTermination({
