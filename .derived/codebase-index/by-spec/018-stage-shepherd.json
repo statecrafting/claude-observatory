@@ -1,27 +1,25 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '018-stage-shepherd' file unit 'src/orchestrator/stages/shepherd.ts' does not exist",
-        "path": "src/orchestrator/stages/shepherd.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '018-stage-shepherd' file unit 'src/orchestrator/stages/shepherd.test.ts' does not exist",
-        "path": "src/orchestrator/stages/shepherd.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "017-stage-ship"
     ],
-    "implementingPaths": [],
+    "implementingPaths": [
+      {
+        "path": "src/orchestrator/stages/shepherd.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/stages/shepherd.ts",
+        "source": "spec-edge"
+      }
+    ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/shepherd.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -30,7 +28,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/shepherd.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -43,5 +45,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "70bd8ba33f7e0a343a9410f58510b0258057365a3705680f6728fd87d8a79a4f"
+  "shardHash": "deeee7187e0d7035362130f903479b2c6c149ef976fcbd23e8aa67774fdf0b8c"
 }

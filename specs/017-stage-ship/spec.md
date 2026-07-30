@@ -130,3 +130,11 @@ keeps ship.ts's journal payloads self-describing without assuming the
 branch-naming convention holds forever, and matches every other stage's
 journal records (`specId` is always an explicit field, never inferred from
 the branch string).
+
+D-7. The shepherd stage (spec 018) extends this file's `GitHubClient`
+interface additively (`checkRunsForSha`, `jobLogTail`, `mergePr`,
+`branchContains`, `deleteRemoteBranch`), rather than declaring a second
+seam, since watching checks and merging is still "GitHub reads and one
+governed mutation behind a typed client" in the same shape FR-001 already
+describes; `ship.ts` and `createProcessGitHubClient` remain this spec's own
+territory, and none of its existing methods or behavior change.
