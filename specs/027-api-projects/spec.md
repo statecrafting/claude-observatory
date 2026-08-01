@@ -21,6 +21,11 @@ summary: >
   verbatim.
 extends:
   - { spec: "022-http-api-and-events", unit: "src/orchestrator/api/", nature: superseding }
+  # D-2: the repo's one gate makes a breaking API change and its in-repo
+  # clients a single atomic landing; these edges cover the mechanical
+  # adaptation only. The client feature surfaces stay with 028/029.
+  - { spec: "023-orchestrator-cli", unit: "src/commands/orchestrator.ts", nature: additive }
+  - { spec: "024-web-ui", unit: "web/", nature: additive }
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -102,3 +107,16 @@ compatibility aliases, and per-project event rings.
 D-1. Project names appear in paths raw: spec 025 D-1's slug grammar
 guarantees no character that needs URL escaping, so the router matches on
 plain string segments and nothing ambiguous can be addressed.
+
+D-2 (operator, 2026-08-01). Found by this spec's own ship: the repository
+has one gate (`bun run typecheck` spans the CLI and `web/tsconfig.json`,
+one test suite, one coupling check), so a breaking API cannot land alone;
+its in-repo clients must move in the same commit or nothing compiles.
+The build session held at the waiver checkpoint and the operator ruled:
+this spec's territory gains additive extends edges on spec 023's and 024's
+units covering the mechanical adaptation to the v2 shapes (route paths,
+type names, envelope fields) only. The client feature surfaces (the CLI
+projects group and --project grammar, the UI switcher and standby view)
+remain 028's and 029's territory, built by their own sessions on top of
+this landing. A waiver was deliberately not used: the coupling now states
+the truth instead of being excused from it.
