@@ -19,7 +19,7 @@
       }
     ],
     "id": "029-ui-projects",
-    "implementation": "pending",
+    "implementation": "in-progress",
     "kind": "surface",
     "references": [
       {
@@ -45,6 +45,6 @@
     "summary": "The SPA follows the API to v2: a project switcher over the registry, the five 024 views rendered per selected project, a standby view that makes \"backlog complete, daemon alive\" a first-class honest state, registry controls (register, arm, disarm, requalify) with the exact-record confirmation pattern, and a global banner for daemon state and account quota. Same-origin serving, no-optimistic-UI honesty, and the unreachable-daemon degradation from 024 carry over unchanged.\n",
     "title": "Web UI v2: project switcher and the standby view"
   },
-  "shardHash": "b42a93e9431ec540228940eea96eeba19e63efee1dcc15ca8dc85b80843543c9",
+  "shardHash": "38383bec312d02defef8c834da29cf6fa7ba0277a11591c0e902eb85eb2f6c2b",
   "specVersion": "1.1.0"
 }
