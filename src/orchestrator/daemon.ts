@@ -42,7 +42,7 @@ import type {
   Runner,
   RunBuildStageOptions,
 } from "./stages/build";
-import { createProcessRunner, runBuildStage } from "./stages/build";
+import { createProcessRunner, DEFAULT_BASE_BRANCH, runBuildStage } from "./stages/build";
 import type { GitHubClient, RunShipStageOptions, ShipResult } from "./stages/ship";
 import { createProcessGitHubClient, runShipStage } from "./stages/ship";
 import type { RunShepherdStageOptions, ShepherdResult } from "./stages/shepherd";
@@ -217,6 +217,11 @@ export interface DaemonDeps {
   readonly resumeJitterMinMs?: number;
   readonly resumeJitterMaxMs?: number;
   readonly defaultBranch?: string;
+  // Which branch the target checkout is on right now, or null when that is
+  // unknowable. Adoption (D-15) trusts a registry read only when this
+  // reports the default branch; absent means trusted, which is what keeps
+  // fixture deps that never touch a real checkout working unchanged.
+  readonly readCheckoutBranch?: () => string | null;
 }
 
 export const DEFAULT_STAGE_RETRY_BUDGET = 1;
@@ -234,11 +239,19 @@ export interface CreateProductionDaemonDepsParams {
 
 export function createProductionDaemonDeps(params: CreateProductionDaemonDepsParams): DaemonDeps {
   const { dataDir, repoDir, claudeBin, ghBin } = params;
+  const runner = createProcessRunner({ repoDir, claudeBin });
   return {
     dataDir,
     repoDir,
     dagReader: createProcessDagReader(),
-    runner: createProcessRunner({ repoDir, claudeBin }),
+    runner,
+    readCheckoutBranch: () => {
+      try {
+        return runner.currentBranch();
+      } catch {
+        return null;
+      }
+    },
     gh: createProcessGitHubClient({ repoDir, ghBin }),
     verifyRunner: createProcessVerifyRunner({ repoDir }),
     browserVerifier: createClaudeChromeBrowserVerifier({ repo: repoDir, claudeBin }),
@@ -521,11 +534,20 @@ export class Daemon {
 
     const alreadyAdopted = this.workJournal.fold().byKind["dag.adopted"];
     if (!alreadyAdopted || alreadyAdopted.length === 0) {
-      const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
-      const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
-      const adopted = adoptedShipped(snapshot, pinOf);
-      const entries = [...adopted.entries()].map(([id, e]) => ({ id, pin: e.pin, source: e.source }));
-      this.workJournal.append("dag.adopted", { entries: entries as unknown as JsonValue });
+      // D-15: adoption is a durable, monotone append, so it only trusts a
+      // registry read taken from the default branch. A deferred first
+      // adoption is picked up by the refresh loop as a late first adoption
+      // (D-11, oldPin null) once the checkout is back on the default branch.
+      const trust = this.adoptionTrust();
+      if (trust.trusted) {
+        const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
+        const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
+        const adopted = adoptedShipped(snapshot, pinOf);
+        const entries = [...adopted.entries()].map(([id, e]) => ({ id, pin: e.pin, source: e.source }));
+        this.workJournal.append("dag.adopted", { entries: entries as unknown as JsonValue });
+      } else {
+        this.workJournal.append("dag.adoption.deferred", { branch: trust.branch, phase: "recovery" });
+      }
     }
 
     for (const run of state.runs.values()) {
@@ -694,6 +716,16 @@ export class Daemon {
 
   // --- shipped-map + working snapshot (D-1/D-5) ----------------------------
 
+  // D-15: adoption trust. An absent seam means the deps cannot observe a
+  // checkout at all (fixtures), which is trusted; a seam that answers null
+  // (a real checkout whose branch could not be read) is not.
+  private adoptionTrust(): { trusted: boolean; branch: string | null } {
+    const read = this.deps.readCheckoutBranch;
+    if (!read) return { trusted: true, branch: null };
+    const branch = read();
+    return { trusted: branch === (this.deps.defaultBranch ?? DEFAULT_BASE_BRANCH), branch };
+  }
+
   private computeShippedMap(snapshot: RegistrySnapshot, pinOf: PinLookup): ShippedMap {
     const fold = this.workJournal.fold();
     const adoptedRecord = fold.byKind["dag.adopted"]?.[0];
@@ -716,12 +748,25 @@ export class Daemon {
       [...state.specExecs.values()].filter((se) => se.status === "shipped").map((se) => se.specId)
     );
 
+    // D-15: the refresh below appends durable adoption facts, so it only
+    // trusts a registry read taken from the default branch. On a spec-branch
+    // checkout an unmerged spec reads complete and would be adopted as
+    // shipped (found live: a daemon restart on a failed spec's branch
+    // adopted that spec and dead-ended the run on its dependent). Deferral
+    // is journaled once per pass when it withheld at least one candidate;
+    // readiness still uses the previously adopted set unchanged.
+    const trust = this.adoptionTrust();
+    const deferred: string[] = [];
     for (const [id, registryEntry] of snapshot) {
       const adoptable = registryEntry.implementation === "complete" || registryEntry.implementation === "n-a";
       if (!adoptable || pipelineShipped.has(id)) continue;
       const currentPin = pinOf(id);
       const existing = adopted.get(id);
       if (!existing || existing.pin !== currentPin) {
+        if (!trust.trusted) {
+          deferred.push(id);
+          continue;
+        }
         this.workJournal.append("dag.adopted.refreshed", {
           id,
           oldPin: existing?.pin ?? null,
@@ -729,6 +774,13 @@ export class Daemon {
         });
         adopted.set(id, { pin: currentPin, source: "adopted" });
       }
+    }
+    if (deferred.length > 0) {
+      this.workJournal.append("dag.adoption.deferred", {
+        branch: trust.branch,
+        phase: "scheduling",
+        candidates: deferred as unknown as JsonValue,
+      });
     }
 
     const merged: Map<string, ShippedEntry> = new Map(adopted);
