@@ -1,0 +1,66 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '025-project-registry' file unit 'src/orchestrator/projects.ts' does not exist",
+        "path": "src/orchestrator/projects.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '025-project-registry' file unit 'src/orchestrator/projects.test.ts' does not exist",
+        "path": "src/orchestrator/projects.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "011-work-journal",
+      "012-spec-dag-readiness"
+    ],
+    "implementingPaths": [
+      {
+        "path": "docs/design/00-ecosystem-analysis.md",
+        "source": "spec-edge"
+      }
+    ],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/projects.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/projects.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "docs/design/00-ecosystem-analysis.md"
+          }
+        ],
+        "ownership": false,
+        "sourceField": "references",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "specId": "025-project-registry",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "c0a65fe847b6ce35f74e1a9cbb4e6129a5833e9025f41a1657761f4075d819f3"
+}

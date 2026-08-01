@@ -1,12 +1,33 @@
 {
   "mapping": {
+    "dependsOn": [
+      "024-web-ui",
+      "027-api-projects"
+    ],
     "implementingPaths": [
       {
         "path": "docs/design/00-ecosystem-analysis.md",
         "source": "spec-edge"
+      },
+      {
+        "path": "web/",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
+      {
+        "locations": [
+          {
+            "file": "web/"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "web/"
+        }
+      },
       {
         "locations": [
           {
@@ -21,9 +42,9 @@
         }
       }
     ],
-    "specId": "010-orchestrator-thesis",
+    "specId": "029-ui-projects",
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "b0f59183d1c955532c314febb8f9505ebe95082c28a4e62acf3aa9108bfba3b9"
+  "shardHash": "2fe1b6811d81193a8cf6779968ce5c2887d0d04e23f621e7625c43b607e8abba"
 }
