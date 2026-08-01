@@ -32,6 +32,7 @@ import {
   DEFAULT_API_PORT,
   createApiServer,
   type ApiServer,
+  type ControlTarget,
   type JournalView,
 } from "../orchestrator/api/server";
 import {
@@ -40,6 +41,9 @@ import {
   createProductionDaemonDeps,
   type ProcessInspector,
 } from "../orchestrator/daemon";
+import { StandbyDaemon } from "../orchestrator/standby";
+import { createProcessDagReader } from "../orchestrator/dag";
+import { createProcessProjectProbe, projectStateRoot } from "../orchestrator/projects";
 import type {
   ApiErrorKind,
   ApiResponse,
@@ -841,23 +845,74 @@ export function journalViewFromDir(dir: string, basename?: string): JournalView 
   };
 }
 
+// Spec 026 leaves the project-scoped API to spec 027. Until then the control
+// routes spec 022 already serves address the run that holds the flight slot,
+// or the single paused run waiting on a human when the daemon is in standby.
+// An absent or ambiguous target throws, which `runControl` turns into a
+// `conflict` naming the candidates: a control applied to the wrong project
+// would be worse than one honestly refused.
+function standbyControls(standby: StandbyDaemon): ControlTarget {
+  const target = (): Daemon => {
+    const active = standby.activeDaemon;
+    if (active) return active;
+    const live = standby.liveDaemons;
+    if (live.length === 1) return live[0]![1];
+    if (live.length === 0) {
+      throw new Error("no run is in flight; the daemon is in standby (project-scoped controls arrive with spec 027)");
+    }
+    throw new Error(
+      `${live.length} runs are live (${live.map(([name]) => name).join(", ")}); project-scoped controls arrive with spec 027`
+    );
+  };
+  return {
+    pause: (source) => target().pause(source),
+    resume: (source) => target().resume(source),
+    skipSpec: (specId, source) => target().skipSpec(specId, source),
+    retryStage: (specId, source) => target().retryStage(specId, source),
+    reverify: (specId, source) => target().reverify(specId, source),
+    forceHumanGate: (specId, source) => target().forceHumanGate(specId, source),
+    approve: (specId, source) => target().approve(specId, source),
+  };
+}
+
 // Spec 021 B-2 fixes the boot order (lock, journals, recovery, then the loop
-// and the API), and `Daemon.start()` owns all of it up to the loop; this
-// function adds the last step, the HTTP surface spec 022 serves in the same
-// process, and the shutdown that stops it before the daemon releases its
-// lock. It is what `daemon start` spawns, and it is runnable directly for an
+// and the API); spec 026 puts a scheduler above that per-run loop, so what
+// this function composes is the standby daemon (identity lock, project
+// registry, the one flight slot) rather than a single run. The process now
+// outlives a terminal run: `join()` resolves only when an operator stops the
+// daemon (026 B-1), and the HTTP surface spec 022 serves stays up throughout.
+// It is what `daemon start` spawns, and it is runnable directly for an
 // operator who wants the daemon in the foreground.
 async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<number> {
   const bind = parseBind(url);
   if (bind === null) return usage(deps, `--url ${url} is not a usable base url`);
 
-  const daemonDeps = createProductionDaemonDeps({ dataDir: deps.dataDir, repoDir: deps.repoDir });
-  const daemon = new Daemon(daemonDeps);
+  const standby = new StandbyDaemon({
+    daemonHomeDir: deps.dataDir,
+    // 010 D13: each project's state root lives inside that project, in
+    // exactly this checkout's own layout; 026 B-6: the scheduler holds the
+    // one identity lock, so a project's run takes none.
+    makeProjectDeps: (project) =>
+      createProductionDaemonDeps({
+        dataDir: projectStateRoot(project.repoDir),
+        repoDir: project.repoDir,
+        supervised: true,
+      }),
+    processInspector: deps.inspector,
+    clock: { now: deps.now },
+    sleep: deps.sleep,
+    log: (line) => deps.out(line),
+    // 026 D-3: a registry that has never held a record adopts the checkout
+    // this daemon was pointed at, so `--repo` keeps meaning what it meant
+    // before there was a registry to point at instead.
+    bootstrap: { repoDir: deps.repoDir, probe: createProcessProjectProbe() },
+  });
+
   try {
     // The identity lock is spec 021 B-1's, so a second daemon is refused
     // there, by the strongest check available (pid plus process start time).
     // Here it is simply an honest message rather than a stack trace.
-    await daemon.start();
+    await standby.start();
   } catch (err) {
     deps.err(`orchestrator daemon: ${(err as Error).message}`);
     return EXIT_FAILURE;
@@ -868,10 +923,10 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
     server = createApiServer({
       journal: journalViewFromDir(deps.dataDir),
       decisions: journalViewFromDir(deps.dataDir, "decisions"),
-      dagReader: daemonDeps.dagReader,
+      dagReader: createProcessDagReader(),
       repoDir: deps.repoDir,
       evidenceDir: join(deps.dataDir, "verify-evidence"),
-      controls: daemon,
+      controls: standbyControls(standby),
       host: bind.host,
       port: bind.port,
     });
@@ -879,12 +934,13 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
     // The daemon is up and holding the lock; if the API cannot bind there is
     // no interface to control it through, so it comes back down cleanly
     // rather than running headless.
-    await daemon.shutdown();
+    await standby.shutdown();
     deps.err(`orchestrator daemon: api refused to bind: ${(err as Error).message}`);
     return EXIT_FAILURE;
   }
 
-  deps.out(`orchestrator daemon running (pid ${process.pid}, run ${daemon.runId} ${daemon.runStatus})`);
+  const registered = standby.projects.size;
+  deps.out(`orchestrator daemon running (pid ${process.pid}, ${registered} project${registered === 1 ? "" : "s"} registered)`);
   deps.out(`api:  ${server.url}`);
 
   let signalled = false;
@@ -893,7 +949,7 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
     signalled = true;
     void (async () => {
       await server.stop();
-      await daemon.shutdown();
+      await standby.shutdown();
       process.exit(EXIT_OK);
     })();
   };
@@ -901,18 +957,18 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
   process.on("SIGINT", onSignal);
 
   try {
-    await daemon.join();
-    deps.out(`orchestrator daemon: run ${daemon.runId} ended ${daemon.runStatus}`);
+    await standby.join();
+    deps.out("orchestrator daemon: standby stopped");
     return EXIT_OK;
   } catch (err) {
-    deps.err(`orchestrator daemon: the run loop died: ${(err as Error).message}`);
+    deps.err(`orchestrator daemon: the scheduler died: ${(err as Error).message}`);
     return EXIT_FAILURE;
   } finally {
     await server.stop();
-    await daemon.shutdown();
-    // A registered signal listener keeps the event loop alive, so a run that
-    // ends on its own would otherwise leave the process hanging with nothing
-    // left to do.
+    await standby.shutdown();
+    // A registered signal listener keeps the event loop alive, so a daemon
+    // that stops on its own would otherwise leave the process hanging with
+    // nothing left to do.
     process.off("SIGTERM", onSignal);
     process.off("SIGINT", onSignal);
   }

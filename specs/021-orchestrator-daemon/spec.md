@@ -90,6 +90,23 @@ composition, which is exactly why it is specified rather than improvised.
 Parallel spec execution, multi-repo runs, and daemonization ergonomics
 (launchd plist etc. follow spec 007's print-only stance later).
 
+A-1 (2026-08-01, recorded by spec 026's build session under the authority
+its §2 grants). The "multi-repo runs" clause above is superseded. Spec 026
+puts a scheduler over spec 025's project registry above this spec's
+per-run loop, so one daemon drives whichever registered project next has
+work, serially, one at a time. Parallel spec execution stays out of scope,
+and the serial invariant is only restated (010 D15): one live stage
+session globally. Two things inside this territory change with it, both
+declared superseding in 026's `extends`. The loop reports why it stopped
+(completed, failed, paused, or shutdown) instead of ending the process,
+which is what lets a supervisor outlive a terminal run. And a `supervised`
+instance is one project's run inside that standby daemon: it acquires no
+identity lock of its own (B-1's lock is one per daemon home, held by the
+supervisor) and yields the flight slot when its run pauses on a human
+decision, rather than waiting that pause out. A quota park is deliberately
+not a yield: the account's quota is one pool, so that wait stays where
+nothing else can start.
+
 ## 7. Resolved decisions
 
 D-1. Process start time (the second half of B-1's identity check) is read

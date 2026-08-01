@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '026-standby-daemon' file unit 'src/orchestrator/standby.ts' does not exist",
-        "path": "src/orchestrator/standby.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '026-standby-daemon' file unit 'src/orchestrator/standby.test.ts' does not exist",
-        "path": "src/orchestrator/standby.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "021-orchestrator-daemon",
@@ -31,11 +16,23 @@
       {
         "path": "src/orchestrator/daemon.ts",
         "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/standby.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/standby.ts",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/standby.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -44,7 +41,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/standby.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -96,5 +97,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "adbc5b7c067dddfcab98f74f559de5383e8a5ae4193880388890be9300d0355e"
+  "shardHash": "d77900752e3db1e3190da612b7a80c8305a83d164358bd399b489c7a518d25f5"
 }
