@@ -238,6 +238,7 @@ interface MakeDepsParams {
   readonly heartbeatIntervalMs?: number;
   readonly stageRetryBudget?: number;
   readonly runSessionCallCounter?: { calls: number };
+  readonly readCheckoutBranch?: () => string | null;
 }
 
 // Real clock and real (small-chunk) sleep by default: most tests exercise
@@ -268,6 +269,7 @@ function makeDeps(p: MakeDepsParams): DaemonDeps {
     resumeJitterMaxMs: p.resumeJitterMaxMs ?? 2,
     heartbeatIntervalMs: p.heartbeatIntervalMs ?? 60_000,
     stageRetryBudget: p.stageRetryBudget,
+    readCheckoutBranch: p.readCheckoutBranch,
   };
 }
 
@@ -1119,6 +1121,85 @@ test("recovery after a failed run creates a fresh run and continues the backlog"
       (r) => r.payload as { id: string; oldPin: string | null }
     );
     expect(late.some((p) => p.id === "777-missing" && p.oldPin === null)).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+// --- regression: adoption trusts only a default-branch registry read
+// (found live: a daemon restart on a failed spec's branch read that spec's
+// own frontmatter as complete, adopted the unmerged spec as shipped, and
+// dead-ended the run scheduling its dependent) --------------------------------
+
+test("adoption is deferred on a non-default-branch checkout and completes later from the default branch", async () => {
+  const dataDir = freshDir("adoption-guard-data");
+  const repoDir = freshDir("adoption-guard-repo");
+
+  // The incident shape: the checkout sits on a spec branch where an
+  // unmerged spec reads complete, and a pending spec depends on it.
+  const dagReader = fixtureDagReader({
+    "777-unmerged": { implementation: "complete" },
+    "900-fixture": { dependsOn: ["777-unmerged"] },
+  });
+
+  const daemon1 = new Daemon(
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns: neverCalledStageFns(),
+      readCheckoutBranch: () => "777-unmerged",
+    })
+  );
+  await daemon1.start();
+  await daemon1.join();
+  // 777 must not be adopted from the branch read, so 900 is blocked and the
+  // run fails honestly instead of building on an unmerged dependency.
+  expect(daemon1.runStatus).toBe("failed");
+  await daemon1.shutdown();
+
+  const journalAfterBranch = openJournal(dataDir);
+  try {
+    const fold = journalAfterBranch.fold();
+    expect(fold.byKind["dag.adopted"] ?? []).toHaveLength(0);
+    expect(fold.byKind["dag.adopted.refreshed"] ?? []).toHaveLength(0);
+    const deferred = (fold.byKind["dag.adoption.deferred"] ?? []).map(
+      (r) => r.payload as { branch: string | null; phase: string; candidates?: string[] }
+    );
+    expect(deferred.length).toBeGreaterThan(0);
+    expect(deferred.some((p) => p.branch === "777-unmerged")).toBe(true);
+    expect(deferred.some((p) => (p.candidates ?? []).includes("777-unmerged"))).toBe(true);
+  } finally {
+    journalAfterBranch.close();
+  }
+
+  // Back on the default branch, the same registry read is trusted: 777 is
+  // late-adopted (D-11, oldPin null) and the backlog completes.
+  const stageFns: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+  const daemon2 = new Daemon(
+    makeDeps({ dataDir, repoDir, dagReader, stageFns, readCheckoutBranch: () => "main" })
+  );
+  await daemon2.start();
+  await daemon2.join();
+  expect(daemon2.runStatus).toBe("completed");
+  await daemon2.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    // The deferred first adoption lands through recovery's own initial
+    // dag.adopted record once the read is trusted (no prior record exists),
+    // not through a refresh: assert 777 was adopted there.
+    const fold = journal.fold();
+    const initial = (fold.byKind["dag.adopted"] ?? []).flatMap(
+      (r) => (r.payload as { entries: Array<{ id: string }> }).entries
+    );
+    expect(fold.byKind["dag.adopted"]).toHaveLength(1);
+    expect(initial.some((e) => e.id === "777-unmerged")).toBe(true);
   } finally {
     journal.close();
   }

@@ -220,3 +220,20 @@ honest pause. The loop must outlive any single stage's bug.
 D-14. The daemon's test fixtures implement the Runner seam owned by spec
 016, so interface ripples there (such as pullFfOnly, 016 D-7) touch the
 fixture fakes here without changing any daemon behavior.
+
+D-15. Found by the first live run of the 025 wave: a daemon restarted
+while the checkout sat on a failed spec's own branch, where that spec's
+frontmatter reads complete, and D-11's continuous adoption adopted the
+unmerged spec as shipped from that branch read. Adoption is monotone, so
+the poisoned entry then outranked the D-10 resumable path (shipped wins
+over resumable in the working snapshot) and the scheduler dead-ended
+driving the spec's dependent, which build preflight honestly refused.
+Resolution: the durable adoption appends (recovery's first `dag.adopted`
+and every `dag.adopted.refreshed`) trust a registry read only when the
+checkout is on the default branch, observed through an injectable
+`readCheckoutBranch` seam (absent means trusted, for fixtures; a null
+answer from a real checkout is not trusted). Withheld candidates journal
+one `dag.adoption.deferred` per pass; readiness keeps using the
+previously adopted set, and a deferred first adoption arrives later as
+D-11's own late first adoption once the checkout is back on the default
+branch.
