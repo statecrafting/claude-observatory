@@ -1,0 +1,50 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-01",
+    "dependsOn": [
+      "024-web-ui",
+      "027-api-projects"
+    ],
+    "extends": [
+      {
+        "nature": "superseding",
+        "spec": "024-web-ui",
+        "unit": {
+          "kind": "file",
+          "path": "web/"
+        }
+      }
+    ],
+    "id": "029-ui-projects",
+    "implementation": "pending",
+    "kind": "surface",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "medium",
+    "sectionHeadings": [
+      "029: Web UI v2, project-scoped",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/029-ui-projects/spec.md",
+    "status": "approved",
+    "summary": "The SPA follows the API to v2: a project switcher over the registry, the five 024 views rendered per selected project, a standby view that makes \"backlog complete, daemon alive\" a first-class honest state, registry controls (register, arm, disarm, requalify) with the exact-record confirmation pattern, and a global banner for daemon state and account quota. Same-origin serving, no-optimistic-UI honesty, and the unreachable-daemon degradation from 024 carry over unchanged.\n",
+    "title": "Web UI v2: project switcher and the standby view"
+  },
+  "shardHash": "b42a93e9431ec540228940eea96eeba19e63efee1dcc15ca8dc85b80843543c9",
+  "specVersion": "1.1.0"
+}

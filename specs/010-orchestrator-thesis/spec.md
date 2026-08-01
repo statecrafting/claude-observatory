@@ -36,6 +36,18 @@ constrains:
       kernel once 011 exists. From 016 onward the orchestrator increasingly
       builds its own backlog; the first honest milestone is three specs
       driven unattended with a trustworthy ledger.
+  - kind: sequencing-plan
+    target_specs:
+      - "025-project-registry"
+      - "026-standby-daemon"
+      - "027-api-projects"
+      - "028-cli-projects"
+      - "029-ui-projects"
+    note: >
+      The generalization wave (amendment A-1): project registry, then the
+      standby multi-project daemon, then the three surfaces. 028 and 029
+      may land in either order once 027 is shipped. The daemon builds this
+      wave the same way it built 022-024.
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -102,3 +114,32 @@ cycle detection are ours), D4 (journal before ledger), D5 (shipped), D6
 (session driving), D7 (quota parking), D8 (single API), D9 (ship reuses
 /ship; hook exit-2 blocks are stage outcomes), D10 (verify via Claude in
 Chrome), D11 (naming stays claude-observatory), D12 (retroactive adoption).
+
+## 6. Amendments received
+
+A-1 (2026-08-01, authored with the operator). The first live run past the
+024 milestone exposed the gap: with an empty backlog the daemon exits, and
+with it the API and the UI, so "backlog complete" was indistinguishable
+from "not running". The mission generalizes: claude-observatory is a
+general spec-spine builder, able to drive any governed target repository,
+itself included, from one long-lived daemon. Self-hosting becomes the
+special case where the target is this checkout. Three decisions extend the
+carried set:
+
+- **D13 (projects and state placement).** Targets are registered projects
+  (spec 025). Per-project orchestrator state (work journal, decision
+  ledger, evidence) lives inside each target at `data/orchestrator/`,
+  exactly the self-hosted layout today, so the evidence travels with the
+  repo it describes and `journal verify` stays a local, offline check.
+  The daemon home (lock, log, project registry) stays in this checkout's
+  `data/orchestrator/`.
+- **D14 (standby and the arm toggle).** A terminal run drops the daemon to
+  standby, still serving the API and UI (spec 026). Each project carries
+  an armed flag: armed projects with ready work wake a run automatically;
+  disarmed projects are observed, never driven. Registration defaults to
+  armed; pointing the orchestrator at a project is the consent.
+- **D15 (project-scoped API).** The API becomes apiVersion 2 with
+  project-scoped routes under `/api/projects/<name>/` (spec 027).
+  Genuinely global facts (daemon meta, account quota, the event stream)
+  stay global; forcing them under a project would misstate their scope.
+  B-5's serial invariant is restated as one live stage session globally.

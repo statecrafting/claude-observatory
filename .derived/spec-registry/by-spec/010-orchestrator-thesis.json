@@ -23,6 +23,17 @@
           "023-orchestrator-cli",
           "024-web-ui"
         ]
+      },
+      {
+        "kind": "sequencing-plan",
+        "note": "The generalization wave (amendment A-1): project registry, then the standby multi-project daemon, then the three surfaces. 028 and 029 may land in either order once 027 is shipped. The daemon builds this wave the same way it built 022-024.\n",
+        "target_specs": [
+          "025-project-registry",
+          "026-standby-daemon",
+          "027-api-projects",
+          "028-cli-projects",
+          "029-ui-projects"
+        ]
       }
     ],
     "created": "2026-07-29",
@@ -45,13 +56,14 @@
       "2. Core model",
       "3. Behavior (the non-negotiables)",
       "4. Out of scope",
-      "5. Resolved decisions"
+      "5. Resolved decisions",
+      "6. Amendments received"
     ],
     "specPath": "specs/010-orchestrator-thesis/spec.md",
     "status": "approved",
     "summary": "claude-observatory grows into an autonomous build orchestrator: given a spec-spine DAG, it drives one spec per fresh Claude Code session through build, ship, shepherd, and verify, survives quota exhaustion, records every choice in an append-only ledger, and exposes one typed HTTP API that the CLI and a localhost web UI both consume. This spec fixes the core model, the layering, and the sequencing plan; it owns no code.\n",
     "title": "Orchestrator thesis: governed autonomous builds, one spec per session"
   },
-  "shardHash": "3ac6ed685ed156a2fe84b1340546eaed185a40d0f0af4a18058df9d4be591ba9",
+  "shardHash": "a3dbffecb884e5fa41ec3f7d18363b0c0337d5ae9ee253ed74310bc8becc17a6",
   "specVersion": "1.1.0"
 }

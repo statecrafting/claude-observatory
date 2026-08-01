@@ -1,0 +1,69 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-01",
+    "dependsOn": [
+      "021-orchestrator-daemon",
+      "025-project-registry"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/standby.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/standby.test.ts"
+      }
+    ],
+    "extends": [
+      {
+        "nature": "superseding",
+        "spec": "021-orchestrator-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "023-orchestrator-cli",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      }
+    ],
+    "id": "026-standby-daemon",
+    "implementation": "pending",
+    "kind": "kernel",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "critical",
+    "sectionHeadings": [
+      "026: Standby daemon",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/026-standby-daemon/spec.md",
+    "status": "approved",
+    "summary": "The daemon stops dying of success: a terminal run drops it to standby, still serving the API, instead of exiting the process. Above the per-run loop sits a scheduler over the project registry (025): armed, qualified projects with ready work get a fresh run, serviced serially in registration order, with at most one live stage session globally. A bounded standby scan refreshes the registry and each armed project's spec DAG, so new pending specs wake a run automatically per 010 D14. Quota parking is global: the account's quota is one pool, so no project starts a session while parked. Runs, journals, and recovery semantics from 013, 011, and 021 are unchanged; the daemon simply outlives them.\n",
+    "title": "Standby daemon and the multi-project scheduler"
+  },
+  "shardHash": "f26434b228149619b65d57bb90262d3a60c23d70fd01f7f04f6e2be4042e860c",
+  "specVersion": "1.1.0"
+}

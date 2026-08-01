@@ -1,0 +1,50 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-01",
+    "dependsOn": [
+      "023-orchestrator-cli",
+      "027-api-projects"
+    ],
+    "extends": [
+      {
+        "nature": "superseding",
+        "spec": "023-orchestrator-cli",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      }
+    ],
+    "id": "028-cli-projects",
+    "implementation": "pending",
+    "kind": "surface",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "low",
+    "sectionHeadings": [
+      "028: CLI v2, project-scoped",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope"
+    ],
+    "specPath": "specs/028-cli-projects/spec.md",
+    "status": "approved",
+    "summary": "The orchestrator command group follows the API to v2: a projects subgroup (list, add, arm, disarm, requalify, remove), a --project flag scoping the existing verbs to a named project, a composite status that renders the daemon state plus one row per project, and an offline journal verify that resolves a project's state root through the daemon home's registry chain. Client-not-engine, exit codes, and the X-Control-Source discipline from 023 carry over unchanged.\n",
+    "title": "CLI v2: the projects group and project-scoped verbs"
+  },
+  "shardHash": "d30c127c4c458ec94de815eec5572404ef52b15c639fa16d820703b8d194ae50",
+  "specVersion": "1.1.0"
+}
