@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-01"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: in-progress
 risk: medium
 depends_on:
   - "011-work-journal"
