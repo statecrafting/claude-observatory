@@ -93,6 +93,20 @@ than delegated to `installShutdownSignalHandler`: SIGTERM stops the HTTP
 server first, then calls the daemon's own `shutdown()`, so no client can
 reach a daemon that has already released its journals.
 
+A-1 (2026-08-01, recorded by spec 026's build session under the authority
+its §2 grants). What `daemon run` composes changed, additively: the
+foreground process boots spec 026's standby daemon (identity lock, project
+registry, the one flight slot) rather than a single `Daemon`, so it
+outlives a terminal run and keeps serving instead of exiting with the API
+and the UI. `--repo` keeps its meaning: a registry chain that has never
+held a record registers that checkout as its first project. The shutdown
+shape above is unchanged, one level up: SIGTERM stops the HTTP server
+first, then the standby daemon, which inherits 021 B-6 and D-2 for
+whichever run holds the slot. Until spec 027's project-scoped routes land,
+the control routes address the run holding the slot, or the single paused
+run when the daemon is in standby, and refuse with the candidates named
+rather than guessing.
+
 D-3. That hosted API reads both chains from their files
 (`journalViewFromDir`), not from the daemon's handle. Spec 022's
 `journalViewFromHandle` hands the API a view over the live handle, but that

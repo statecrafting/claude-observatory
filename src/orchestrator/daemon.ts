@@ -16,6 +16,16 @@
 // runVerifyStage, overridable wholesale in tests). Production wiring lives in
 // createProductionDaemonDeps(); tests drive the Daemon class against fixture
 // deps, never a real `claude`, `gh`, or `spec-spine` subprocess.
+//
+// Spec 026 supersedes two things here and nothing else. First, the run loop
+// no longer owns the process's fate: it reports why it stopped (a LoopYield)
+// so a supervisor can outlive a terminal run. Second, a `supervised` instance
+// is one project's run inside spec 026's standby daemon: it takes no identity
+// lock of its own (the supervisor holds the one lock for the daemon home,
+// 026 B-6) and yields the flight slot when its run pauses on a human
+// decision, instead of waiting that pause out. A quota park is deliberately
+// not a yield: the account's quota is one pool, so that wait belongs where
+// nothing else can start (026 B-5).
 import * as fs from "fs";
 import { join } from "path";
 import type { JournalHandle, JsonValue } from "./journal";
@@ -222,7 +232,19 @@ export interface DaemonDeps {
   // reports the default branch; absent means trusted, which is what keeps
   // fixture deps that never touch a real checkout working unchanged.
   readonly readCheckoutBranch?: () => string | null;
+  // 026 B-6: this instance is one project's run inside a standby daemon that
+  // already holds the daemon home's identity lock, so it acquires none of its
+  // own; spec 011's per-chain writer locks in this project's own state root
+  // still keep two writers apart. A supervised daemon is driven one drive()
+  // at a time by that supervisor rather than looping on its own from start().
+  readonly supervised?: boolean;
 }
+
+// Why the run loop stopped (026 B-1). "completed" and "failed" are the run's
+// own terminal statuses, which drop the supervisor to standby rather than
+// ending the process; "paused" is a supervised yield of the flight slot to
+// a human decision; "shutdown" is B-6's honest unwind.
+export type LoopYield = "completed" | "failed" | "paused" | "shutdown";
 
 export const DEFAULT_STAGE_RETRY_BUDGET = 1;
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -235,6 +257,8 @@ export interface CreateProductionDaemonDepsParams {
   readonly repoDir: string;
   readonly claudeBin?: string;
   readonly ghBin?: string;
+  // Set by spec 026's scheduler for a project's run; see DaemonDeps.supervised.
+  readonly supervised?: boolean;
 }
 
 export function createProductionDaemonDeps(params: CreateProductionDaemonDepsParams): DaemonDeps {
@@ -243,6 +267,7 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
   return {
     dataDir,
     repoDir,
+    supervised: params.supervised,
     dagReader: createProcessDagReader(),
     runner,
     readCheckoutBranch: () => {
@@ -419,9 +444,9 @@ export class Daemon {
   private decisionsChain!: JournalHandle;
   private run!: FoldedRun;
 
-  private rawLoopPromise: Promise<void> | null = null;
   private loopPromise: Promise<void> | null = null;
   private loopError: unknown = null;
+  private driving = false;
 
   private lastHeartbeatMs: number | null = null;
 
@@ -453,14 +478,21 @@ export class Daemon {
     if (this.started) throw new Error("daemon: start() called twice");
     this.started = true;
 
-    const lock = acquireDaemonLock(this.deps.dataDir, this.deps.processInspector, this.deps.pid ?? process.pid);
-    this.lockPath = lock.lockPath;
+    // 026 B-6: one identity lock per daemon home. A supervised instance runs
+    // inside a standby daemon that already holds it, so it takes none of its
+    // own and leaves both the lock and any stale-lock reclaim to that
+    // supervisor, which is the only party that can know which project state
+    // roots the dead daemon could have been writing.
+    const lock = this.deps.supervised
+      ? null
+      : acquireDaemonLock(this.deps.dataDir, this.deps.processInspector, this.deps.pid ?? process.pid);
+    this.lockPath = lock?.lockPath ?? null;
 
     // Reclaim proved the previous writer dead by a stronger test (pid plus
     // process start time) than journal.ts's own file-existence lock; its
     // per-chain lock files are cleared here so opening does not trip that
     // weaker check unnecessarily.
-    if (lock.reclaimedFrom) {
+    if (lock?.reclaimedFrom) {
       for (const name of ["journal.lock", "decisions.lock"]) {
         try {
           fs.unlinkSync(join(this.deps.dataDir, name));
@@ -473,7 +505,7 @@ export class Daemon {
     this.workJournal = openJournal(this.deps.dataDir);
     this.decisionsChain = openDecisionsChain(this.deps.dataDir);
 
-    if (lock.reclaimedFrom) {
+    if (lock?.reclaimedFrom) {
       const payload: Record<string, JsonValue> = {
         stalePid: lock.reclaimedFrom.pid,
         staleProcStartMs: lock.reclaimedFrom.procStartMs,
@@ -482,14 +514,51 @@ export class Daemon {
       };
       this.workJournal.append("daemon.lock.reclaimed", payload);
     }
-    this.workJournal.append("daemon.lock.acquired", { pid: lock.self.pid, procStartMs: lock.self.procStartMs });
+    if (lock) {
+      this.workJournal.append("daemon.lock.acquired", { pid: lock.self.pid, procStartMs: lock.self.procStartMs });
+    }
 
     this.recover();
 
-    this.rawLoopPromise = this.runLoop();
-    this.loopPromise = this.rawLoopPromise.catch((err) => {
-      this.loopError = err;
-    });
+    // 026 B-2: a supervised run is driven one drive() at a time by the
+    // scheduler, which is what keeps exactly one stage session live across
+    // every project; only an unsupervised daemon loops on its own from here.
+    if (this.deps.supervised) return;
+
+    this.loopPromise = this.runLoop().then(
+      () => undefined,
+      (err) => {
+        this.loopError = err;
+      }
+    );
+  }
+
+  // 026 B-2/B-3: the supervised entry point. Runs the loop until it gives the
+  // flight slot back, and says why: a terminal run, a pause only a human can
+  // lift, or shutdown. Re-entrant across calls, one at a time: a paused run
+  // resumes by being driven again once a control that can lift the pause is
+  // queued (hasQueuedResume).
+  async drive(): Promise<LoopYield> {
+    if (!this.started) throw new Error("daemon: drive() called before start()");
+    if (!this.deps.supervised) {
+      throw new Error("daemon: drive() is for supervised deps; an unsupervised daemon loops from start()");
+    }
+    if (this.driving) throw new Error("daemon: drive() is already in flight");
+    this.driving = true;
+    try {
+      return await this.runLoop();
+    } finally {
+      this.driving = false;
+    }
+  }
+
+  // The supervisor's cheap "would driving this paused run do anything" check
+  // (026 B-3). A yielded run sits with its journals open and its loop stopped,
+  // so only a queued control that can lift the pause is worth re-entering for.
+  get hasQueuedResume(): boolean {
+    return this.pendingControls.some(
+      (cmd) => cmd.verb === "resume" || cmd.verb === "retryStage" || cmd.verb === "approve"
+    );
   }
 
   // Resolves once the loop actually exits (run completed/failed, or shutdown
@@ -501,9 +570,18 @@ export class Daemon {
     if (this.loopError) throw this.loopError;
   }
 
+  // B-6 without the wait: the flag alone, so a supervisor can set it on the
+  // daemon it is currently driving and then await that drive() itself (026
+  // B-7). Every wait point in the loop checks it on its next chunk.
+  requestShutdown(): void {
+    this.shutdownRequested = true;
+  }
+
   // B-6: interrupts the sleep, lets the current journal write finish (mid-
   // stage shutdown waits for the stage in v1, Resolved decisions D-4),
-  // releases the lock, resolves.
+  // releases the lock, resolves. A supervised daemon has no loop of its own
+  // to await here; its supervisor awaits the in-flight drive() before calling
+  // this, so closing is all that is left.
   async shutdown(): Promise<void> {
     this.shutdownRequested = true;
     if (this.loopPromise) await this.loopPromise;
@@ -675,12 +753,25 @@ export class Daemon {
           if (cmd.specId) this.reverifyQueue.push(cmd.specId);
           break;
         case "forceHumanGate":
-          if (cmd.specId) this.forcedGateSpecIds.add(cmd.specId);
+          if (cmd.specId) {
+            // A fresh gate is a fresh question: any approval standing from an
+            // earlier gate on this spec is cleared, or the new gate would be
+            // satisfied before the operator ever saw it.
+            this.approvedGateSpecIds.delete(cmd.specId);
+            this.forcedGateSpecIds.add(cmd.specId);
+          }
           break;
         case "approve":
           if (cmd.specId) {
             this.forcedGateSpecIds.delete(cmd.specId);
             this.approvedGateSpecIds.add(cmd.specId);
+            // 026 B-3: an approval is also a resume. The unsupervised gate
+            // wait below lifts the pause itself once this flag flips, but a
+            // supervised run has already yielded the flight slot, so the
+            // approval is the only thing left that can lift it.
+            if (this.run.status === "paused") {
+              this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+            }
           }
           break;
       }
@@ -820,15 +911,28 @@ export class Daemon {
 
   // --- the loop (B-3) -----------------------------------------------------
 
-  private async runLoop(): Promise<void> {
+  private async runLoop(): Promise<LoopYield> {
+    let yielded: LoopYield | null = null;
+
     while (!this.shutdownRequested) {
       this.applyPendingControls();
 
       if (this.run.status === "paused") {
+        // 026 B-3: a supervised run paused on a human decision gives the one
+        // flight slot back, so another project may proceed while this one
+        // waits; the run itself stays paused and live, resumed by a later
+        // drive() once a control has queued.
+        if (this.deps.supervised) {
+          yielded = "paused";
+          break;
+        }
         await this.chunkedSleepUntil(() => (this.run.status as RunStatus) !== "paused");
         continue;
       }
 
+      // 026 B-5: quota is one account-wide pool, so a park is not a yield.
+      // Holding the slot through the wait is exactly what stops another
+      // project from starting a session before the horizon resumes this one.
       if (this.run.status === "parked") {
         await this.resumeFromParkedOnRestart();
         continue;
@@ -877,7 +981,10 @@ export class Daemon {
 
     if (this.shutdownRequested) {
       this.workJournal.append("daemon.shutdown", { runId: this.run.id, runStatus: this.run.status });
+      return "shutdown";
     }
+    if (yielded !== null) return yielded;
+    return this.run.status === "failed" ? "failed" : "completed";
   }
 
   private async resumeFromParkedOnRestart(): Promise<void> {
@@ -989,11 +1096,20 @@ export class Daemon {
       if (this.forcedGateSpecIds.has(specExec.specId) && !this.approvedGateSpecIds.has(specExec.specId)) {
         this.workJournal.append("daemon.gate.waiting", { specId: specExec.specId, stage });
         this.pauseRun(`${specExec.specId}: awaiting human approval before ${stage}`);
+        // 026 B-3: waiting on an approval is waiting on a human, so a
+        // supervised run hands the slot back rather than holding it. The walk
+        // resumes from this same spec's live status on the next drive().
+        if (this.deps.supervised) return { kind: "paused" };
         await this.chunkedSleepUntil(() => this.approvedGateSpecIds.has(specExec.specId));
         if (this.shutdownRequested) return { kind: "shutdown" };
         this.approvedGateSpecIds.delete(specExec.specId);
         this.forcedGateSpecIds.delete(specExec.specId);
-        this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+        // The approval may already have lifted the pause (applyPendingControls
+        // above), so this only closes the gap when the wait ended some other
+        // way; transitioning a running run to running is not a legal edge.
+        if (this.run.status !== "running") {
+          this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+        }
       }
 
       let stageExec = { ...createStageExec(this.workJournal, specExec.id, stage, attempt), needsReconcile: false };

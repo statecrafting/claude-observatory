@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-01"
 authors: ["Bartek Kus"]
 kind: kernel
-implementation: pending
+implementation: complete
 risk: critical
 depends_on:
   - "021-orchestrator-daemon"
