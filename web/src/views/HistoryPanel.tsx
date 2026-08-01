@@ -8,14 +8,14 @@
 // fabricated link is exactly the kind of confident-looking detail B-7 rules
 // out.
 import type { ReactNode } from "react";
-import type { ApiClient, ApiError, HistoryEntry, HistoryView } from "../api";
+import type { ApiError, HistoryEntry, HistoryView, ProjectClient } from "../api";
 import { shortHash } from "../format";
 import { Badge, Empty, ErrorNote, Panel, Unknown } from "../components/bits";
 
 export interface HistoryPanelProps {
   readonly history: HistoryView | null;
   readonly error: ApiError | null;
-  readonly client: ApiClient;
+  readonly client: ProjectClient | null;
   readonly stale?: boolean;
 }
 
@@ -116,18 +116,27 @@ export function HistoryPanel({ history, error, client, stale = false }: HistoryP
                   {entry.evidenceRefs.length === 0 ? (
                     <span className="muted">no evidence file was written</span>
                   ) : (
-                    entry.evidenceRefs.map((hash) => (
-                      <a
-                        key={hash}
-                        className="evidence-link"
-                        href={client.evidenceUrl(hash)}
-                        title={hash}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {shortHash(hash)}
-                      </a>
-                    ))
+                    entry.evidenceRefs.map((hash) =>
+                      // Evidence is served inside the project that wrote it
+                      // (027 B-3), so with no project selected the hash is
+                      // shown as the fact it is rather than linked nowhere.
+                      client === null ? (
+                        <code key={hash} className="evidence-link" title={hash}>
+                          {shortHash(hash)}
+                        </code>
+                      ) : (
+                        <a
+                          key={hash}
+                          className="evidence-link"
+                          href={client.evidenceUrl(hash)}
+                          title={hash}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {shortHash(hash)}
+                        </a>
+                      )
+                    )
                   )}
                 </dd>
               </dl>

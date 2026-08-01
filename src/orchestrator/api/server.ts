@@ -1,19 +1,25 @@
-// The daemon's only interface (spec 022): a loopback-bound Bun.serve router
-// over the read models in state.ts, the control verbs spec 021 B-4 exposes,
-// and the SSE stream in events.ts.
+// The daemon's only interface (specs 022 and 027): a loopback-bound
+// Bun.serve router over the read models in state.ts, the control verbs spec
+// 021 B-4 exposes, the project registry spec 025 journals, and the SSE stream
+// in events.ts.
 //
-// Two disciplines shape everything below. First, every JSON answer travels
-// in one envelope (B-2), so a client branches on `ok` and a stable `kind`
-// token, never on an HTTP status alone. Second, every read is a fold of the
-// journal performed during the request (B-6): this module holds no state
-// that could disagree with the journal, because it holds no state at all
-// beyond the event ring, which is itself a projection of appended records.
+// Three disciplines shape everything below. First, every JSON answer travels
+// in one envelope (022 B-2), so a client branches on `ok` and a stable `kind`
+// token, never on an HTTP status alone. Second, every read is a fold of a
+// journal performed during the request (022 B-6): this module holds no state
+// that could disagree with a journal, because it holds no state at all beyond
+// the event ring, which is itself a projection of appended records. Third,
+// scope is explicit (027 B-1): one daemon answers for many projects, so every
+// project-scoped fact lives under `/api/projects/<name>/` and says which
+// project it is about, and the facts that are global stay global.
 import * as fs from "fs";
 import { join } from "path";
-import type { JournalHandle, JournalRecord } from "../journal";
+import type { JournalHandle, JournalRecord, JsonValue } from "../journal";
 import type { DagReader } from "../dag";
 import { loadRegistrySnapshot } from "../dag";
 import type { RunStatus } from "../state";
+import type { Project, ProjectSource, ProjectsSnapshot } from "../projects";
+import { isValidProjectName } from "../projects";
 import {
   EventHub,
   SSE_HEADERS,
@@ -22,12 +28,23 @@ import {
   SSE_RETRY_LINE,
   formatReplayGap,
   formatSseEvent,
+  matchesProjectFilter,
   parseLastEventId,
   startJournalPump,
   type JournalPump,
   type JournalSource,
+  type PumpSource,
 } from "./events";
-import { dagView, decisionsView, historyView, quotaView, runView } from "./state";
+import {
+  dagView,
+  decisionsView,
+  historyView,
+  projectsView,
+  quotaView,
+  runView,
+  type ProjectQuotaInput,
+  type ProjectRowInput,
+} from "./state";
 import { createStaticHandler, defaultWebDistDir, type StaticHandler } from "./static";
 import {
   API_ROUTES,
@@ -35,7 +52,11 @@ import {
   API_VERSION_HEADER,
   CONTROL_SOURCE_HEADER,
   DEFAULT_CONTROL_SOURCE,
+  EVENTS_PROJECT_PARAM,
+  PROJECT_CONTROL_VERBS,
+  PROJECT_ROUTES,
   SPEC_CONTROL_VERBS,
+  projectRoute,
   toApiJournalRecord,
   type ApiError,
   type ApiErrorKind,
@@ -43,25 +64,31 @@ import {
   type ApiResponse,
   type ControlResult,
   type ControlVerbToken,
+  type DaemonMetaView,
+  type DaemonState,
   type DecisionQueryParams,
   type EvidenceView,
+  type ProjectControlResult,
+  type ProjectControlVerb,
+  type ProjectView,
   type SpecControlVerb,
 } from "./types";
 
-// --- binding (B-1) ----------------------------------------------------------
+// --- binding (022 B-1) ------------------------------------------------------
 
 export const DEFAULT_API_PORT = 4519;
 export const DEFAULT_API_HOST = "127.0.0.1";
 
-// v1 refuses to bind anything but the loopback interface. There is no auth
-// layer yet, so the trust boundary is the interface itself; a non-loopback
-// bind would silently publish an unauthenticated control API to the network.
+// The daemon refuses to bind anything but the loopback interface. There is no
+// auth layer yet, so the trust boundary is the interface itself; a
+// non-loopback bind would silently publish an unauthenticated control API to
+// the network. 027 section 6 leaves that unchanged.
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
 
 export function assertLoopbackHost(host: string): void {
   if (!LOOPBACK_HOSTS.has(host)) {
     throw new Error(
-      `api: refusing to bind "${host}": v1 serves loopback only (${[...LOOPBACK_HOSTS].join(", ")}), and there is no auth layer yet`
+      `api: refusing to bind "${host}": this daemon serves loopback only (${[...LOOPBACK_HOSTS].join(", ")}), and there is no auth layer yet`
     );
   }
 }
@@ -69,7 +96,7 @@ export function assertLoopbackHost(host: string): void {
 // --- seams ------------------------------------------------------------------
 
 // The read-only view of a chain. The daemon holds the single writer handle
-// for both chains (spec 011 B-2), so the API is handed a view over that same
+// for every chain (spec 011 B-2), so the API is handed a view over that same
 // live handle rather than opening a second one.
 export type JournalView = JournalSource;
 
@@ -80,7 +107,7 @@ export function journalViewFromHandle(handle: JournalHandle): JournalView {
 // Exactly spec 021 B-4's control methods, which the Daemon class already
 // implements: the API calls them directly rather than reimplementing any
 // part of the run loop's own guards. There is deliberately no `start` member
-// here; see the note on the /api/run/start handler below.
+// here; see the note on the run/start handler below.
 export interface ControlTarget {
   pause(source: string): void;
   resume(source: string): void;
@@ -91,15 +118,75 @@ export interface ControlTarget {
   approve(specId: string, source: string): void;
 }
 
-export interface ApiDeps {
+// Everything the API reads or drives for one registered project. Its journals
+// live inside the target (010 D13), so these are all resolved from the
+// registry's `repoDir` rather than from anything this server knows by itself.
+export interface ProjectApi {
   readonly journal: JournalView;
   readonly decisions: JournalView;
   readonly dagReader: DagReader;
   readonly repoDir: string;
   readonly evidenceDir: string;
-  // Absent (or null) makes this a read-only server: control routes answer
-  // `unavailable` rather than pretending to have journaled something.
+  // Absent (or null) makes this project read-only: its control routes answer
+  // `unavailable` rather than pretending to have journaled something. That is
+  // the honest answer for a project with no live run to control.
   readonly controls?: ControlTarget | null;
+}
+
+// The project registry (spec 025) as this API sees it: a fold per request
+// (B-6), a read-only view of the chain for the D-2 record diff, per-project
+// resources, and the five mutations 027 B-2 exposes. The daemon holds the
+// chain's one writer handle, so every mutation here goes through it.
+export interface ProjectsTarget {
+  readonly chain: JournalView;
+  projects(): ProjectsSnapshot;
+  // Throws when the project's state root cannot be resolved; the route
+  // reports that rather than serving an empty success.
+  resourcesFor(project: Project): ProjectApi;
+  register(path: string, name: string | undefined, source: ProjectSource): void;
+  setArmed(name: string, armed: boolean, source: ProjectSource): void;
+  requalify(name: string, source: ProjectSource): void;
+  remove(name: string, source: ProjectSource): void;
+}
+
+// Spec 025 models a registry record's `source` as one of three control
+// surfaces, while spec 022's `X-Control-Source` is a free-form string an
+// operator can put anything in. The registry chain gets the surface, which is
+// what 025 B-2 asked it to record; the free-form value keeps its detail on
+// the work-journal control records, where 022 D-2 put it.
+export function projectSourceOf(controlSource: string): ProjectSource {
+  const value = controlSource.trim().toLowerCase();
+  if (value === "cli" || value.startsWith("cli:")) return "cli";
+  if (value === "ui" || value.startsWith("ui:") || value.startsWith("web")) return "ui";
+  return "api";
+}
+
+// Spec 026's own state, for `/api/meta` (027 B-4). Structurally satisfied by
+// `StandbyDaemon.snapshot`, so the daemon hands its scheduler over without an
+// adapter.
+export interface DaemonStatus {
+  readonly state: "starting" | "scheduling" | "standby" | "stopped";
+  readonly activeProject: string | null;
+  readonly scanIntervalMs: number;
+  readonly lastScanMs: number | null;
+}
+
+export interface DaemonStatusSource {
+  status(): DaemonStatus;
+}
+
+export interface ApiDeps {
+  readonly projects: ProjectsTarget;
+  // Absent (or null) means no scheduler is attached: `/api/meta` reports a
+  // null daemon rather than inventing a state for one that is not there.
+  readonly daemon?: DaemonStatusSource | null;
+  // Whether this server accepts control requests at all (022 B-2's read-only
+  // stance). `false` makes every control route, registry and scoped alike,
+  // answer `unavailable` rather than pretending to have journaled something;
+  // it is a property of the server, not of any one project. A project with no
+  // live run to drive is refused separately, by `runControl`, because that is
+  // a different fact.
+  readonly controlsAvailable?: boolean;
   readonly host?: string;
   readonly port?: number;
   readonly clock?: { now(): number };
@@ -112,9 +199,9 @@ export interface ApiDeps {
   // checkout's own `web/dist`; `null` disables static serving entirely,
   // leaving a pure-API daemon. Nothing under `/api` is ever served from disk.
   readonly staticDir?: string | null;
-  // The seam B-1 promises: an auth layer slots in front of every route by
-  // returning an ApiError, without any response shape changing. v1 wires
-  // nothing here (loopback trust).
+  // The seam 022 B-1 promises: an auth layer slots in front of every route by
+  // returning an ApiError, without any response shape changing. Nothing is
+  // wired here (loopback trust).
   readonly authorize?: (request: Request) => ApiError | null;
 }
 
@@ -127,7 +214,7 @@ export interface ApiServer {
   stop(): Promise<void>;
 }
 
-// --- envelope helpers (B-2) -------------------------------------------------
+// --- envelope helpers (022 B-2) ---------------------------------------------
 
 const STATUS_FOR_KIND: Readonly<Record<ApiErrorKind, number>> = {
   "bad-request": 400,
@@ -160,9 +247,10 @@ function fail(kind: ApiErrorKind, message: string): Response {
 
 // --- request validation -----------------------------------------------------
 
-// apiVersion gating (B-2): a client that declares a version is held to it;
-// one that declares nothing is served on the v1 assumption, which is how
-// `curl` stays a first-class client of this API.
+// apiVersion gating (027 B-1): a client that declares a version is held to
+// it, so a v1 client fails loudly instead of receiving shapes it cannot
+// parse; one that declares nothing is served on the v2 assumption, which is
+// how `curl` stays a first-class client of this API.
 function versionMismatch(request: Request): Response | null {
   const declared = request.headers.get(API_VERSION_HEADER);
   if (declared === null) return null;
@@ -187,55 +275,132 @@ function safeDecode(segment: string): string | null {
   }
 }
 
-// --- controls (B-5) ---------------------------------------------------------
+// The request body, read once. A control's `source` and a registration's
+// `path`/`name` both live here, so a handler that needs both cannot consume
+// the stream twice. A body that is absent or not JSON is not an error: the
+// fields it would carry are all optional or checked by their own handler.
+type JsonBody = Readonly<Record<string, JsonValue>>;
+
+async function readJsonBody(request: Request): Promise<JsonBody | null> {
+  try {
+    const text = await request.text();
+    if (text.trim().length === 0) return null;
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) return parsed as JsonBody;
+  } catch {
+    // not JSON, or no body at all
+  }
+  return null;
+}
+
+function controlSourceFrom(request: Request, body: JsonBody | null): string {
+  const header = request.headers.get(CONTROL_SOURCE_HEADER);
+  if (header !== null && header.trim().length > 0) return header.trim();
+  const fromBody = body?.source;
+  if (typeof fromBody === "string" && fromBody.trim().length > 0) return fromBody.trim();
+  return DEFAULT_CONTROL_SOURCE;
+}
+
+function stringFromBody(body: JsonBody | null, field: string): string | null {
+  const value = body?.[field];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+// --- the registry (B-2) -----------------------------------------------------
+
+// A registered project plus the resources its scoped routes read. Resolved
+// once per request, so every route below folds the same registry the request
+// was answered against.
+interface Scoped {
+  readonly name: string;
+  readonly project: Project;
+  readonly api: ProjectApi;
+}
+
+function projectRows(deps: ApiDeps): ProjectRowInput[] {
+  const rows: ProjectRowInput[] = [];
+  for (const project of deps.projects.projects().values()) {
+    rows.push({
+      project,
+      records: () => deps.projects.resourcesFor(project).journal.records(),
+    });
+  }
+  return rows;
+}
+
+function projectViewOf(deps: ApiDeps, name: string): ProjectView | null {
+  return projectsView(projectRows(deps)).projects.find((p) => p.name === name) ?? null;
+}
+
+// Every project's work journal, for the global quota fold. A project whose
+// state root cannot be read contributes nothing rather than failing the
+// account-wide answer; its own row in `/api/projects` reports the failure.
+function quotaInputs(deps: ApiDeps): ProjectQuotaInput[] {
+  const inputs: ProjectQuotaInput[] = [];
+  for (const project of deps.projects.projects().values()) {
+    try {
+      inputs.push({ project: project.name, records: deps.projects.resourcesFor(project).journal.records() });
+    } catch {
+      // reported by /api/projects as that project's readError
+    }
+  }
+  return inputs;
+}
+
+// --- controls (022 B-5, 027 B-5) --------------------------------------------
 
 interface ControlOutcome {
   readonly result: ControlResult;
 }
 
-function statusOf(records: readonly JournalRecord[]): RunStatus | null {
-  return runView(records).run?.status ?? null;
+function statusOf(records: readonly JournalRecord[], project: string): RunStatus | null {
+  return runView(records, project).run?.status ?? null;
 }
 
-// The control record B-5 promises to return is not invented here: the verb
-// is executed, the records it appended are diffed out of the journal, and
-// the `control.*` record among them is returned verbatim. Nothing is
-// journaled by this module itself.
+// The control record 022 B-5 promises to return is not invented here: the
+// verb is executed, the records it appended are diffed out of that project's
+// journal, and the `control.*` record among them is returned verbatim.
+// Nothing is journaled by this module itself.
 function runControl(
-  deps: ApiDeps,
+  scoped: Scoped,
   verb: ControlVerbToken,
   specId: string | null,
   apply: (controls: ControlTarget) => void
 ): ControlOutcome | ApiError {
-  const controls = deps.controls;
+  const controls = scoped.api.controls;
   if (!controls) {
-    return { kind: "unavailable", message: "no daemon controls are attached to this server (read-only)" };
+    return {
+      kind: "unavailable",
+      message: `no daemon controls are attached to project "${scoped.name}" (read-only)`,
+    };
   }
 
-  const before = deps.journal.records().length;
+  const journal = scoped.api.journal;
+  const before = journal.records().length;
   try {
     apply(controls);
   } catch (err) {
     return { kind: "conflict", message: (err as Error).message };
   }
 
-  const after = deps.journal.records();
+  const after = journal.records();
   const appended = after.slice(before);
   const controlRecord = appended.find((r) => r.kind.startsWith("control.")) ?? appended[0] ?? null;
 
   return {
     result: {
+      project: scoped.name,
       verb,
       specId,
       applied: true,
       record: controlRecord === null ? null : toApiJournalRecord(controlRecord),
-      runStatus: statusOf(after),
+      runStatus: statusOf(after, scoped.name),
     },
   };
 }
 
-function noop(verb: ControlVerbToken, specId: string | null, runStatus: RunStatus | null): ControlResult {
-  return { verb, specId, applied: false, record: null, runStatus };
+function noop(project: string, verb: ControlVerbToken, specId: string | null, runStatus: RunStatus | null): ControlResult {
+  return { project, verb, specId, applied: false, record: null, runStatus };
 }
 
 function controlResponse(outcome: ControlOutcome | ApiError): Response {
@@ -243,69 +408,109 @@ function controlResponse(outcome: ControlOutcome | ApiError): Response {
   return ok(outcome.result);
 }
 
-async function controlSource(request: Request): Promise<string> {
-  const header = request.headers.get(CONTROL_SOURCE_HEADER);
-  if (header !== null && header.trim().length > 0) return header.trim();
-  try {
-    const text = await request.text();
-    if (text.trim().length === 0) return DEFAULT_CONTROL_SOURCE;
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed === "object" && parsed !== null && typeof (parsed as { source?: unknown }).source === "string") {
-      const source = (parsed as { source: string }).source.trim();
-      if (source.length > 0) return source;
-    }
-  } catch {
-    // A body that is absent or not JSON is not an error: the source is
-    // optional metadata, and defaulting it is more useful than refusing.
-  }
-  return DEFAULT_CONTROL_SOURCE;
-}
-
-// /api/run/start. Booting a daemon process is not an HTTP concern: spec 021
-// B-2 fixes the boot order (lock, journals, recovery, then the loop and this
-// API), so by the time a request can arrive the process is already up, and
-// process lifecycle belongs to the CLI (spec 023 B-2's `daemon start`).
-// Within a hosted daemon, "start" means "ensure the run is running": a
-// paused run resumes, an already-running run is an idempotent no-op (B-5),
-// and parked/completed/failed are refused, because those are the quota
+// run/start. Booting a daemon process is not an HTTP concern (022 D-1): spec
+// 021 B-2 fixes the boot order (lock, journals, recovery, then the loop and
+// this API), so by the time a request can arrive the process is already up,
+// and process lifecycle belongs to the CLI (spec 023 B-2's `daemon start`).
+// Within a hosted daemon, "start" means "ensure this project's run is
+// running": a paused run resumes, an already-running run is an idempotent
+// no-op, and parked/completed/failed are refused, because those are the quota
 // scheduler's and the state machine's to leave, not a control verb's.
-function handleRunStart(deps: ApiDeps, source: string): Response {
-  const status = statusOf(deps.journal.records());
+function handleRunStart(scoped: Scoped, source: string): Response {
+  const status = statusOf(scoped.api.journal.records(), scoped.name);
   if (status === null) {
-    return fail("conflict", "no run exists yet; start the daemon process before starting a run");
+    return fail("conflict", `project "${scoped.name}" has no run yet; the scheduler creates one when it takes the flight slot`);
   }
-  if (status === "running") return ok(noop("start", null, status));
+  if (status === "running") return ok(noop(scoped.name, "start", null, status));
   if (status === "paused") {
-    return controlResponse(runControl(deps, "start", null, (c) => c.resume(source)));
+    return controlResponse(runControl(scoped, "start", null, (c) => c.resume(source)));
   }
   return fail("conflict", `a run in status "${status}" cannot be started`);
 }
 
-function handleRunPause(deps: ApiDeps, source: string): Response {
-  const status = statusOf(deps.journal.records());
-  if (status === "paused") return ok(noop("pause", null, status));
-  return controlResponse(runControl(deps, "pause", null, (c) => c.pause(source)));
+function handleRunPause(scoped: Scoped, source: string): Response {
+  const status = statusOf(scoped.api.journal.records(), scoped.name);
+  if (status === "paused") return ok(noop(scoped.name, "pause", null, status));
+  return controlResponse(runControl(scoped, "pause", null, (c) => c.pause(source)));
 }
 
-function handleRunResume(deps: ApiDeps, source: string): Response {
-  const status = statusOf(deps.journal.records());
-  if (status === "running") return ok(noop("resume", null, status));
-  return controlResponse(runControl(deps, "resume", null, (c) => c.resume(source)));
+function handleRunResume(scoped: Scoped, source: string): Response {
+  const status = statusOf(scoped.api.journal.records(), scoped.name);
+  if (status === "running") return ok(noop(scoped.name, "resume", null, status));
+  return controlResponse(runControl(scoped, "resume", null, (c) => c.resume(source)));
 }
 
-function handleSpecControl(deps: ApiDeps, verb: SpecControlVerb, specId: string, source: string): Response {
+function handleSpecControl(scoped: Scoped, verb: SpecControlVerb, specId: string, source: string): Response {
   switch (verb) {
     case "skip":
-      return controlResponse(runControl(deps, verb, specId, (c) => c.skipSpec(specId, source)));
+      return controlResponse(runControl(scoped, verb, specId, (c) => c.skipSpec(specId, source)));
     case "retry-stage":
-      return controlResponse(runControl(deps, verb, specId, (c) => c.retryStage(specId, source)));
+      return controlResponse(runControl(scoped, verb, specId, (c) => c.retryStage(specId, source)));
     case "reverify":
-      return controlResponse(runControl(deps, verb, specId, (c) => c.reverify(specId, source)));
+      return controlResponse(runControl(scoped, verb, specId, (c) => c.reverify(specId, source)));
     case "force-human-gate":
-      return controlResponse(runControl(deps, verb, specId, (c) => c.forceHumanGate(specId, source)));
+      return controlResponse(runControl(scoped, verb, specId, (c) => c.forceHumanGate(specId, source)));
     case "approve":
-      return controlResponse(runControl(deps, verb, specId, (c) => c.approve(specId, source)));
+      return controlResponse(runControl(scoped, verb, specId, (c) => c.approve(specId, source)));
   }
+}
+
+// --- registry controls (B-2) ------------------------------------------------
+
+// 022 D-2's pattern, applied to the projects chain: snapshot the chain, run
+// the mutation spec 025 defines, and return the record it appended verbatim.
+// The API appends nothing to any chain itself, and a mutation the registry
+// refuses (an unknown name, a duplicate repoDir, an underivable name) is a
+// conflict carrying that refusal's own words.
+function runRegistryControl(
+  deps: ApiDeps,
+  verb: ProjectControlVerb,
+  name: string | null,
+  apply: () => void
+): Response {
+  const chain = deps.projects.chain;
+  const before = chain.records().length;
+  try {
+    apply();
+  } catch (err) {
+    return fail("conflict", (err as Error).message);
+  }
+
+  const appended = chain.records().slice(before);
+  const record = appended.find((r) => r.kind.startsWith("project.")) ?? appended[0] ?? null;
+
+  // A registration derives its own name when the caller did not pass one
+  // (025 D-1), so the answer reads it back off the record rather than
+  // guessing what the chain decided.
+  const payload = record?.payload;
+  const journaledName =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload) && typeof payload.name === "string"
+      ? payload.name
+      : null;
+  const project = journaledName ?? name;
+
+  const result: ProjectControlResult = {
+    verb,
+    project,
+    applied: record !== null,
+    record: record === null ? null : toApiJournalRecord(record),
+    snapshot: project === null ? null : projectViewOf(deps, project),
+  };
+  return ok(result);
+}
+
+function handleRegister(deps: ApiDeps, body: JsonBody | null, source: string): Response {
+  const path = stringFromBody(body, "path");
+  if (path === null) {
+    return fail("bad-request", `POST ${API_ROUTES.projects} expects a JSON body with a "path" string`);
+  }
+  const name = stringFromBody(body, "name");
+  if (name !== null && !isValidProjectName(name)) {
+    return fail("bad-request", `"${name}" is not a valid project name (lowercase slug, [a-z0-9][a-z0-9-]*)`);
+  }
+  return runRegistryControl(deps, "register", name, () =>
+    deps.projects.register(path, name ?? undefined, projectSourceOf(source))
+  );
 }
 
 // --- evidence (B-3) ---------------------------------------------------------
@@ -331,13 +536,14 @@ function findEvidenceFile(evidenceDir: string, hash: string): EvidenceFile | nul
 // documented envelope" holds without an exception. `?raw=1` additionally
 // serves the bytes themselves, which is what an <img src> in the web UI
 // (spec 024 B-5) needs; both forms are read-only and content-addressed, so
-// neither can serve anything the journal did not name by hash.
-function handleEvidence(deps: ApiDeps, hash: string, raw: boolean): Response {
+// neither can serve anything the journal did not name by hash, and both are
+// resolved inside the named project's own evidence directory.
+function handleEvidence(scoped: Scoped, hash: string, raw: boolean): Response {
   if (!EVIDENCE_HASH_SHAPE.test(hash)) {
     return fail("bad-request", `"${hash}" is not a content hash (expected 64 lowercase hex characters)`);
   }
-  const found = findEvidenceFile(deps.evidenceDir, hash);
-  if (found === null) return fail("not-found", `no evidence file for ${hash}`);
+  const found = findEvidenceFile(scoped.api.evidenceDir, hash);
+  if (found === null) return fail("not-found", `no evidence file for ${hash} in project "${scoped.name}"`);
 
   const bytes = fs.readFileSync(found.path);
   if (raw) {
@@ -348,6 +554,7 @@ function handleEvidence(deps: ApiDeps, hash: string, raw: boolean): Response {
   }
 
   const view: EvidenceView = {
+    project: scoped.name,
     hash,
     mediaType: found.mediaType,
     bytes: bytes.length,
@@ -359,7 +566,13 @@ function handleEvidence(deps: ApiDeps, hash: string, raw: boolean): Response {
 
 // --- SSE (B-4) --------------------------------------------------------------
 
-function sseResponse(hub: EventHub, request: Request, heartbeatMs: number, closers: Set<() => void>): Response {
+function sseResponse(
+  hub: EventHub,
+  request: Request,
+  projectFilter: string | null,
+  heartbeatMs: number,
+  closers: Set<() => void>
+): Response {
   const encoder = new TextEncoder();
   let unsubscribe: () => void = () => {};
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -394,12 +607,15 @@ function sseResponse(hub: EventHub, request: Request, heartbeatMs: number, close
 
       const lastEventId = parseLastEventId(request.headers.get("Last-Event-ID"));
       if (lastEventId !== null) {
-        const replay = hub.replayFrom(lastEventId);
+        const replay = hub.replayFrom(lastEventId, projectFilter);
         if (replay.gap) send(formatReplayGap(lastEventId, replay.events[0]?.id ?? null));
         for (const event of replay.events) send(formatSseEvent(event));
       }
 
-      unsubscribe = hub.subscribe((event) => send(formatSseEvent(event)));
+      unsubscribe = hub.subscribe((event) => {
+        if (!matchesProjectFilter(event, projectFilter)) return;
+        send(formatSseEvent(event));
+      });
       timer = setInterval(() => send(SSE_HEARTBEAT_LINE), heartbeatMs);
       timer.unref?.();
     },
@@ -425,27 +641,221 @@ function decisionQueryFrom(url: URL): DecisionQueryParams {
   };
 }
 
-function metaView(deps: ApiDeps): ApiMeta {
+// Every registry control route, by its path suffix. One table so a verb
+// cannot be routed without also being named in the meta route list.
+const REGISTRY_VERB_FOR_ROUTE: Readonly<Record<string, ProjectControlVerb | undefined>> = {
+  [PROJECT_ROUTES.arm]: "arm",
+  [PROJECT_ROUTES.disarm]: "disarm",
+  [PROJECT_ROUTES.requalify]: "requalify",
+  [PROJECT_ROUTES.remove]: "remove",
+};
+
+// A fresh Response every time: a body can only be consumed once, so a shared
+// constant would serve an empty envelope to the second caller.
+function readOnlyRefusal(): Response {
+  return fail("unavailable", "this server is read-only; no daemon controls are attached");
+}
+
+// 026's four scheduler states, plus the one fact the scheduler does not carry
+// itself: whether the flight-slot holder is parked on quota. "driving" and
+// "parked" are both a held slot, and an operator who cannot tell them apart
+// cannot tell progress from a countdown.
+function daemonStateOf(status: DaemonStatus, parked: boolean): DaemonState {
+  if (status.state === "starting") return "starting";
+  if (status.state === "stopped") return "stopped";
+  if (status.activeProject === null) return "standby";
+  return parked ? "parked" : "driving";
+}
+
+function daemonMeta(deps: ApiDeps, parked: boolean): DaemonMetaView | null {
+  const source = deps.daemon;
+  if (!source) return null;
+  const status = source.status();
+  return {
+    state: daemonStateOf(status, parked),
+    activeProject: status.activeProject,
+    scanIntervalMs: status.scanIntervalMs,
+    lastScanMs: status.lastScanMs,
+  };
+}
+
+const NAMED = "<name>";
+
+function controlsAllowed(deps: ApiDeps): boolean {
+  return deps.controlsAvailable ?? true;
+}
+
+function metaView(deps: ApiDeps, nowMs: number): ApiMeta {
+  const registry = deps.projects.projects();
+  // Only folded when there is a daemon to describe: `parked` exists here to
+  // tell a held flight slot apart from a countdown, and nothing else on this
+  // route needs every project's journal read.
+  const parked = deps.daemon ? quotaView(quotaInputs(deps), nowMs).parked : false;
+
   return {
     apiVersion: API_VERSION,
     service: "claude-observatory-orchestrator",
     loopbackOnly: true,
-    controlsAvailable: Boolean(deps.controls),
+    controlsAvailable: controlsAllowed(deps),
+    daemon: daemonMeta(deps, parked),
+    projectCount: registry.size,
     routes: [
       API_ROUTES.meta,
-      API_ROUTES.dag,
-      API_ROUTES.run,
       API_ROUTES.quota,
-      API_ROUTES.decisions,
-      API_ROUTES.history,
       API_ROUTES.events,
-      `${API_ROUTES.evidencePrefix}<hash>`,
-      API_ROUTES.runStart,
-      API_ROUTES.runPause,
-      API_ROUTES.runResume,
-      ...SPEC_CONTROL_VERBS.map((verb) => `${API_ROUTES.specPrefix}<id>/${verb}`),
+      API_ROUTES.projects,
+      projectRoute(NAMED, PROJECT_ROUTES.dag),
+      projectRoute(NAMED, PROJECT_ROUTES.run),
+      projectRoute(NAMED, PROJECT_ROUTES.decisions),
+      projectRoute(NAMED, PROJECT_ROUTES.history),
+      projectRoute(NAMED, `${PROJECT_ROUTES.evidencePrefix}<hash>`),
+      ...PROJECT_CONTROL_VERBS.filter((verb) => verb !== "register").map((verb) => projectRoute(NAMED, verb)),
+      projectRoute(NAMED, PROJECT_ROUTES.runStart),
+      projectRoute(NAMED, PROJECT_ROUTES.runPause),
+      projectRoute(NAMED, PROJECT_ROUTES.runResume),
+      ...SPEC_CONTROL_VERBS.map((verb) => projectRoute(NAMED, `${PROJECT_ROUTES.specPrefix}<id>/${verb}`)),
     ],
   };
+}
+
+// Resolves `<name>` against the folded registry. B-5: an unknown project name
+// answers not-found, never an empty success, because "no such project" and
+// "that project has nothing" are different facts.
+function scopeTo(deps: ApiDeps, name: string): Scoped | Response {
+  if (!isValidProjectName(name)) {
+    return fail("bad-request", `"${name}" is not a valid project name (lowercase slug, [a-z0-9][a-z0-9-]*)`);
+  }
+  const project = deps.projects.projects().get(name);
+  if (project === undefined) return fail("not-found", `no registered project named "${name}"`);
+  let api: ProjectApi;
+  try {
+    api = deps.projects.resourcesFor(project);
+  } catch (err) {
+    return fail("unavailable", `project "${name}" is registered but its state root cannot be served: ${(err as Error).message}`);
+  }
+  return { name, project, api };
+}
+
+function isResponse(value: Scoped | Response): value is Response {
+  return value instanceof Response;
+}
+
+async function routeProject(
+  deps: ApiDeps,
+  request: Request,
+  url: URL,
+  method: string,
+  segments: readonly string[]
+): Promise<Response> {
+  const path = url.pathname;
+  const name = segments[0];
+  if (name === undefined) {
+    return fail("not-found", `no route for ${method} ${path} (the collection is ${API_ROUTES.projects})`);
+  }
+
+  const suffix = segments.slice(1).join("/");
+  if (suffix.length === 0) {
+    return fail("not-found", `no route for ${method} ${path} (expected ${projectRoute(NAMED, "<route>")})`);
+  }
+
+  const requireGet = (): Response | null =>
+    method === "GET" || method === "HEAD" ? null : fail("method-not-allowed", `${method} ${path} (expected GET)`);
+  const requirePost = (): Response | null =>
+    method === "POST" ? null : fail("method-not-allowed", `${method} ${path} (expected POST)`);
+  const requireControls = (): Response | null => (controlsAllowed(deps) ? null : readOnlyRefusal());
+
+  // Registry controls address the chain, not the project's own journals, so
+  // they are dispatched before the state root is resolved: disarming or
+  // removing a project whose checkout has gone missing must still work.
+  const registryVerb = REGISTRY_VERB_FOR_ROUTE[suffix];
+  if (registryVerb !== undefined) {
+    const guard = requirePost() ?? requireControls();
+    if (guard) return guard;
+    if (!isValidProjectName(name)) return fail("bad-request", `"${name}" is not a valid project name`);
+    if (!deps.projects.projects().has(name)) return fail("not-found", `no registered project named "${name}"`);
+    const source = projectSourceOf(controlSourceFrom(request, await readJsonBody(request)));
+    return runRegistryControl(deps, registryVerb, name, () => {
+      switch (registryVerb) {
+        case "arm":
+          return deps.projects.setArmed(name, true, source);
+        case "disarm":
+          return deps.projects.setArmed(name, false, source);
+        case "requalify":
+          return deps.projects.requalify(name, source);
+        default:
+          return deps.projects.remove(name, source);
+      }
+    });
+  }
+
+  const scoped = scopeTo(deps, name);
+  if (isResponse(scoped)) return scoped;
+
+  switch (suffix) {
+    case PROJECT_ROUTES.dag:
+      return (
+        requireGet() ??
+        ok(
+          dagView({
+            project: scoped.name,
+            records: scoped.api.journal.records(),
+            snapshot: loadRegistrySnapshot(scoped.api.dagReader, scoped.api.repoDir),
+            reader: scoped.api.dagReader,
+            repoDir: scoped.api.repoDir,
+          })
+        )
+      );
+    case PROJECT_ROUTES.run:
+      return requireGet() ?? ok(runView(scoped.api.journal.records(), scoped.name));
+    case PROJECT_ROUTES.decisions:
+      return requireGet() ?? ok(decisionsView(scoped.api.decisions.records(), decisionQueryFrom(url), scoped.name));
+    case PROJECT_ROUTES.history:
+      return requireGet() ?? ok(historyView(scoped.api.journal.records(), scoped.name));
+    case PROJECT_ROUTES.runStart:
+      return (
+        requirePost() ?? requireControls() ?? handleRunStart(scoped, controlSourceFrom(request, await readJsonBody(request)))
+      );
+    case PROJECT_ROUTES.runPause:
+      return (
+        requirePost() ?? requireControls() ?? handleRunPause(scoped, controlSourceFrom(request, await readJsonBody(request)))
+      );
+    case PROJECT_ROUTES.runResume:
+      return (
+        requirePost() ?? requireControls() ?? handleRunResume(scoped, controlSourceFrom(request, await readJsonBody(request)))
+      );
+    default:
+      break;
+  }
+
+  if (suffix.startsWith(PROJECT_ROUTES.evidencePrefix)) {
+    const guard = requireGet();
+    if (guard) return guard;
+    const hash = safeDecode(suffix.slice(PROJECT_ROUTES.evidencePrefix.length));
+    if (hash === null) return fail("bad-request", `${path} is not a decodable evidence path`);
+    return handleEvidence(scoped, hash, url.searchParams.get("raw") === "1");
+  }
+
+  if (suffix.startsWith(PROJECT_ROUTES.specPrefix)) {
+    const guard = requirePost() ?? requireControls();
+    if (guard) return guard;
+    const parts = suffix
+      .slice(PROJECT_ROUTES.specPrefix.length)
+      .split("/")
+      .filter((p) => p.length > 0);
+    if (parts.length !== 2) {
+      return fail("bad-request", `expected ${projectRoute(NAMED, `${PROJECT_ROUTES.specPrefix}<id>/<verb>`)}, got ${path}`);
+    }
+    const specId = safeDecode(parts[0]!);
+    const verb = parts[1]!;
+    if (specId === null) return fail("bad-request", `${path} is not a decodable spec control path`);
+    if (!SPEC_ID_SHAPE.test(specId)) return fail("bad-request", `"${specId}" is not a valid spec id`);
+    if (!(SPEC_CONTROL_VERBS as readonly string[]).includes(verb)) {
+      return fail("not-found", `unknown spec control verb "${verb}" (expected one of ${SPEC_CONTROL_VERBS.join(", ")})`);
+    }
+    return handleSpecControl(scoped, verb as SpecControlVerb, specId, controlSourceFrom(request, await readJsonBody(request)));
+  }
+
+  return fail("not-found", `no route for ${method} ${path}`);
 }
 
 async function route(
@@ -468,70 +878,43 @@ async function route(
 
   const requireGet = (): Response | null =>
     method === "GET" || method === "HEAD" ? null : fail("method-not-allowed", `${method} ${path} (expected GET)`);
-  const requirePost = (): Response | null =>
-    method === "POST" ? null : fail("method-not-allowed", `${method} ${path} (expected POST)`);
 
   switch (path) {
     case API_ROUTES.meta:
-      return requireGet() ?? ok(metaView(deps));
-    case API_ROUTES.dag:
-      return (
-        requireGet() ??
-        ok(
-          dagView({
-            records: deps.journal.records(),
-            snapshot: loadRegistrySnapshot(deps.dagReader, deps.repoDir),
-            reader: deps.dagReader,
-            repoDir: deps.repoDir,
-          })
-        )
-      );
-    case API_ROUTES.run:
-      return requireGet() ?? ok(runView(deps.journal.records()));
+      return requireGet() ?? ok(metaView(deps, clock.now()));
     case API_ROUTES.quota:
-      return requireGet() ?? ok(quotaView(deps.journal.records(), clock.now()));
-    case API_ROUTES.decisions:
-      return requireGet() ?? ok(decisionsView(deps.decisions.records(), decisionQueryFrom(url)));
-    case API_ROUTES.history:
-      return requireGet() ?? ok(historyView(deps.journal.records()));
-    case API_ROUTES.events:
-      return requireGet() ?? sseResponse(hub, request, deps.heartbeatMs ?? SSE_HEARTBEAT_MS, closers);
-    case API_ROUTES.runStart:
-      return requirePost() ?? handleRunStart(deps, await controlSource(request));
-    case API_ROUTES.runPause:
-      return requirePost() ?? handleRunPause(deps, await controlSource(request));
-    case API_ROUTES.runResume:
-      return requirePost() ?? handleRunResume(deps, await controlSource(request));
+      return requireGet() ?? ok(quotaView(quotaInputs(deps), clock.now()));
+    case API_ROUTES.events: {
+      const guard = requireGet();
+      if (guard) return guard;
+      const requested = url.searchParams.get(EVENTS_PROJECT_PARAM);
+      if (requested !== null) {
+        if (!isValidProjectName(requested)) return fail("bad-request", `"${requested}" is not a valid project name`);
+        // A filter on a project this daemon does not have would answer with a
+        // stream that is silently empty forever, which is the "empty success"
+        // B-5 forbids in its own words.
+        if (!deps.projects.projects().has(requested)) return fail("not-found", `no registered project named "${requested}"`);
+      }
+      return sseResponse(hub, request, requested, deps.heartbeatMs ?? SSE_HEARTBEAT_MS, closers);
+    }
+    case API_ROUTES.projects: {
+      if (method === "POST") {
+        if (!controlsAllowed(deps)) return readOnlyRefusal();
+        const body = await readJsonBody(request);
+        return handleRegister(deps, body, controlSourceFrom(request, body));
+      }
+      return requireGet() ?? ok(projectsView(projectRows(deps)));
+    }
     default:
       break;
   }
 
-  if (path.startsWith(API_ROUTES.evidencePrefix)) {
-    const guard = requireGet();
-    if (guard) return guard;
-    const hash = safeDecode(path.slice(API_ROUTES.evidencePrefix.length));
-    if (hash === null) return fail("bad-request", `${path} is not a decodable evidence path`);
-    return handleEvidence(deps, hash, url.searchParams.get("raw") === "1");
-  }
-
-  if (path.startsWith(API_ROUTES.specPrefix)) {
-    const guard = requirePost();
-    if (guard) return guard;
-    const parts = path
-      .slice(API_ROUTES.specPrefix.length)
+  if (path.startsWith(API_ROUTES.projectPrefix)) {
+    const segments = path
+      .slice(API_ROUTES.projectPrefix.length)
       .split("/")
-      .filter((p) => p.length > 0);
-    if (parts.length !== 2) {
-      return fail("bad-request", `expected ${API_ROUTES.specPrefix}<id>/<verb>, got ${path}`);
-    }
-    const specId = safeDecode(parts[0]!);
-    const verb = parts[1]!;
-    if (specId === null) return fail("bad-request", `${path} is not a decodable spec control path`);
-    if (!SPEC_ID_SHAPE.test(specId)) return fail("bad-request", `"${specId}" is not a valid spec id`);
-    if (!(SPEC_CONTROL_VERBS as readonly string[]).includes(verb)) {
-      return fail("not-found", `unknown spec control verb "${verb}" (expected one of ${SPEC_CONTROL_VERBS.join(", ")})`);
-    }
-    return handleSpecControl(deps, verb as SpecControlVerb, specId, await controlSource(request));
+      .filter((s) => s.length > 0);
+    return await routeProject(deps, request, url, method, segments);
   }
 
   // Last, and never for `/api`: the built SPA (spec 024 B-1). static.ts
@@ -551,6 +934,22 @@ function formatHostForUrl(host: string): string {
   return host.includes(":") ? `[${host}]` : host;
 }
 
+// Every chain the event pump watches: the daemon's registry chain, which
+// belongs to no project, plus one per registered project. Re-derived on every
+// tick, so a project registered through `POST /api/projects` starts streaming
+// without a restart.
+function pumpSources(deps: ApiDeps): readonly PumpSource[] {
+  const sources: PumpSource[] = [{ project: null, journal: deps.projects.chain }];
+  for (const project of deps.projects.projects().values()) {
+    try {
+      sources.push({ project: project.name, journal: deps.projects.resourcesFor(project).journal });
+    } catch {
+      // a project whose state root cannot be opened has nothing to stream
+    }
+  }
+  return sources;
+}
+
 export function createApiServer(deps: ApiDeps): ApiServer {
   const host = deps.host ?? DEFAULT_API_HOST;
   assertLoopbackHost(host);
@@ -559,7 +958,7 @@ export function createApiServer(deps: ApiDeps): ApiServer {
   const clock = deps.clock ?? { now: () => Date.now() };
   const pump = startJournalPump({
     hub,
-    journal: deps.journal,
+    sources: () => pumpSources(deps),
     clock,
     ...(deps.pumpIntervalMs !== undefined ? { intervalMs: deps.pumpIntervalMs } : {}),
     ...(deps.quotaTickMs !== undefined ? { quotaTickMs: deps.quotaTickMs } : {}),

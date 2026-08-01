@@ -9,6 +9,11 @@
 // publishes one event per newly appended record. That keeps the stream a
 // strict projection of what is durably on disk (B-6): nothing can be
 // announced over SSE that a later fold would deny.
+//
+// v2 (spec 027 B-4) keeps all of that and adds one field: every event names
+// the project whose chain it came off, or null when it is daemon-scoped (a
+// registry mutation). One ring, one stream, one replay window, with an
+// optional server-side filter, rather than a ring per project.
 import type { JournalRecord, JsonValue } from "../journal";
 import { foldQuotaState } from "../quota";
 import type { ApiEvent, ApiEventType } from "./types";
@@ -36,7 +41,20 @@ export function eventTypeForKind(kind: string): ApiEventType {
   if (kind.startsWith("quota.")) return "quota";
   if (kind.startsWith("control.")) return "control";
   if (kind.startsWith("stage.")) return "stage";
+  // The registry chain's own kinds (spec 025 B-2). They are daemon-scoped,
+  // not the property of any one project, and a client filtering the stream
+  // wants them distinguishable from a project's work records.
+  if (kind.startsWith("project.")) return "project";
   return "journal";
+}
+
+// The `?project=<name>` filter (B-4). A filtered stream still carries
+// daemon-scoped events: a client watching one project has to see that
+// project being disarmed or removed, and a filter that dropped the registry
+// chain would leave it watching something the daemon no longer has.
+export function matchesProjectFilter(event: Pick<ApiEvent, "project">, filter: string | null): boolean {
+  if (filter === null) return true;
+  return event.project === null || event.project === filter;
 }
 
 export function boundEventData(payload: JsonValue, seq: number, kind: string, maxChars: number): JsonValue {
@@ -101,8 +119,12 @@ export class EventHub {
     };
   }
 
-  replayFrom(lastEventId: number): ReplayResult {
-    const events = this.ring.filter((e) => e.id > lastEventId);
+  // The gap is computed against the whole ring, not the filtered slice: a
+  // client that missed events for another project has missed nothing it
+  // asked for, so a filter must not turn a complete resume into a reported
+  // loss (or the reverse).
+  replayFrom(lastEventId: number, projectFilter: string | null = null): ReplayResult {
+    const events = this.ring.filter((e) => e.id > lastEventId && matchesProjectFilter(e, projectFilter));
     const oldest = this.ring[0];
     const gap = oldest !== undefined && oldest.id > lastEventId + 1;
     return { events, gap };
@@ -126,7 +148,13 @@ export const SSE_HEADERS: Readonly<Record<string, string>> = {
 // JSON.stringify escapes every newline, so the single `data:` line below can
 // never be split by payload content.
 export function formatSseEvent(event: ApiEvent): string {
-  const body = JSON.stringify({ seq: event.seq, ts: event.ts, kind: event.kind, data: event.data });
+  const body = JSON.stringify({
+    project: event.project,
+    seq: event.seq,
+    ts: event.ts,
+    kind: event.kind,
+    data: event.data,
+  });
   return `id: ${event.id}\nevent: ${event.type}\ndata: ${body}\n\n`;
 }
 
@@ -135,6 +163,7 @@ export function formatSseEvent(event: ApiEvent): string {
 // own Last-Event-ID cursor.
 export function formatReplayGap(requestedAfter: number, oldestBufferedId: number | null): string {
   const body = JSON.stringify({
+    project: null,
     seq: null,
     ts: null,
     kind: "api.replay-gap",
@@ -157,18 +186,29 @@ export interface JournalSource {
   records(): readonly JournalRecord[];
 }
 
+// One chain the pump watches. `project` is null for the daemon's own registry
+// chain, which belongs to no project (027 B-4).
+export interface PumpSource {
+  readonly project: string | null;
+  readonly journal: JournalSource;
+}
+
 export interface JournalPumpOptions {
   readonly hub: EventHub;
-  readonly journal: JournalSource;
+  // Re-read every tick rather than captured once: a project registered while
+  // the daemon runs starts streaming without a restart, and a removed one
+  // stops. A source seen for the first time starts at its own current tail,
+  // for the same reason the pump as a whole does.
+  readonly sources: () => readonly PumpSource[];
   readonly clock: { now(): number };
   readonly intervalMs?: number;
   readonly quotaTickMs?: number;
   readonly maxEventChars?: number;
-  // Publish records with a seq greater than this. Defaults to the journal's
-  // current tail, so opening the stream does not replay the whole run's
-  // history as if it were happening now; `Last-Event-ID` replay (bounded to
-  // the ring) is the mechanism for resuming, and the GET routes are the
-  // mechanism for history.
+  // Publish records with a seq greater than this, for every source. Defaults
+  // to each chain's current tail, so opening the stream does not replay the
+  // whole run's history as if it were happening now; `Last-Event-ID` replay
+  // (bounded to the ring) is the mechanism for resuming, and the GET routes
+  // are the mechanism for history.
   readonly fromSeq?: number;
 }
 
@@ -179,25 +219,54 @@ export interface JournalPump {
   stop(): void;
 }
 
+// Sources are keyed by project name; the daemon-scoped chain gets a key no
+// project name can collide with, because 025 D-1's slug grammar forbids "/".
+const DAEMON_SOURCE_KEY = "/daemon";
+
+function sourceKey(project: string | null): string {
+  return project ?? DAEMON_SOURCE_KEY;
+}
+
 export function startJournalPump(options: JournalPumpOptions): JournalPump {
-  const { hub, journal, clock } = options;
+  const { hub, clock } = options;
   const intervalMs = options.intervalMs ?? DEFAULT_PUMP_INTERVAL_MS;
   const quotaTickMs = options.quotaTickMs ?? DEFAULT_QUOTA_TICK_MS;
   const maxEventChars = options.maxEventChars ?? MAX_EVENT_DATA_CHARS;
 
-  const initial = journal.records();
-  let lastSeq = options.fromSeq ?? (initial.at(-1)?.seq ?? -1);
-  let lastQuotaTickMs: number | null = null;
+  const lastSeq = new Map<string, number>();
+  const lastQuotaTickMs = new Map<string, number>();
 
-  function pumpOnce(): readonly ApiEvent[] {
-    const published: ApiEvent[] = [];
-    const records = journal.records();
+  // A chain's starting point is its tail the first time the pump sees it: at
+  // construction for the sources that already exist, and at first sight for
+  // one that appears later (a project registered while the daemon runs). Both
+  // are the same rule, and both are why joining the stream is not a request
+  // to relive a run.
+  function markTail(source: PumpSource): number {
+    const key = sourceKey(source.project);
+    const existing = lastSeq.get(key);
+    if (existing !== undefined) return existing;
+    let seen: number;
+    try {
+      seen = options.fromSeq ?? (source.journal.records().at(-1)?.seq ?? -1);
+    } catch {
+      seen = options.fromSeq ?? -1;
+    }
+    lastSeq.set(key, seen);
+    return seen;
+  }
+
+  function pumpSource(source: PumpSource, published: ApiEvent[]): void {
+    const key = sourceKey(source.project);
+    let seen = markTail(source);
+    const records = source.journal.records();
 
     for (const record of records) {
-      if (record.seq <= lastSeq) continue;
-      lastSeq = record.seq;
+      if (record.seq <= seen) continue;
+      seen = record.seq;
+      lastSeq.set(key, seen);
       published.push(
         hub.publish({
+          project: source.project,
           type: eventTypeForKind(record.kind),
           seq: record.seq,
           ts: record.ts,
@@ -207,17 +276,21 @@ export function startJournalPump(options: JournalPumpOptions): JournalPump {
       );
     }
 
-    // The quota tick (B-4): while the run is parked there is nothing to
-    // append to the journal, but the countdown is still moving, so the
-    // stream says so on its own cadence. Derived from the journaled target
-    // every time, never from a stored ticking counter (spec 015 B-2).
+    // The quota tick (B-4): while a run is parked there is nothing to append
+    // to its journal, but the countdown is still moving, so the stream says
+    // so on its own cadence. Derived from the journaled target every time,
+    // never from a stored ticking counter (spec 015 B-2). Ticked per project
+    // because that is whose journal the target is in; only one project can
+    // hold the flight slot, so only one can be parked (010 D15).
     const quota = foldQuotaState(records);
     const now = clock.now();
     if (quota.parked && quota.lastPark) {
-      if (lastQuotaTickMs === null || now - lastQuotaTickMs >= quotaTickMs) {
-        lastQuotaTickMs = now;
+      const previous = lastQuotaTickMs.get(key);
+      if (previous === undefined || now - previous >= quotaTickMs) {
+        lastQuotaTickMs.set(key, now);
         published.push(
           hub.publish({
+            project: source.project,
             type: "quota",
             seq: null,
             ts: new Date(now).toISOString(),
@@ -234,11 +307,41 @@ export function startJournalPump(options: JournalPumpOptions): JournalPump {
         );
       }
     } else {
-      lastQuotaTickMs = null;
+      lastQuotaTickMs.delete(key);
+    }
+  }
+
+  function pumpOnce(): readonly ApiEvent[] {
+    const published: ApiEvent[] = [];
+    const sources = options.sources();
+    const live = new Set<string>();
+
+    for (const source of sources) {
+      live.add(sourceKey(source.project));
+      // One project whose state root went unreadable must not stop the rest
+      // of the daemon's stream; the read routes report that project's own
+      // failure, and the pump simply has nothing new from it this tick.
+      try {
+        pumpSource(source, published);
+      } catch {
+        // nothing publishable from this chain right now
+      }
+    }
+
+    // A project removed from the registry (025 D-2) is forgotten here too, so
+    // a name re-registered against a different target does not resume from
+    // some other chain's sequence.
+    for (const key of [...lastSeq.keys()]) {
+      if (!live.has(key)) {
+        lastSeq.delete(key);
+        lastQuotaTickMs.delete(key);
+      }
     }
 
     return published;
   }
+
+  for (const source of options.sources()) markTail(source);
 
   const timer = setInterval(pumpOnce, intervalMs);
   timer.unref?.();

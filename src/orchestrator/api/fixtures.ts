@@ -1,13 +1,14 @@
-// Test support for the API territory (spec 022 FR-001: "route tests run
-// against an in-process server with a fixture journal"). Nothing here is
-// imported by the served code; it exists so state.test.ts, events.test.ts,
-// and server.test.ts build the same realistic journal instead of three
-// slightly different ones.
+// Test support for the API territory (spec 027 FR-001: "route tests run
+// against an in-process v2 server with a fixture registry and two fixture
+// project journals"). Nothing here is imported by the served code; it exists
+// so state.test.ts, events.test.ts, and server.test.ts build the same
+// realistic world instead of three slightly different ones.
 //
-// The journal is a real one (openJournal, hash-linked, fsynced) driven
-// through the real state-machine helpers, so the read models under test fold
-// exactly the records a live daemon would have written, not a hand-shaped
-// approximation of them.
+// Every chain is a real one (openJournal, hash-linked, fsynced) driven
+// through the real state-machine and registry helpers, so the read models
+// under test fold exactly the records a live daemon would have written, not a
+// hand-shaped approximation of them. The registry is spec 025's own chain,
+// folded by spec 025's own fold.
 import * as fs from "fs";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
@@ -17,7 +18,19 @@ import { openDecisionsChain } from "../decisions";
 import { createRun, createSpecExec, createStageExec, foldOrchestratorState, transition } from "../state";
 import { pinOfBytes, type DagReader } from "../dag";
 import { journalPark } from "../quota";
-import type { ControlTarget } from "./server";
+import {
+  foldProjects,
+  openProjectsChain,
+  registerProject,
+  removeProject,
+  requalifyProject,
+  setProjectArmed,
+  type Project,
+  type ProjectSource,
+  type ProjectsSnapshot,
+  type QualificationVerdict,
+} from "../projects";
+import { journalViewFromHandle, type ApiDeps, type ControlTarget, type DaemonStatus, type ProjectApi, type ProjectsTarget } from "./server";
 
 export interface FixtureSpec {
   readonly dependsOn?: readonly string[];
@@ -245,5 +258,170 @@ export function fixtureControls(journal: JournalHandle): ControlTarget {
     approve(specId: string, source: string): void {
       journal.append("control.approve", { specId, source });
     },
+  };
+}
+
+// --- the fixture registry (spec 027 FR-001) ---------------------------------
+
+// A qualification verdict shaped like spec 025's own probe would produce,
+// without shelling out to git and spec-spine: the API only ever reads a
+// recorded verdict back, so the checks below are the shape it reads, and the
+// unqualified variant carries its reason exactly as 025 B-4 requires.
+export function fixtureQualification(qualified = true): QualificationVerdict {
+  if (qualified) {
+    return {
+      qualified: true,
+      checks: [
+        { id: "git-repo", ok: true, detail: "git work tree root" },
+        { id: "specs-present", ok: true, detail: "3 spec(s) under specs/" },
+      ],
+      warnings: [],
+    };
+  }
+  return {
+    qualified: false,
+    checks: [
+      { id: "git-repo", ok: true, detail: "git work tree root" },
+      { id: "origin-remote", ok: false, detail: `no "origin" remote` },
+    ],
+    warnings: ["this target does not gitignore data/"],
+  };
+}
+
+export interface FixtureProjectOptions {
+  readonly armed?: boolean;
+  readonly qualified?: boolean;
+  // A project with no live run has no controls attached, which is what the
+  // daemon reports for one sitting in the registry untouched.
+  readonly controls?: boolean;
+  readonly specs?: Record<string, FixtureSpec>;
+}
+
+export interface FixtureRegistry {
+  // The daemon home (010 D13): the registry chain lives here, and no
+  // project's state root does.
+  readonly dir: string;
+  readonly chain: JournalHandle;
+  readonly target: ProjectsTarget;
+  // A state root the registry can be pointed at, created but not registered:
+  // what a `POST /api/projects` test needs to have somewhere to register.
+  world(prefix: string, specs?: Record<string, FixtureSpec>): FixtureWorld;
+  // Create and register in one step, the ordinary case.
+  add(name: string, options?: FixtureProjectOptions): FixtureWorld;
+  worldFor(name: string): FixtureWorld;
+  projects(): ProjectsSnapshot;
+  close(): void;
+}
+
+// The registry every route test runs against. `resourcesFor` keys on repoDir
+// rather than name, so a project registered through the API itself (whose
+// name the chain derives) still resolves to the world its path belongs to.
+export function freshRegistry(prefix: string): FixtureRegistry {
+  const dir = mkdtempSync(join(tmpdir(), `api-home-${prefix}-`));
+  const chain = openProjectsChain(dir);
+  const worlds = new Map<string, { world: FixtureWorld; controls: ControlTarget | null }>();
+
+  const projects = (): ProjectsSnapshot => foldProjects(chain.fold().records);
+
+  const target: ProjectsTarget = {
+    chain: journalViewFromHandle(chain),
+    projects,
+    resourcesFor(project: Project): ProjectApi {
+      const entry = worlds.get(project.repoDir);
+      if (entry === undefined) throw new Error(`fixtures: no world for ${project.repoDir}`);
+      return {
+        journal: journalViewFromHandle(entry.world.journal),
+        decisions: journalViewFromHandle(entry.world.decisions),
+        dagReader: entry.world.dagReader,
+        repoDir: entry.world.repoDir,
+        evidenceDir: entry.world.evidenceDir,
+        controls: entry.controls,
+      };
+    },
+    register(path: string, name: string | undefined, source: ProjectSource): void {
+      registerProject({
+        chain,
+        repoDir: path,
+        qualification: fixtureQualification(true),
+        source,
+        ...(name === undefined ? {} : { name }),
+      });
+    },
+    setArmed(name: string, armed: boolean, source: ProjectSource): void {
+      setProjectArmed({ chain, name, armed, source });
+    },
+    requalify(name: string, source: ProjectSource): void {
+      requalifyProject({ chain, name, qualification: fixtureQualification(true), source });
+    },
+    remove(name: string, source: ProjectSource): void {
+      removeProject({ chain, name, source });
+    },
+  };
+
+  const registry: FixtureRegistry = {
+    dir,
+    chain,
+    target,
+    world(worldPrefix: string, specs: Record<string, FixtureSpec> = FIXTURE_SPECS): FixtureWorld {
+      const world = freshWorld(worldPrefix, specs);
+      worlds.set(world.repoDir, { world, controls: fixtureControls(world.journal) });
+      return world;
+    },
+    add(name: string, options: FixtureProjectOptions = {}): FixtureWorld {
+      const world = registry.world(name, options.specs ?? FIXTURE_SPECS);
+      if (options.controls === false) worlds.set(world.repoDir, { world, controls: null });
+      registerProject({
+        chain,
+        repoDir: world.repoDir,
+        name,
+        armed: options.armed ?? true,
+        qualification: fixtureQualification(options.qualified ?? true),
+        source: "cli",
+      });
+      return world;
+    },
+    worldFor(name: string): FixtureWorld {
+      const project = projects().get(name);
+      const entry = project === undefined ? undefined : worlds.get(project.repoDir);
+      if (entry === undefined) throw new Error(`fixtures: no registered world named "${name}"`);
+      return entry.world;
+    },
+    projects,
+    close(): void {
+      try {
+        chain.close();
+      } catch {
+        // already closed
+      }
+      for (const entry of worlds.values()) entry.world.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+
+  return registry;
+}
+
+// A scheduler status source shaped like spec 026's own snapshot, so
+// `/api/meta` has a daemon to describe without one being booted.
+export function fixtureDaemon(status: Partial<DaemonStatus> = {}): { status(): DaemonStatus } {
+  const resolved: DaemonStatus = {
+    state: "standby",
+    activeProject: null,
+    scanIntervalMs: 60_000,
+    lastScanMs: null,
+    ...status,
+  };
+  return { status: () => resolved };
+}
+
+// The deps a route test hands `createApiServer`: a registry, a daemon to
+// report, and a pump that does not tick on its own unless the test asks.
+export function fixtureApiDeps(registry: FixtureRegistry, overrides: Partial<ApiDeps> = {}): ApiDeps {
+  return {
+    projects: registry.target,
+    daemon: fixtureDaemon(),
+    host: "127.0.0.1",
+    port: 0,
+    ...overrides,
   };
 }

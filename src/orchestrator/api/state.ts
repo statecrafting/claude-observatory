@@ -1,10 +1,16 @@
-// The read models behind every GET route (spec 022 B-3, B-6). Each function
-// here is pure over journal records plus, where the DAG needs it, a registry
-// snapshot and a pin lookup: there is no cached status anywhere in this
-// module that could disagree with a fold, because there is no cache at all.
-// Unknowns are serialized as explicit nulls (B-6), never as a plausible
-// default: a spec with no `implementation` field is `null`, not "pending";
-// a quota state with no park ever journaled has `targetMs: null`, not 0.
+// The read models behind every GET route (spec 022 B-3, B-6; spec 027 B-3,
+// B-4). Each function here is pure over journal records plus, where the DAG
+// needs it, a registry snapshot and a pin lookup: there is no cached status
+// anywhere in this module that could disagree with a fold, because there is
+// no cache at all. Unknowns are serialized as explicit nulls (B-6), never as
+// a plausible default: a spec with no `implementation` field is `null`, not
+// "pending"; a quota state with no park ever journaled has `targetMs: null`,
+// not 0.
+//
+// v2 scoping (027 B-3) shows up here as one extra argument: the project name
+// each view is folded for, carried into the payload so a response can never
+// be read as if it described "the one repo". The folds themselves are
+// unchanged; a project's journal is still just a journal.
 import type { JournalRecord, JsonValue } from "../journal";
 import { foldState } from "../journal";
 import type { OrchestratorState, FoldedStageExec } from "../state";
@@ -14,6 +20,7 @@ import { findCycle, invalidatedSet, nextReady, pinOf } from "../dag";
 import { foldQuotaState, shouldWarn } from "../quota";
 import type { DecisionQuery, DecisionRecord } from "../decisions";
 import { decisionRecordsFromChain, queryDecisions } from "../decisions";
+import type { Project } from "../projects";
 import type {
   DagSpecNode,
   DagView,
@@ -22,7 +29,10 @@ import type {
   HistoryEntry,
   HistoryStage,
   HistoryView,
+  ProjectView,
+  ProjectsView,
   QuotaView,
+  RunSummary,
   RunView,
   SpecBlockerView,
   SpecExecSummary,
@@ -200,6 +210,9 @@ export function workingSnapshot(
 }
 
 export interface DagViewInput {
+  // The project this fold is for (027 B-3); it names the answer, and every
+  // other field below belongs to that project alone.
+  readonly project: string;
   readonly records: readonly JournalRecord[];
   readonly snapshot: RegistrySnapshot;
   readonly reader: DagReader;
@@ -260,6 +273,7 @@ export function dagView(input: DagViewInput): DagView {
   }
 
   return {
+    project: input.project,
     specs,
     nextReady: nextReadyId,
     blockers,
@@ -306,7 +320,7 @@ function awaitingApprovalFrom(records: readonly JournalRecord[]): string[] {
   return [...waiting];
 }
 
-export function runView(records: readonly JournalRecord[]): RunView {
+export function runView(records: readonly JournalRecord[], project: string): RunView {
   const state = foldOrchestratorState(records);
   const runId = latestRunId(state);
   const run = runId === null ? null : (state.runs.get(runId) ?? null);
@@ -361,17 +375,20 @@ export function runView(records: readonly JournalRecord[]): RunView {
   // moving again it is history, not current state.
   if (run === null || run.status !== "paused") pauseReason = null;
 
+  const summary: RunSummary | null =
+    run === null
+      ? null
+      : {
+          id: run.id,
+          targetRepo: run.targetRepo,
+          createdTs: run.createdTs,
+          status: run.status,
+          needsReconcile: run.needsReconcile,
+        };
+
   return {
-    run:
-      run === null
-        ? null
-        : {
-            id: run.id,
-            targetRepo: run.targetRepo,
-            createdTs: run.createdTs,
-            status: run.status,
-            needsReconcile: run.needsReconcile,
-          },
+    project,
+    run: summary,
     spec,
     stage,
     pauseReason,
@@ -381,25 +398,108 @@ export function runView(records: readonly JournalRecord[]): RunView {
   };
 }
 
-// --- quota view (B-3) -------------------------------------------------------
+// --- the project collection (027 B-2) ---------------------------------------
 
-export function quotaView(records: readonly JournalRecord[], nowMs: number): QuotaView {
-  const folded = foldQuotaState(records);
-  const lastPark = folded.lastPark;
+export interface ProjectRowInput {
+  // The registry's own record of this project (spec 025), verdict included.
+  readonly project: Project;
+  // That project's work journal. Deferred rather than passed as an array so a
+  // state root that cannot be read fails per row, with the reason attached,
+  // instead of taking the whole collection down.
+  readonly records: () => readonly JournalRecord[];
+}
+
+// The folded registry with a current-run summary per project (B-2). Every
+// project the registry carries appears, armed or not, qualified or not: 025
+// B-4 keeps a refused target visible with its reasons, and hiding it here
+// would undo that.
+export function projectsView(rows: readonly ProjectRowInput[]): ProjectsView {
+  const projects: ProjectView[] = [];
+  for (const row of rows) {
+    const { project } = row;
+    const base = {
+      name: project.name,
+      repoDir: project.repoDir,
+      armed: project.armed,
+      qualification: project.qualification,
+    };
+    try {
+      const view = runView(row.records(), project.name);
+      projects.push({ ...base, run: view.run, spec: view.spec, stage: view.stage, readError: null });
+    } catch (err) {
+      projects.push({ ...base, run: null, spec: null, stage: null, readError: (err as Error).message });
+    }
+  }
+  return { projects };
+}
+
+// --- quota view (027 B-4) ---------------------------------------------------
+
+export interface ProjectQuotaInput {
+  readonly project: string;
+  readonly records: readonly JournalRecord[];
+}
+
+// The last quota record in a chain, whichever kind: the moment this project
+// last said anything about the pool, which is how the pool's current holder
+// is chosen below.
+function lastQuotaTs(records: readonly JournalRecord[]): string | null {
+  let ts: string | null = null;
+  for (const record of records) {
+    if (record.kind === "quota.parked" || record.kind === "quota.resumed") ts = record.ts;
+  }
+  return ts;
+}
+
+// Quota stays global (B-4): the account's quota is one pool (026 B-5), so
+// this is a fold across every registered project's journal rather than one
+// project's. At most one run holds the flight slot (010 D15), so at most one
+// project can be parked right now; that project's park is the pool's state.
+// With nothing parked, the most recently journaled park is what the streak
+// counter is read from, and the project it came from is named rather than
+// implied.
+export function quotaView(projects: readonly ProjectQuotaInput[], nowMs: number): QuotaView {
+  let holder: { project: string; parked: boolean; ts: string; targetMs: number; estimated: boolean; streak: number } | null = null;
+
+  for (const entry of projects) {
+    const folded = foldQuotaState(entry.records);
+    if (folded.lastPark === null) continue;
+    const ts = lastQuotaTs(entry.records) ?? "";
+    const candidate = {
+      project: entry.project,
+      parked: folded.parked,
+      ts,
+      targetMs: folded.lastPark.targetMs,
+      estimated: folded.lastPark.estimated,
+      streak: folded.lastPark.consecutiveQuotaParks,
+    };
+    // A parked project outranks an unparked one whatever the timestamps say:
+    // the pool is held now, and a later `quota.resumed` elsewhere does not
+    // release it.
+    if (holder === null) holder = candidate;
+    else if (candidate.parked && !holder.parked) holder = candidate;
+    else if (candidate.parked === holder.parked && candidate.ts > holder.ts) holder = candidate;
+  }
+
   return {
-    parked: folded.parked,
-    targetMs: lastPark?.targetMs ?? null,
-    estimated: lastPark?.estimated ?? null,
-    msUntilTarget: lastPark ? lastPark.targetMs - nowMs : null,
-    consecutiveQuotaParks: lastPark?.consecutiveQuotaParks ?? 0,
-    warn: shouldWarn(lastPark?.consecutiveQuotaParks ?? 0),
+    parked: holder?.parked ?? false,
+    project: holder?.project ?? null,
+    targetMs: holder?.targetMs ?? null,
+    estimated: holder?.estimated ?? null,
+    msUntilTarget: holder === null ? null : holder.targetMs - nowMs,
+    consecutiveQuotaParks: holder?.streak ?? 0,
+    warn: shouldWarn(holder?.streak ?? 0),
     nowMs,
   };
 }
 
 // --- decisions view (B-3, spec 020 B-5) -------------------------------------
 
-export function decisionsView(records: readonly JournalRecord[], params: DecisionQueryParams): DecisionsView {
+export function decisionsView(
+  records: readonly JournalRecord[],
+  params: DecisionQueryParams,
+  project: string
+): DecisionsView {
   const chain: DecisionRecord[] = decisionRecordsFromChain(foldState(records));
   const query: DecisionQuery = {
     ...(params.specId !== undefined ? { specId: params.specId } : {}),
@@ -407,7 +507,7 @@ export function decisionsView(records: readonly JournalRecord[], params: Decisio
     ...(params.query !== undefined ? { text: params.query } : {}),
   };
   const matched = queryDecisions(chain, query);
-  return { query: params, total: matched.length, decisions: matched };
+  return { project, query: params, total: matched.length, decisions: matched };
 }
 
 // --- history view (B-3) -----------------------------------------------------
@@ -435,7 +535,7 @@ function emptyAccumulator(): EvidenceAccumulator {
 // serve. Shepherd's `logTailHash` is a hash of a CI log that was never
 // written to disk, so it is deliberately not offered here as if it were
 // fetchable.
-export function historyView(records: readonly JournalRecord[]): HistoryView {
+export function historyView(records: readonly JournalRecord[], project: string): HistoryView {
   const state = foldOrchestratorState(records);
 
   const stagesBySpecExec = new Map<string, HistoryStage[]>();
@@ -537,5 +637,5 @@ export function historyView(records: readonly JournalRecord[]): HistoryView {
     });
   }
 
-  return { entries };
+  return { project, entries };
 }

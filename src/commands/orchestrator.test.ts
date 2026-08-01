@@ -15,8 +15,8 @@ import { join } from "path";
 import { openJournal } from "../orchestrator/journal";
 import { openDecisionsChain } from "../orchestrator/decisions";
 import type { ProcessInspector } from "../orchestrator/daemon";
-import { createApiServer, journalViewFromHandle, type ApiServer } from "../orchestrator/api/server";
-import { fixtureControls, freshWorld, seedPark, seedRun, type FixtureWorld } from "../orchestrator/api/fixtures";
+import { createApiServer, type ApiServer, type ProjectsTarget } from "../orchestrator/api/server";
+import { fixtureApiDeps, freshRegistry, seedPark, seedRun, type FixtureWorld } from "../orchestrator/api/fixtures";
 import type { ApiResponse } from "../orchestrator/api/types";
 import {
   EXIT_FAILURE,
@@ -75,22 +75,9 @@ async function run(argv: readonly string[], overrides: Partial<OrchestratorCliDe
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
-function serverFor(world: FixtureWorld): ApiServer {
-  return createApiServer({
-    journal: journalViewFromHandle(world.journal),
-    decisions: journalViewFromHandle(world.decisions),
-    dagReader: world.dagReader,
-    repoDir: world.repoDir,
-    evidenceDir: world.evidenceDir,
-    controls: fixtureControls(world.journal),
-    host: "127.0.0.1",
-    port: 0,
-    // The SSE pump is irrelevant to the CLI and would otherwise tick for the
-    // life of every test in this file.
-    pumpIntervalMs: 60_000,
-  });
-}
-
+// One registered project is what the CLI addresses today: spec 028 adds the
+// `--project` flag, and until then `resolveProject` scopes every verb to the
+// sole registered one.
 async function withFixtureDaemon(
   prefix: string,
   body: (ctx: { world: FixtureWorld; url: string; dataDir: string }) => Promise<void>,
@@ -98,15 +85,20 @@ async function withFixtureDaemon(
     seedRun(world);
   }
 ): Promise<void> {
-  const world = freshWorld(prefix);
+  const registry = freshRegistry(prefix);
+  const world = registry.add("alpha");
   seed(world);
-  const server = serverFor(world);
+  const server = createApiServer(
+    // The SSE pump is irrelevant to the CLI and would otherwise tick for the
+    // life of every test in this file.
+    fixtureApiDeps(registry, { pumpIntervalMs: 60_000 })
+  );
   const dataDir = freshDataDir(prefix);
   try {
     await body({ world, url: server.url, dataDir });
   } finally {
     await server.stop();
-    world.close();
+    registry.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 }
@@ -699,19 +691,21 @@ test("daemon stop with nothing running is a satisfied no-op", async () => {
 // holds both chains open, exactly as the daemon does, while the API serves
 // reads through journalViewFromDir and the CLI talks to it over HTTP.
 test("the boot path's file-backed chain view serves the same answers to the cli", async () => {
-  const world = freshWorld("boot-view");
+  const registry = freshRegistry("boot-view");
+  const world = registry.add("alpha");
   seedRun(world);
-  const server = createApiServer({
-    journal: journalViewFromDir(world.dir),
-    decisions: journalViewFromDir(world.dir, "decisions"),
-    dagReader: world.dagReader,
-    repoDir: world.repoDir,
-    evidenceDir: world.evidenceDir,
-    controls: fixtureControls(world.journal),
-    host: "127.0.0.1",
-    port: 0,
-    pumpIntervalMs: 60_000,
-  });
+  // The one thing this test is about: the project's chains are read from disk
+  // through journalViewFromDir, exactly as the foreground boot serves them,
+  // rather than through the writer handle the fixture registry hands out.
+  const fileBacked: ProjectsTarget = {
+    ...registry.target,
+    resourcesFor: (project) => ({
+      ...registry.target.resourcesFor(project),
+      journal: journalViewFromDir(world.dir),
+      decisions: journalViewFromDir(world.dir, "decisions"),
+    }),
+  };
+  const server = createApiServer(fixtureApiDeps(registry, { projects: fileBacked, pumpIntervalMs: 60_000 }));
   const dataDir = freshDataDir("boot-view");
 
   try {
@@ -729,7 +723,7 @@ test("the boot path's file-backed chain view serves the same answers to the cli"
     expect(pause.out).toContain("journaled: seq");
   } finally {
     await server.stop();
-    world.close();
+    registry.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });

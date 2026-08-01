@@ -10,7 +10,10 @@
 export {
   API_ROUTES,
   API_VERSION,
+  PROJECT_CONTROL_VERBS,
+  PROJECT_ROUTES,
   SPEC_CONTROL_VERBS,
+  projectRoute,
 } from "../../src/orchestrator/api/types";
 
 export type {
@@ -23,6 +26,8 @@ export type {
   ApiResponse,
   ControlResult,
   ControlVerbToken,
+  DaemonMetaView,
+  DaemonState,
   DagSpecNode,
   DagView,
   DecisionQueryParams,
@@ -30,6 +35,10 @@ export type {
   EvidenceView,
   HistoryEntry,
   HistoryView,
+  ProjectControlResult,
+  ProjectControlVerb,
+  ProjectView,
+  ProjectsView,
   QuotaView,
   RunView,
   SpecBlockerView,
@@ -37,7 +46,7 @@ export type {
 } from "../../src/orchestrator/api/types";
 
 export { createApiClient } from "../../src/orchestrator/api/api-client";
-export type { ApiClient } from "../../src/orchestrator/api/api-client";
+export type { ApiClient, ProjectClient } from "../../src/orchestrator/api/api-client";
 
 import { createApiClient } from "../../src/orchestrator/api/api-client";
 import type { ApiClient } from "../../src/orchestrator/api/api-client";

@@ -7,7 +7,7 @@
 // a badge on the node, since a drifted dependency is the one condition that
 // silently changes what the whole backlog is allowed to do.
 import type { ReactNode } from "react";
-import type { ApiClient, ApiError, DagSpecNode, DagView, RunView, SpecControlVerb } from "../api";
+import type { ApiError, DagSpecNode, DagView, ProjectClient, RunView, SpecControlVerb } from "../api";
 import { shortHash } from "../format";
 import { Badge, Empty, ErrorNote, Panel, Unknown } from "../components/bits";
 import { ControlButton } from "../components/ControlButton";
@@ -21,7 +21,7 @@ export interface DagPanelProps {
   readonly dag: DagView | null;
   readonly error: ApiError | null;
   readonly stale?: boolean;
-  readonly client: ApiClient;
+  readonly client: ProjectClient | null;
   readonly run: RunView | null;
   readonly onApplied?: () => void;
   // Controls are hidden when the daemon reports it has none attached
@@ -132,7 +132,7 @@ function DagNode({
 }: {
   node: DagSpecNode;
   isNext: boolean;
-  client: ApiClient;
+  client: ProjectClient | null;
   run: RunView | null;
   onApplied?: () => void;
   controlsAvailable: boolean;

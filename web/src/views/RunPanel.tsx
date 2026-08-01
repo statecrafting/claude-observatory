@@ -9,7 +9,7 @@
 // page's own first render would be a number that looks journaled and is not.
 import { useState } from "react";
 import type { ReactNode } from "react";
-import type { ApiClient, ApiError, ApiEventType, RunView } from "../api";
+import type { ApiError, ApiEventType, ProjectClient, RunView } from "../api";
 import type { StreamEvent, StreamStatus } from "../store";
 import { ALL_EVENT_TYPES } from "../store";
 import { formatDuration, formatElapsed, formatTimestamp, parseTimestamp, shortHash, summarizePayload, UNKNOWN } from "../format";
@@ -22,7 +22,7 @@ export interface RunPanelProps {
   readonly events: readonly StreamEvent[];
   readonly stream: StreamStatus;
   readonly nowMs: number;
-  readonly client: ApiClient;
+  readonly client: ProjectClient | null;
   readonly stale?: boolean;
   readonly onApplied?: () => void;
   readonly onClearEvents?: () => void;
@@ -212,6 +212,13 @@ function LiveTail({
             <li key={event.key} className={`tail-item tail-${event.type}`}>
               <span className="tail-seq" title={event.seq === null ? "synthesized by the server, not a journal record" : undefined}>
                 {event.seq === null ? "synth" : event.seq}
+              </span>
+              {/* One stream carries every project (027 B-4), so a line that
+                  did not name its own would be unreadable here. A daemon-scoped
+                  event belongs to no project and says that rather than
+                  borrowing the selected one's name. */}
+              <span className="tail-project" title={event.project === null ? "a daemon-scoped event, not a project's" : undefined}>
+                {event.project ?? "daemon"}
               </span>
               <span className="tail-kind">{event.kind}</span>
               <span className="tail-ts">{event.ts === null ? "" : formatTimestamp(event.ts)}</span>

@@ -16,7 +16,15 @@ import { mount, flat, useDom, type Mounted } from "./harness";
 import { App } from "../src/App";
 import { createApiClient, type ApiClient } from "../../src/orchestrator/api/api-client";
 import { createApiServer, type ApiServer } from "../../src/orchestrator/api/server";
-import { fixtureControls, freshWorld, seedPark, seedRun, type FixtureWorld } from "../../src/orchestrator/api/fixtures";
+import {
+  fixtureApiDeps,
+  fixtureDaemon,
+  freshRegistry,
+  seedPark,
+  seedRun,
+  type FixtureRegistry,
+  type FixtureWorld,
+} from "../../src/orchestrator/api/fixtures";
 
 // Captured before happy-dom is registered. dom-setup.ts documents why this
 // matters: the registrator replaces `fetch`, `Response`, and `Request` with
@@ -30,6 +38,12 @@ const NATIVE_HEADERS = globalThis.Headers;
 
 useDom();
 
+// One registered project, which is what the shell's picker resolves to on its
+// own (027 B-3): the page names the project it is showing rather than serving
+// "the one repo" implicitly.
+const PROJECT = "alpha";
+
+let registry: FixtureRegistry;
 let world: FixtureWorld;
 let server: ApiServer;
 let client: ApiClient;
@@ -49,7 +63,8 @@ beforeAll(() => {
   globalThis.Request = NATIVE_REQUEST;
   globalThis.Headers = NATIVE_HEADERS;
 
-  world = freshWorld("web-e2e");
+  registry = freshRegistry("web-e2e");
+  world = registry.add(PROJECT);
   ({ betaSpecExecId } = seedRun(world));
   seedPark(world, PARK_TARGET_MS, 3, true);
 
@@ -63,23 +78,19 @@ beforeAll(() => {
     rationale: "Process lifecycle belongs to the daemon command, not to a route.",
   });
 
-  server = createApiServer({
-    journal: { records: () => world.journal.fold().records },
-    decisions: { records: () => world.decisions.fold().records },
-    dagReader: world.dagReader,
-    repoDir: world.repoDir,
-    evidenceDir: world.evidenceDir,
-    controls: fixtureControls(world.journal),
-    staticDir: null,
-    port: 0,
-  });
+  server = createApiServer(
+    fixtureApiDeps(registry, {
+      daemon: fixtureDaemon({ state: "scheduling", activeProject: PROJECT }),
+      staticDir: null,
+    })
+  );
 
   client = createApiClient({ baseUrl: server.url, fetch: NATIVE_FETCH, source: "web-ui" });
 });
 
 afterAll(async () => {
   if (!stopped) await server.stop();
-  world.close();
+  registry.close();
 });
 
 // The store fetches on mount, so the first paint is genuinely empty; these
@@ -179,6 +190,14 @@ test("the decisions view lists the sealed ledger the daemon serves", async () =>
       "the decisions view to render"
     );
 
+    // The ledger belongs to a project (027 B-3), so the form is only live once
+    // the registry has resolved one; that is also what the panel's own note
+    // says while it has not.
+    await waitFor(
+      () => flat(view.container.textContent ?? "").includes(`/api/projects/${PROJECT}/decisions`),
+      "the decisions view to be scoped to a project"
+    );
+
     await view.click("decisions-search");
     await waitFor(() => view.query("decisions-total") !== null, "the ledger query to answer");
 
@@ -224,15 +243,9 @@ test("killing the daemon mid-view says so rather than leaving a live-looking das
 // The recovery direction: an unreachable daemon that answers again refolds
 // rather than leaving the banner up over fresh data.
 test("a daemon that comes back is reported as reachable again", async () => {
-  const revived = createApiServer({
-    journal: { records: () => world.journal.fold().records },
-    decisions: { records: () => world.decisions.fold().records },
-    dagReader: world.dagReader,
-    repoDir: world.repoDir,
-    evidenceDir: world.evidenceDir,
-    staticDir: null,
-    port: 0,
-  });
+  const revived = createApiServer(
+    fixtureApiDeps(registry, { controlsAvailable: false, staticDir: null })
+  );
   const revivedClient = createApiClient({ baseUrl: revived.url, fetch: NATIVE_FETCH, source: "web-ui" });
 
   window.location.hash = "#/run";

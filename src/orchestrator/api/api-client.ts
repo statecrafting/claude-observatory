@@ -1,11 +1,18 @@
-// The typed fetch wrapper every client uses (spec 022 FR-002): the CLI
-// (spec 023) and the web UI (spec 024) both talk to the daemon through this
-// and never hand-build a URL or re-declare a response shape.
+// The typed fetch wrapper every client uses (spec 022 FR-002, spec 027
+// FR-002): the CLI (spec 023) and the web UI (spec 024) both talk to the
+// daemon through this and never hand-build a URL or re-declare a response
+// shape.
 //
 // "Generated" in the sense that matters: nothing here is a second copy of
-// the contract. The paths come from API_ROUTES and the payload types come
-// from types.ts, both shared verbatim with the server, so a route or a shape
-// cannot drift between the two halves without failing typecheck.
+// the contract. The paths come from API_ROUTES and PROJECT_ROUTES and the
+// payload types come from types.ts, both shared verbatim with the server, so
+// a route or a shape cannot drift between the two halves without failing
+// typecheck. No v1 path survives in either table.
+//
+// v2's shape follows the API's own (027 B-1): the client itself carries the
+// global routes, and `client.project(name)` returns the scoped half. A caller
+// that has not decided which project it means cannot accidentally address one,
+// because there is no unscoped `dag()` to call.
 //
 // Every method returns the same envelope the server serves, including for
 // failures that never reached the server: an unreachable daemon becomes
@@ -18,6 +25,9 @@ import {
   API_VERSION_HEADER,
   CONTROL_SOURCE_HEADER,
   DEFAULT_CONTROL_SOURCE,
+  EVENTS_PROJECT_PARAM,
+  PROJECT_ROUTES,
+  projectRoute,
   type ApiErrorKind,
   type ApiMeta,
   type ApiResponse,
@@ -27,7 +37,10 @@ import {
   type DecisionsView,
   type EvidenceView,
   type HistoryView,
+  type ProjectControlResult,
+  type ProjectsView,
   type QuotaView,
+  type RegisterProjectRequest,
   type RunView,
 } from "./types";
 
@@ -41,13 +54,14 @@ export interface ApiClientOptions {
   readonly source?: string;
 }
 
-export interface ApiClient {
-  readonly baseUrl: string;
-  readonly eventsUrl: string;
-  meta(): Promise<ApiResponse<ApiMeta>>;
+// The project-scoped half of the API (027 B-3, B-5). Every method here
+// addresses one named project, and the name is fixed when the sub-client is
+// made rather than passed to each call, so no call site can mix two projects
+// by accident.
+export interface ProjectClient {
+  readonly name: string;
   dag(): Promise<ApiResponse<DagView>>;
   run(): Promise<ApiResponse<RunView>>;
-  quota(): Promise<ApiResponse<QuotaView>>;
   decisions(query?: DecisionQueryParams): Promise<ApiResponse<DecisionsView>>;
   history(): Promise<ApiResponse<HistoryView>>;
   evidence(hash: string): Promise<ApiResponse<EvidenceView>>;
@@ -60,6 +74,24 @@ export interface ApiClient {
   reverify(specId: string): Promise<ApiResponse<ControlResult>>;
   forceHumanGate(specId: string): Promise<ApiResponse<ControlResult>>;
   approve(specId: string): Promise<ApiResponse<ControlResult>>;
+}
+
+// The global half: daemon meta, the account's one quota pool, the registry
+// and its controls, and the one event stream (027 B-2, B-4).
+export interface ApiClient {
+  readonly baseUrl: string;
+  // Omitting the project subscribes to everything; naming one applies the
+  // server-side filter, which still carries daemon-scoped events.
+  eventsUrl(project?: string): string;
+  meta(): Promise<ApiResponse<ApiMeta>>;
+  quota(): Promise<ApiResponse<QuotaView>>;
+  projects(): Promise<ApiResponse<ProjectsView>>;
+  registerProject(request: RegisterProjectRequest): Promise<ApiResponse<ProjectControlResult>>;
+  armProject(name: string): Promise<ApiResponse<ProjectControlResult>>;
+  disarmProject(name: string): Promise<ApiResponse<ProjectControlResult>>;
+  requalifyProject(name: string): Promise<ApiResponse<ProjectControlResult>>;
+  removeProject(name: string): Promise<ApiResponse<ProjectControlResult>>;
+  project(name: string): ProjectClient;
 }
 
 function clientError<T>(kind: ApiErrorKind, message: string): ApiResponse<T> {
@@ -115,40 +147,68 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     return parseEnvelope<T>(text);
   }
 
-  const post = <T>(path: string): Promise<ApiResponse<T>> => request<T>(path, { method: "POST" });
+  const post = <T>(path: string, body?: unknown): Promise<ApiResponse<T>> =>
+    request<T>(path, {
+      method: "POST",
+      ...(body === undefined
+        ? {}
+        : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    });
 
-  function decisionsPath(query: DecisionQueryParams | undefined): string {
-    if (!query) return API_ROUTES.decisions;
+  function decisionsPath(project: string, query: DecisionQueryParams | undefined): string {
+    const base = projectRoute(project, PROJECT_ROUTES.decisions);
+    if (!query) return base;
     const params = new URLSearchParams();
     if (query.query !== undefined) params.set("query", query.query);
     if (query.specId !== undefined) params.set("specId", query.specId);
     if (query.path !== undefined) params.set("path", query.path);
     const encoded = params.toString();
-    return encoded.length === 0 ? API_ROUTES.decisions : `${API_ROUTES.decisions}?${encoded}`;
+    return encoded.length === 0 ? base : `${base}?${encoded}`;
   }
 
-  function specControlPath(specId: string, verb: string): string {
-    return `${API_ROUTES.specPrefix}${encodeURIComponent(specId)}/${verb}`;
+  // D-1: a project name needs no escaping, so it goes into the path as it is.
+  // A spec id and an evidence hash are not slugs and still do.
+  function specControlPath(project: string, specId: string, verb: string): string {
+    return projectRoute(project, `${PROJECT_ROUTES.specPrefix}${encodeURIComponent(specId)}/${verb}`);
+  }
+
+  function projectClient(name: string): ProjectClient {
+    const evidencePath = (hash: string): string =>
+      projectRoute(name, `${PROJECT_ROUTES.evidencePrefix}${encodeURIComponent(hash)}`);
+
+    return {
+      name,
+      dag: () => request<DagView>(projectRoute(name, PROJECT_ROUTES.dag)),
+      run: () => request<RunView>(projectRoute(name, PROJECT_ROUTES.run)),
+      decisions: (query) => request<DecisionsView>(decisionsPath(name, query)),
+      history: () => request<HistoryView>(projectRoute(name, PROJECT_ROUTES.history)),
+      evidence: (hash) => request<EvidenceView>(evidencePath(hash)),
+      evidenceUrl: (hash) => `${baseUrl}${evidencePath(hash)}?raw=1`,
+      startRun: () => post<ControlResult>(projectRoute(name, PROJECT_ROUTES.runStart)),
+      pauseRun: () => post<ControlResult>(projectRoute(name, PROJECT_ROUTES.runPause)),
+      resumeRun: () => post<ControlResult>(projectRoute(name, PROJECT_ROUTES.runResume)),
+      skipSpec: (specId) => post<ControlResult>(specControlPath(name, specId, "skip")),
+      retryStage: (specId) => post<ControlResult>(specControlPath(name, specId, "retry-stage")),
+      reverify: (specId) => post<ControlResult>(specControlPath(name, specId, "reverify")),
+      forceHumanGate: (specId) => post<ControlResult>(specControlPath(name, specId, "force-human-gate")),
+      approve: (specId) => post<ControlResult>(specControlPath(name, specId, "approve")),
+    };
   }
 
   return {
     baseUrl,
-    eventsUrl: `${baseUrl}${API_ROUTES.events}`,
+    eventsUrl: (project) =>
+      project === undefined
+        ? `${baseUrl}${API_ROUTES.events}`
+        : `${baseUrl}${API_ROUTES.events}?${EVENTS_PROJECT_PARAM}=${encodeURIComponent(project)}`,
     meta: () => request<ApiMeta>(API_ROUTES.meta),
-    dag: () => request<DagView>(API_ROUTES.dag),
-    run: () => request<RunView>(API_ROUTES.run),
     quota: () => request<QuotaView>(API_ROUTES.quota),
-    decisions: (query) => request<DecisionsView>(decisionsPath(query)),
-    history: () => request<HistoryView>(API_ROUTES.history),
-    evidence: (hash) => request<EvidenceView>(`${API_ROUTES.evidencePrefix}${encodeURIComponent(hash)}`),
-    evidenceUrl: (hash) => `${baseUrl}${API_ROUTES.evidencePrefix}${encodeURIComponent(hash)}?raw=1`,
-    startRun: () => post<ControlResult>(API_ROUTES.runStart),
-    pauseRun: () => post<ControlResult>(API_ROUTES.runPause),
-    resumeRun: () => post<ControlResult>(API_ROUTES.runResume),
-    skipSpec: (specId) => post<ControlResult>(specControlPath(specId, "skip")),
-    retryStage: (specId) => post<ControlResult>(specControlPath(specId, "retry-stage")),
-    reverify: (specId) => post<ControlResult>(specControlPath(specId, "reverify")),
-    forceHumanGate: (specId) => post<ControlResult>(specControlPath(specId, "force-human-gate")),
-    approve: (specId) => post<ControlResult>(specControlPath(specId, "approve")),
+    projects: () => request<ProjectsView>(API_ROUTES.projects),
+    registerProject: (registration) => post<ProjectControlResult>(API_ROUTES.projects, registration),
+    armProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.arm)),
+    disarmProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.disarm)),
+    requalifyProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.requalify)),
+    removeProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.remove)),
+    project: projectClient,
   };
 }

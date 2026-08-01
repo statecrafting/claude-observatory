@@ -1,9 +1,13 @@
 // The decision-ledger browser (spec 024 B-5).
 //
-// The three inputs are a straight passthrough to /api/decisions' own query
+// The three inputs are a straight passthrough to the ledger route's own query
 // parameters (spec 020 B-5's query surface); no filtering happens in the
 // browser, so what is listed is what the daemon matched, and the same query
 // typed into `observatory orchestrator decisions` returns the same set.
+//
+// The ledger is a project's own (spec 027 B-3), so this panel refuses to
+// search while no project is selected rather than issuing a query with no
+// scope behind it.
 import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type { ApiError, DecisionQueryParams, DecisionsView } from "../api";
@@ -12,17 +16,21 @@ import { Empty, ErrorNote, Panel } from "../components/bits";
 export interface DecisionsPanelProps {
   readonly decisions: DecisionsView | null;
   readonly error: ApiError | null;
+  // The project whose ledger this queries; null until the registry resolves
+  // one, which disables the form rather than guessing a scope.
+  readonly project: string | null;
   readonly onSearch: (query: DecisionQueryParams) => void;
   readonly stale?: boolean;
 }
 
-export function DecisionsPanel({ decisions, error, onSearch, stale = false }: DecisionsPanelProps): ReactNode {
+export function DecisionsPanel({ decisions, error, project, onSearch, stale = false }: DecisionsPanelProps): ReactNode {
   const [text, setText] = useState("");
   const [specId, setSpecId] = useState("");
   const [path, setPath] = useState("");
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
+    if (project === null) return;
     onSearch({
       ...(text.trim().length > 0 ? { query: text.trim() } : {}),
       ...(specId.trim().length > 0 ? { specId: specId.trim() } : {}),
@@ -35,9 +43,14 @@ export function DecisionsPanel({ decisions, error, onSearch, stale = false }: De
       title="Decisions"
       stale={stale}
       note={
-        <>
-          Queries go to <code>/api/decisions</code> unchanged. An empty form lists the whole sealed ledger.
-        </>
+        project === null ? (
+          <>No project is selected, so there is no ledger to query.</>
+        ) : (
+          <>
+            Queries go to <code>{`/api/projects/${project}/decisions`}</code> unchanged. An empty form lists that
+            project&apos;s whole sealed ledger.
+          </>
+        )
       }
     >
       <form className="decision-form" onSubmit={submit}>
@@ -53,7 +66,7 @@ export function DecisionsPanel({ decisions, error, onSearch, stale = false }: De
           path
           <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="src/orchestrator/api/" />
         </label>
-        <button type="submit" data-testid="decisions-search">
+        <button type="submit" data-testid="decisions-search" disabled={project === null}>
           search
         </button>
       </form>

@@ -7,9 +7,14 @@
 // are marked stale, and every panel already carries the moment its data was
 // confirmed. That is AC-2's "explicit daemon unreachable state, not a
 // stale-but-live-looking dashboard".
-import { useCallback, useEffect, useState } from "react";
+//
+// v2 adds the project picker (spec 027 B-3). One daemon answers for many
+// projects, so the shell has to name which one the panels below are showing;
+// the scoped sub-client is built from that selection and handed down, which is
+// what stops any panel from addressing a project the header does not name.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { ApiClient, DecisionQueryParams } from "./api";
+import type { ApiClient, DecisionQueryParams, ProjectView } from "./api";
 import { eventsUrl as defaultEventsUrl } from "./api";
 import { useObservatory } from "./store";
 import type { EventSourceLike } from "./store";
@@ -75,8 +80,24 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
     [actions]
   );
 
+  const selectProject = useCallback(
+    (name: string): void => {
+      void actions.selectProject(name);
+    },
+    [actions]
+  );
+
   const stale = state.reach !== "reachable";
   const controlsAvailable = state.meta.data?.controlsAvailable ?? true;
+
+  // Every scoped panel talks to one project or to none (027 B-5). Building the
+  // sub-client here, from the one selection the header renders, is what makes
+  // that structural rather than a convention each panel has to keep.
+  const projectClient = useMemo(
+    () => (state.project === null ? null : client.project(state.project)),
+    [client, state.project]
+  );
+  const projects = state.projects.data?.projects ?? [];
 
   return (
     <div className="app">
@@ -95,11 +116,25 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
           ))}
         </nav>
         <div className="app-meta">
+          <ProjectPicker
+            projects={projects}
+            selected={state.project}
+            onSelect={selectProject}
+            loaded={state.projects.data !== null}
+          />
           {state.meta.data === null ? null : (
             <>
               <Badge tone="neutral" title="the wire contract this daemon serves">
                 api v{state.meta.data.apiVersion}
               </Badge>
+              {state.meta.data.daemon === null ? null : (
+                <Badge
+                  tone={state.meta.data.daemon.state === "standby" ? "neutral" : "good"}
+                  title="what the daemon itself is doing, across every project"
+                >
+                  daemon {state.meta.data.daemon.state}
+                </Badge>
+              )}
               {state.meta.data.loopbackOnly ? <Badge tone="neutral">loopback only</Badge> : null}
               {controlsAvailable ? null : <Badge tone="warn">read-only daemon</Badge>}
             </>
@@ -125,7 +160,7 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
             events={state.events}
             stream={state.stream}
             nowMs={now}
-            client={client}
+            client={projectClient}
             stale={stale}
             onApplied={refresh}
             onClearEvents={actions.clearEvents}
@@ -137,7 +172,7 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
           <DagPanel
             dag={state.dag.data}
             error={state.dag.error}
-            client={client}
+            client={projectClient}
             run={state.run.data}
             stale={stale}
             onApplied={refresh}
@@ -156,11 +191,17 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
         ) : null}
 
         {view === "decisions" ? (
-          <DecisionsPanel decisions={state.decisions.data} error={state.decisions.error} onSearch={search} stale={stale} />
+          <DecisionsPanel
+            decisions={state.decisions.data}
+            error={state.decisions.error}
+            project={state.project}
+            onSearch={search}
+            stale={stale}
+          />
         ) : null}
 
         {view === "history" ? (
-          <HistoryPanel history={state.history.data} error={state.history.error} client={client} stale={stale} />
+          <HistoryPanel history={state.history.data} error={state.history.error} client={projectClient} stale={stale} />
         ) : null}
       </main>
 
@@ -187,6 +228,58 @@ function resourceLoadedAt(state: ReturnType<typeof useObservatory>["state"], vie
     case "history":
       return state.history.loadedAtMs;
   }
+}
+
+// Which project the scoped panels are showing, and the means to change it.
+// It renders as an explicit unknown in the two cases that are not a project:
+// a registry that has not been folded yet, and one that is genuinely empty.
+// Neither is allowed to look like a project named nothing.
+function ProjectPicker({
+  projects,
+  selected,
+  onSelect,
+  loaded,
+}: {
+  projects: readonly ProjectView[];
+  selected: string | null;
+  onSelect: (name: string) => void;
+  loaded: boolean;
+}): ReactNode {
+  if (!loaded) {
+    return (
+      <span className="project-picker muted" data-testid="project-picker">
+        no registry read yet
+      </span>
+    );
+  }
+  if (projects.length === 0) {
+    return (
+      <span className="project-picker muted" data-testid="project-picker">
+        no project is registered
+      </span>
+    );
+  }
+
+  return (
+    <label className="project-picker" data-testid="project-picker">
+      <span className="field-label">project</span>
+      <select
+        value={selected ?? ""}
+        onChange={(event) => onSelect(event.target.value)}
+        data-testid="project-select"
+      >
+        {projects.map((project) => (
+          <option key={project.name} value={project.name}>
+            {/* 025 B-4's verdict travels with the name: a project the daemon
+                will not drive should not read as one it will. */}
+            {project.name}
+            {project.qualification.qualified ? "" : " (unqualified)"}
+            {project.armed ? "" : " (disarmed)"}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 function ConnectionBanner({

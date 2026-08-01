@@ -25,25 +25,32 @@ import { spawn } from "child_process";
 import * as fs from "fs";
 import { join } from "path";
 import { DATA_DIR, PROJECT_DIR } from "../paths";
-import { verifyChain, type JournalRecord } from "../orchestrator/journal";
-import { createApiClient, type ApiClient } from "../orchestrator/api/api-client";
+import { verifyChain, type JournalHandle, type JournalRecord } from "../orchestrator/journal";
+import { createApiClient, type ApiClient, type ProjectClient } from "../orchestrator/api/api-client";
 import {
   DEFAULT_API_HOST,
   DEFAULT_API_PORT,
   createApiServer,
   type ApiServer,
-  type ControlTarget,
   type JournalView,
+  type ProjectsTarget,
 } from "../orchestrator/api/server";
-import {
-  Daemon,
-  createProcessInspector,
-  createProductionDaemonDeps,
-  type ProcessInspector,
-} from "../orchestrator/daemon";
+import { createProcessInspector, createProductionDaemonDeps, type ProcessInspector } from "../orchestrator/daemon";
 import { StandbyDaemon } from "../orchestrator/standby";
 import { createProcessDagReader } from "../orchestrator/dag";
-import { createProcessProjectProbe, projectStateRoot } from "../orchestrator/projects";
+import {
+  createProcessProjectProbe,
+  foldProjects,
+  projectStateRoot,
+  qualifyProject,
+  registerProject,
+  removeProject,
+  requalifyProject,
+  setProjectArmed,
+  type Project,
+  type ProjectProbe,
+  type ProjectSource,
+} from "../orchestrator/projects";
 import type {
   ApiErrorKind,
   ApiResponse,
@@ -475,12 +482,41 @@ function renderControl(result: ControlResult): string[] {
 
 // --- API-backed commands (B-1) ----------------------------------------------
 
+// Which project a project-scoped verb addresses. Spec 028 gives the CLI its
+// own `--project <name>`; until it does, the sole registered project is the
+// only unambiguous answer, and zero or several is refused by name rather than
+// guessed at. That refusal used to live in the daemon, back when the routes
+// could not say which project they meant; spec 027 moved the scope into the
+// path, so choosing is the client's job now.
+async function resolveProject(client: ApiClient): Promise<ApiResponse<ProjectClient>> {
+  const listed = await client.projects();
+  if (!listed.ok) return listed;
+  const names = listed.data.projects.map((project) => project.name);
+  if (names.length === 1) return { ok: true, data: client.project(names[0]!) };
+  if (names.length === 0) {
+    return { ok: false, error: { kind: "not-found", message: "no projects are registered with this daemon" } };
+  }
+  return {
+    ok: false,
+    error: {
+      kind: "conflict",
+      message: `${names.length} projects are registered (${names.join(", ")}); naming one arrives with spec 028's --project flag`,
+    },
+  };
+}
+
 // `status` is the one composite read: a run without its quota state cannot
-// answer "what is it doing" honestly, because a parked run looks idle. Both
-// halves travel as the shapes types.ts already defines, so `--json` is still
-// the served envelopes and not a third declaration of either.
-async function cmdStatus(deps: OrchestratorCliDeps, client: ApiClient, json: boolean): Promise<number> {
-  const [run, quota] = await Promise.all([client.run(), client.quota()]);
+// answer "what is it doing" honestly, because a parked run looks idle. The
+// run is the project's and the quota is the account's (027 B-4), and both
+// travel as the shapes types.ts already defines, so `--json` is still the
+// served envelopes and not a third declaration of either.
+async function cmdStatus(
+  deps: OrchestratorCliDeps,
+  client: ApiClient,
+  project: ProjectClient,
+  json: boolean
+): Promise<number> {
+  const [run, quota] = await Promise.all([project.run(), client.quota()]);
   if (!run.ok) return respond(deps, json, run, () => []);
   if (!quota.ok) return respond(deps, json, quota, () => []);
   const composed: ApiResponse<{ run: RunView; quota: QuotaView }> = { ok: true, data: { run: run.data, quota: quota.data } };
@@ -499,17 +535,17 @@ const SPEC_VERB_ALIASES: Readonly<Record<string, SpecControlVerb>> = {
 
 async function cmdSpecControl(
   deps: OrchestratorCliDeps,
-  client: ApiClient,
+  project: ProjectClient,
   json: boolean,
   specId: string,
   verb: SpecControlVerb
 ): Promise<number> {
   const call: Record<SpecControlVerb, () => Promise<ApiResponse<ControlResult>>> = {
-    skip: () => client.skipSpec(specId),
-    "retry-stage": () => client.retryStage(specId),
-    reverify: () => client.reverify(specId),
-    "force-human-gate": () => client.forceHumanGate(specId),
-    approve: () => client.approve(specId),
+    skip: () => project.skipSpec(specId),
+    "retry-stage": () => project.retryStage(specId),
+    reverify: () => project.reverify(specId),
+    "force-human-gate": () => project.forceHumanGate(specId),
+    approve: () => project.approve(specId),
   };
   return respond(deps, json, await call[verb](), renderControl);
 }
@@ -845,33 +881,67 @@ export function journalViewFromDir(dir: string, basename?: string): JournalView 
   };
 }
 
-// Spec 026 leaves the project-scoped API to spec 027. Until then the control
-// routes spec 022 already serves address the run that holds the flight slot,
-// or the single paused run waiting on a human when the daemon is in standby.
-// An absent or ambiguous target throws, which `runControl` turns into a
-// `conflict` naming the candidates: a control applied to the wrong project
-// would be worse than one honestly refused.
-function standbyControls(standby: StandbyDaemon): ControlTarget {
-  const target = (): Daemon => {
-    const active = standby.activeDaemon;
-    if (active) return active;
-    const live = standby.liveDaemons;
-    if (live.length === 1) return live[0]![1];
-    if (live.length === 0) {
-      throw new Error("no run is in flight; the daemon is in standby (project-scoped controls arrive with spec 027)");
-    }
-    throw new Error(
-      `${live.length} runs are live (${live.map(([name]) => name).join(", ")}); project-scoped controls arrive with spec 027`
-    );
+// The registry the v2 API reads and mutates (spec 027 B-2), composed out of
+// the scheduler the daemon already runs. Three things make this a composition
+// rather than a second implementation: the projects chain is the scheduler's
+// own writer handle (spec 011 B-2 allows exactly one, and 026 says a control
+// surface mutates through it), every project's journals are read from that
+// project's state root inside the target (010 D13), and a project's controls
+// are the live Daemon driving it, or null when nothing is driving it, which
+// is the honest answer rather than a fabricated one.
+function standbyProjects(standby: StandbyDaemon, probe: ProjectProbe): ProjectsTarget {
+  const dagReader = createProcessDagReader();
+  // One cached reader per state root: `journalViewFromDir` keys its cache on
+  // the chain file's size and mtime, and a fresh reader per request would
+  // throw that cache away every time.
+  const views = new Map<string, { readonly journal: JournalView; readonly decisions: JournalView }>();
+
+  const chain = (): JournalHandle => standby.projectsChain;
+  const fold = (): ReadonlyMap<string, Project> => foldProjects(chain().fold().records);
+  const live = (name: string): Project => {
+    const project = fold().get(name);
+    if (!project) throw new Error(`projects: no registered project named "${name}"`);
+    return project;
   };
+
   return {
-    pause: (source) => target().pause(source),
-    resume: (source) => target().resume(source),
-    skipSpec: (specId, source) => target().skipSpec(specId, source),
-    retryStage: (specId, source) => target().retryStage(specId, source),
-    reverify: (specId, source) => target().reverify(specId, source),
-    forceHumanGate: (specId, source) => target().forceHumanGate(specId, source),
-    approve: (specId, source) => target().approve(specId, source),
+    chain: { records: () => chain().fold().records },
+    projects: fold,
+    resourcesFor(project: Project) {
+      const stateRoot = projectStateRoot(project.repoDir);
+      let cached = views.get(stateRoot);
+      if (cached === undefined) {
+        cached = { journal: journalViewFromDir(stateRoot), decisions: journalViewFromDir(stateRoot, "decisions") };
+        views.set(stateRoot, cached);
+      }
+      return {
+        journal: cached.journal,
+        decisions: cached.decisions,
+        dagReader,
+        repoDir: project.repoDir,
+        evidenceDir: join(stateRoot, "verify-evidence"),
+        controls: standby.daemonFor(project.name),
+      };
+    },
+    register(path: string, name: string | undefined, source: ProjectSource): void {
+      registerProject({
+        chain: chain(),
+        repoDir: path,
+        qualification: qualifyProject(probe, path),
+        source,
+        ...(name === undefined ? {} : { name }),
+      });
+    },
+    setArmed(name: string, armed: boolean, source: ProjectSource): void {
+      setProjectArmed({ chain: chain(), name, armed, source });
+    },
+    requalify(name: string, source: ProjectSource): void {
+      const project = live(name);
+      requalifyProject({ chain: chain(), name, qualification: qualifyProject(probe, project.repoDir), source });
+    },
+    remove(name: string, source: ProjectSource): void {
+      removeProject({ chain: chain(), name, source });
+    },
   };
 }
 
@@ -887,6 +957,7 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
   const bind = parseBind(url);
   if (bind === null) return usage(deps, `--url ${url} is not a usable base url`);
 
+  const probe = createProcessProjectProbe();
   const standby = new StandbyDaemon({
     daemonHomeDir: deps.dataDir,
     // 010 D13: each project's state root lives inside that project, in
@@ -905,7 +976,7 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
     // 026 D-3: a registry that has never held a record adopts the checkout
     // this daemon was pointed at, so `--repo` keeps meaning what it meant
     // before there was a registry to point at instead.
-    bootstrap: { repoDir: deps.repoDir, probe: createProcessProjectProbe() },
+    bootstrap: { repoDir: deps.repoDir, probe },
   });
 
   try {
@@ -921,12 +992,11 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
   let server: ApiServer;
   try {
     server = createApiServer({
-      journal: journalViewFromDir(deps.dataDir),
-      decisions: journalViewFromDir(deps.dataDir, "decisions"),
-      dagReader: createProcessDagReader(),
-      repoDir: deps.repoDir,
-      evidenceDir: join(deps.dataDir, "verify-evidence"),
-      controls: standbyControls(standby),
+      projects: standbyProjects(standby, probe),
+      // 027 B-4: the scheduler's own state is what `/api/meta` reports, so
+      // "standby" is served as the first-class state it is rather than
+      // inferred from an absence of activity.
+      daemon: { status: () => standby.snapshot },
       host: bind.host,
       port: bind.port,
     });
@@ -1042,32 +1112,48 @@ async function dispatch(
   if (command === "daemon") return cmdDaemon(scoped, url, args.json, rest);
 
   const client = scoped.createClient(url);
+  // Usage is checked before the project is resolved, in every case below: a
+  // wrong argument is exit 3 whether or not a daemon is listening, and asking
+  // one which projects it has would turn that into exit 2.
+  const project = async (): Promise<ApiResponse<ProjectClient>> => resolveProject(client);
+
   switch (command) {
-    case "status":
+    case "status": {
       if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after status`);
-      return cmdStatus(scoped, client, args.json);
+      const target = await project();
+      if (!target.ok) return respond(scoped, args.json, target, () => []);
+      return cmdStatus(scoped, client, target.data, args.json);
+    }
     case "dag":
-      if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after dag`);
-      return respond(scoped, args.json, await client.dag(), renderDag);
-    case "next":
-      if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after next`);
-      return respond(scoped, args.json, await client.dag(), renderNext);
-    case "history":
+    case "next": {
+      if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after ${command}`);
+      const target = await project();
+      if (!target.ok) return respond(scoped, args.json, target, () => []);
+      return respond(scoped, args.json, await target.data.dag(), command === "dag" ? renderDag : renderNext);
+    }
+    case "history": {
       if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after history`);
-      return respond(scoped, args.json, await client.history(), renderHistory);
+      const target = await project();
+      if (!target.ok) return respond(scoped, args.json, target, () => []);
+      return respond(scoped, args.json, await target.data.history(), renderHistory);
+    }
     case "start":
     case "pause":
     case "resume": {
       if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after ${command}`);
-      const control =
-        command === "start" ? client.startRun() : command === "pause" ? client.pauseRun() : client.resumeRun();
+      const target = await project();
+      if (!target.ok) return respond(scoped, args.json, target, () => []);
+      const run = target.data;
+      const control = command === "start" ? run.startRun() : command === "pause" ? run.pauseRun() : run.resumeRun();
       return respond(scoped, args.json, await control, renderControl);
     }
     case "decisions": {
       const query = rest[0];
       if (query === undefined) return usage(scoped, "decisions needs a query");
       if (rest.length > 1) return usage(scoped, `unexpected argument "${rest[1]}" after decisions`);
-      return respond(scoped, args.json, await client.decisions({ query }), renderDecisions);
+      const target = await project();
+      if (!target.ok) return respond(scoped, args.json, target, () => []);
+      return respond(scoped, args.json, await target.data.decisions({ query }), renderDecisions);
     }
     case "spec": {
       const specId = rest[0];
@@ -1079,7 +1165,9 @@ async function dispatch(
       if (verb === undefined) {
         return usage(scoped, `unknown spec verb "${verbToken}" (expected skip, retry, reverify, force-gate, or approve)`);
       }
-      return cmdSpecControl(scoped, client, args.json, specId, verb);
+      const target = await project();
+      if (!target.ok) return respond(scoped, args.json, target, () => []);
+      return cmdSpecControl(scoped, target.data, args.json, specId, verb);
     }
     default:
       return usage(scoped, `unknown command "${command}"`);

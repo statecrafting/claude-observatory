@@ -146,6 +146,25 @@ input:not([type]) {
   gap: 0.4rem;
 }
 
+/* Which project the scoped panels are showing (spec 027 B-3). It sits first in
+   the header's meta row because every panel below is read through it. */
+.project-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.project-picker select {
+  padding: 0.15rem 0.3rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
 .app-foot {
   margin-top: 1.5rem;
   padding-top: 0.6rem;
@@ -519,7 +538,7 @@ input:not([type]) {
 
 .tail-item {
   display: grid;
-  grid-template-columns: 3.5rem 14rem 11rem 1fr;
+  grid-template-columns: 3.5rem 7rem 14rem 11rem 1fr;
   gap: 0.5rem;
   padding: 0.15rem 0.5rem;
   border-bottom: 1px solid var(--line);
@@ -534,6 +553,12 @@ input:not([type]) {
 .tail-seq {
   color: var(--fg-dim);
   text-align: right;
+}
+
+.tail-project {
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tail-kind {
