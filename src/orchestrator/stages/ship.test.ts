@@ -133,6 +133,15 @@ function makeFakeGh(
 
 // --- prompt template (B-1) ----------------------------------------------------
 
+test("buildShipPrompt carries the operator's standing authorization through /ship's PR checkpoint", () => {
+  const prompt = buildShipPrompt({ branch: "017-stage-ship" });
+  expect(SHIP_PROMPT_VERSION).toBe(2);
+  expect(prompt).toContain("Standing authorization");
+  expect(prompt).toContain("do not stop to ask");
+  // The authorization is scoped to PR creation: a drift waiver still halts.
+  expect(prompt).toContain("waiver");
+});
+
 test("buildShipPrompt embeds the branch, the prompt version, and the house style rules", () => {
   const prompt = buildShipPrompt({ branch: "017-stage-ship" });
   expect(prompt).toContain("017-stage-ship");

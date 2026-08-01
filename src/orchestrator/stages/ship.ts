@@ -306,7 +306,7 @@ function verifyOutside(gh: GitHubClient, pr: GitHubPr, localHeadSha: string): Ve
 
 // --- prompt template (B-1) --------------------------------------------------
 
-export const SHIP_PROMPT_VERSION = 1;
+export const SHIP_PROMPT_VERSION = 2;
 
 export interface ShipPromptParams {
   readonly branch: string;
@@ -325,6 +325,17 @@ on this branch, push, and open the pull request through \`gh pr create\`.
 Follow \`/ship\`'s own steps and checkpoints exactly; do not invent a
 different sequence and do not bypass its hooks. You never construct your
 own \`gh pr create\` call outside of \`/ship\`'s governed sequence.
+
+## Standing authorization
+
+This session is driven headless by the build orchestrator; no interactive
+user is present. The operator authorized pushing this branch and opening
+its pull request when they started the run. That standing authorization
+satisfies \`/ship\`'s "confirm with the user" checkpoint for PR creation:
+do not stop to ask, push the branch and open the PR in this session. It
+does NOT cover drift waivers: if the coupling gate fails and \`/ship\`
+offers the \`Spec-Drift-Waiver:\` path, halt and report honestly instead
+of waiving; a waiver needs an explicit human decision.
 
 ## PR title and body conventions
 

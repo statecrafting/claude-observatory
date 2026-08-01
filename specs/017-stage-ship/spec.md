@@ -143,3 +143,16 @@ D-8. The default ship turn budget is 60, raised from 30 after the first
 live run: two real /ship sessions each starved at the 30-turn cap doing
 legitimate work (gate, review, hygiene scans) before reaching push and PR
 creation. Callers can still override per stage.
+
+D-9. Found by the first live run of the 025 wave: two checkpoint-faithful
+/ship sessions halted at the skill's own Step 4 checkpoint ("PR creation
+is outward-facing. Confirm with the user"), ending "completed" with the
+branch never pushed and no PR, which ship verification honestly reported
+as failure. A headless session has no user to confirm with, and prompt v1
+carried the drive instruction but not the operator's authorization.
+Prompt v2 adds a "Standing authorization" section: the operator's
+run-start authorization explicitly satisfies the PR-creation checkpoint,
+while drift waivers stay outside its scope and still halt the session
+(B-2's no-self-approval rule is unchanged). The 022-024 milestone
+sessions happened to read the drive prompt itself as consent, so the gap
+was latent, not new.
