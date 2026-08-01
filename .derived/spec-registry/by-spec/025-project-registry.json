@@ -19,7 +19,7 @@
       }
     ],
     "id": "025-project-registry",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "kernel",
     "references": [
       {
@@ -46,6 +46,6 @@
     "summary": "The registry of target repositories the orchestrator may drive: a third hash-linked chain (the spec 011 envelope under a caller-chosen basename) living in the daemon home, folded into the current set of projects. A project is a named, absolute repo path with an armed flag and a recorded qualification verdict. Qualification is a read-only preflight (git repo with an origin remote, spec-spine compile green in the target, specs present); unqualified projects stay visible with their reasons and are never scheduled. Per-project orchestrator state lives inside each target at data/orchestrator/, byte-compatible with the self-hosted layout.\n",
     "title": "Project registry: governed targets for a general orchestrator"
   },
-  "shardHash": "757fcf2016d9ee5c8aadc264d2557e2a1545d5256fa110786e32c18ed4247973",
+  "shardHash": "34a7b30d99037dac8454fd818d26ae0d372f58fae57f7853f1b012e43f4a0970",
   "specVersion": "1.1.0"
 }
