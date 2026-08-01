@@ -44,7 +44,7 @@ import type { Classification } from "./classify-termination";
 import type { LastParkInfo, ParkPlan } from "./quota";
 import { foldQuotaState, isResumeDue, journalPark, journalResume, planPark, resumeJitterMs } from "./quota";
 import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap, ShippedSource } from "./dag";
-import { adoptedShipped, createProcessDagReader, loadRegistrySnapshot, makePinLookup, nextReady, ready } from "./dag";
+import { adoptedShipped, createProcessDagReader, loadRegistrySnapshot, makePinLookup, nextReady, pinOfBytes, ready } from "./dag";
 import { runSession } from "./session";
 import type {
   BuildResult,
@@ -232,6 +232,13 @@ export interface DaemonDeps {
   // reports the default branch; absent means trusted, which is what keeps
   // fixture deps that never touch a real checkout working unchanged.
   readonly readCheckoutBranch?: () => string | null;
+  // The spec file's bytes at a specific commit, or null when unreadable.
+  // D-16 derives a pipeline-shipped spec's pin from the journaled merge
+  // sha through this seam; absent falls back to the exec's creation pin.
+  readonly readSpecFileAtSha?: (sha: string, specId: string) => Buffer | null;
+  // Best-effort: put a clean checkout back on the default branch before a
+  // scheduling pass reads the registry (D-17). Absent is a no-op.
+  readonly normalizeCheckoutForScheduling?: () => void;
   // 026 B-6: this instance is one project's run inside a standby daemon that
   // already holds the daemon home's identity lock, so it acquires none of its
   // own; spec 011's per-chain writer locks in this project's own state root
@@ -275,6 +282,27 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
         return runner.currentBranch();
       } catch {
         return null;
+      }
+    },
+    readSpecFileAtSha: (sha: string, specId: string) => {
+      const result = Bun.spawnSync(["git", "-C", repoDir, "show", `${sha}:specs/${specId}/spec.md`]);
+      if (result.exitCode !== 0) return null;
+      return Buffer.from(result.stdout);
+    },
+    normalizeCheckoutForScheduling: () => {
+      try {
+        if (!runner.statusClean()) return;
+        if (runner.currentBranch() === DEFAULT_BASE_BRANCH) return;
+        runner.checkout(DEFAULT_BASE_BRANCH);
+        try {
+          runner.pullFfOnly();
+        } catch {
+          // A failed fast-forward leaves the checkout on the default branch
+          // with older content, which the adoption guard treats honestly.
+        }
+      } catch {
+        // Normalization is best-effort; the D-15 guard defers adoption when
+        // the checkout stays on a non-default branch.
       }
     },
     gh: createProcessGitHubClient({ repoDir, ghBin }),
@@ -876,9 +904,39 @@ export class Daemon {
 
     const merged: Map<string, ShippedEntry> = new Map(adopted);
     for (const specExec of state.specExecs.values()) {
-      if (specExec.status === "shipped") merged.set(specExec.specId, { pin: specExec.pin, source: "pipeline" });
+      if (specExec.status === "shipped") {
+        merged.set(specExec.specId, { pin: this.pipelinePin(specExec.specId, specExec.pin), source: "pipeline" });
+      }
     }
     return merged;
+  }
+
+  // D-16: a pipeline-shipped spec's contract is the content its own merge
+  // landed, not the pre-flip content the exec was pinned at when scheduled.
+  // The build session's frontmatter flip is part of the ship, so the
+  // creation-time pin drifts against the spec's own merge and every future
+  // dependent is born blocked (found live: 027, the first spec to depend on
+  // a pipeline-shipped spec, was blocked by 026's own flip). The merged
+  // content is evidence-anchored by the journaled merge sha, so the pin is
+  // derived from the file at that sha. Any post-merge amendment still
+  // drifts against it, which is exactly spec 012 B-4's cascade. A missing
+  // sha or unreadable file falls back to the exec pin, which can only
+  // over-invalidate, never under-invalidate.
+  private readonly pipelinePinCache = new Map<string, string>();
+
+  private pipelinePin(specId: string, execPin: string): string {
+    const sha = this.findMergeShaForSpec(specId);
+    if (!sha) return execPin;
+    const read = this.deps.readSpecFileAtSha;
+    if (!read) return execPin;
+    const cacheKey = `${specId}@${sha}`;
+    const cached = this.pipelinePinCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const bytes = read(sha, specId);
+    if (!bytes) return execPin;
+    const pin = pinOfBytes(bytes);
+    this.pipelinePinCache.set(cacheKey, pin);
+    return pin;
   }
 
   // nextReady's own readiness filter trusts the target repo's registry
@@ -949,6 +1007,14 @@ export class Daemon {
         await this.runReverify(specId);
         continue;
       }
+
+      // D-17: a scheduling pass reads the registry, and the last stage may
+      // have left the checkout on a spec branch (ship works there; shepherd
+      // never moves it back). Registry truth lives on the default branch, so
+      // a clean checkout is put back on it before the read; when this cannot
+      // happen the D-15 guard already defers adoption rather than trusting
+      // the branch.
+      this.deps.normalizeCheckoutForScheduling?.();
 
       const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
       const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);

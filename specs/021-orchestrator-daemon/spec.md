@@ -254,3 +254,27 @@ one `dag.adoption.deferred` per pass; readiness keeps using the
 previously adopted set, and a deferred first adoption arrives later as
 D-11's own late first adoption once the checkout is back on the default
 branch.
+
+D-16. Found when 026 became the first pipeline-shipped spec another spec
+depends on: a spec exec's pin is recorded at scheduling, before the build
+session's own frontmatter flip, so the moment the spec's PR merges its
+pipeline pin drifts against its own merged content and every future
+dependent is born blocked (spec 027 was, failing the run). The milestone
+never saw this because 023/024 had no scheduled dependents and 022 was
+adoption-healed after failed execs. Resolution: a pipeline entry's pin is
+resolved from the spec file at the journaled `daemon.merge-sha` through
+an injectable `readSpecFileAtSha` seam (production: `git show
+<sha>:specs/<id>/spec.md`), cached per (spec, sha). The merge sha is the
+run's own evidence of what shipped, so the pin is anchored to what
+actually landed; a post-merge amendment still drifts against it and
+invalidates per spec 012 B-4. A missing sha or unreadable file falls
+back to the creation pin, which can only over-invalidate.
+
+D-17. Same incident, the second half: scheduling passes read the registry
+from wherever the last stage left the checkout (ship works on the spec
+branch; shepherd never moves it back), which is what let D-15's deferral
+withhold a legitimate adoption heal mid-run. Each pass now first offers
+the checkout back to the default branch through a best-effort
+`normalizeCheckoutForScheduling` seam (production: clean tree and not on
+the default branch means checkout plus fast-forward; anything else is a
+no-op). D-15's guard remains the backstop when normalization cannot run.

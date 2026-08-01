@@ -239,6 +239,8 @@ interface MakeDepsParams {
   readonly stageRetryBudget?: number;
   readonly runSessionCallCounter?: { calls: number };
   readonly readCheckoutBranch?: () => string | null;
+  readonly readSpecFileAtSha?: (sha: string, specId: string) => Buffer | null;
+  readonly normalizeCheckoutForScheduling?: () => void;
 }
 
 // Real clock and real (small-chunk) sleep by default: most tests exercise
@@ -270,6 +272,8 @@ function makeDeps(p: MakeDepsParams): DaemonDeps {
     heartbeatIntervalMs: p.heartbeatIntervalMs ?? 60_000,
     stageRetryBudget: p.stageRetryBudget,
     readCheckoutBranch: p.readCheckoutBranch,
+    readSpecFileAtSha: p.readSpecFileAtSha,
+    normalizeCheckoutForScheduling: p.normalizeCheckoutForScheduling,
   };
 }
 
@@ -1203,6 +1207,130 @@ test("adoption is deferred on a non-default-branch checkout and completes later 
   } finally {
     journal.close();
   }
+});
+
+// --- regression: a pipeline-shipped spec's pin is resolved from its merged
+// content, not its pre-flip creation pin (found live: 027, the first spec to
+// depend on a pipeline-shipped spec, was born blocked by 026's own
+// frontmatter flip reading as pin drift) --------------------------------------
+
+test("a dependent of a pipeline-shipped spec schedules after the flip merge; a post-merge amendment still invalidates", async () => {
+  const dataDir = freshDir("pipeline-pin-data");
+  const repoDir = freshDir("pipeline-pin-repo");
+
+  // 800's on-disk content changes when its PR merges (the frontmatter
+  // flip); the shepherd stage fn performs that mutation, like the merge.
+  let baseContent = "800 content: implementation pending\n";
+  const mergedContent = "800 content: implementation complete\n";
+  // A third spec appears in the second lifetime so the amendment's
+  // invalidation has a pending dependent to block.
+  let includeFuture = false;
+  const depsOf = (specId: string): string[] =>
+    specId === "900-dependent" || specId === "950-future" ? ["800-base"] : [];
+  const dagReader: DagReader = {
+    registryListJson: () => {
+      const rows = [
+        { id: "800-base", implementation: "pending", dependsOn: [] },
+        { id: "900-dependent", implementation: "pending", dependsOn: ["800-base"] },
+      ];
+      if (includeFuture) rows.push({ id: "950-future", implementation: "pending", dependsOn: ["800-base"] });
+      return JSON.stringify(rows);
+    },
+    registryShowJson: (_repoDir: string, specId: string) =>
+      JSON.stringify({ id: specId, implementation: "pending", dependsOn: depsOf(specId) }),
+    readSpecFile: (_repoDir: string, specId: string) =>
+      Buffer.from(specId === "800-base" ? baseContent : `content for ${specId}\n`, "utf8"),
+  };
+
+  const stageFns: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => {
+      if (options.specId === "800-base") baseContent = mergedContent;
+      return shepherdResult(options.specId, "passed", `${options.specId}-merge`);
+    },
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const daemon = new Daemon(
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns,
+      // The merged content is what the journaled merge sha names.
+      readSpecFileAtSha: (sha, specId) =>
+        sha === "800-base-merge" && specId === "800-base" ? Buffer.from(mergedContent, "utf8") : null,
+    })
+  );
+  await daemon.start();
+  await daemon.join();
+  // Without merge-sha pin resolution, 800 reads as drifted after its own
+  // flip and 900 is born blocked, failing the run.
+  expect(daemon.runStatus).toBe("completed");
+  await daemon.shutdown();
+
+  // A post-merge amendment is not the flip: it must still invalidate.
+  baseContent = "800 content: amended after merge\n";
+  includeFuture = true;
+  const daemon2 = new Daemon(
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns: neverCalledStageFns(),
+      readSpecFileAtSha: (sha, specId) =>
+        sha === "800-base-merge" && specId === "800-base" ? Buffer.from(mergedContent, "utf8") : null,
+    })
+  );
+  await daemon2.start();
+  await daemon2.join();
+  await daemon2.shutdown();
+  const journal = openJournal(dataDir);
+  try {
+    const blocked = (journal.fold().byKind["run.blocked"] ?? []).map(
+      (r) => r.payload as { blockers: Array<{ specId: string; reasons: string[] }> }
+    );
+    expect(
+      blocked.some((b) =>
+        b.blockers.some((s) => s.reasons.some((reason) => reason.includes("invalidated")))
+      )
+    ).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+// --- regression: every scheduling pass offers the checkout back to the
+// default branch before reading the registry (D-17) ---------------------------
+
+test("the scheduling pass invokes checkout normalization before reading the registry", async () => {
+  const dataDir = freshDir("normalize-data");
+  const repoDir = freshDir("normalize-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+  const stageFns: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+  let normalizeCalls = 0;
+  const daemon = new Daemon(
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns,
+      normalizeCheckoutForScheduling: () => {
+        normalizeCalls += 1;
+      },
+    })
+  );
+  await daemon.start();
+  await daemon.join();
+  expect(daemon.runStatus).toBe("completed");
+  expect(normalizeCalls).toBeGreaterThan(0);
+  await daemon.shutdown();
 });
 
 // --- regression: a throwing stage implementation fails the attempt and
