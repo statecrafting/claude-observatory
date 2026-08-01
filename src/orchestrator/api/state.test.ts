@@ -63,6 +63,7 @@ test("a re-adopted spec is not reported as drifted, and its dependents stay read
     world.journal.append("dag.adopted.refreshed", { id: "001-alpha", oldPin: originalPin, newPin });
 
     const view = dagView({
+      project: "alpha",
       records: world.journal.fold().records,
       snapshot: snapshotOf(world),
       reader: world.dagReader,
@@ -87,6 +88,7 @@ test("dagView reports readiness, blockers, pins, and the next ready spec", () =>
   try {
     seedAdoption(world, ["001-alpha"]);
     const view = dagView({
+      project: "alpha",
       records: world.journal.fold().records,
       snapshot: snapshotOf(world),
       reader: world.dagReader,
@@ -124,6 +126,7 @@ test("dagView cascades invalidation from an amended upstream spec", () => {
     world.dagReader.amend("002-beta", "# 002-beta\n\namended after shipping\n");
 
     const view = dagView({
+      project: "alpha",
       records: world.journal.fold().records,
       snapshot: snapshotOf(world),
       reader: world.dagReader,
@@ -160,6 +163,7 @@ test("dagView reports an unreadable spec file as a pin error, never as drift", (
     };
 
     const view = dagView({
+      project: "alpha",
       records: world.journal.fold().records,
       snapshot: snapshotOf(world),
       reader,
@@ -184,6 +188,7 @@ test("dagView masks specs the journal shows shipped or skipped from the next-rea
     // flip only reaches the registry once its PR is merged and re-read),
     // but this journal shows it shipped, so it is not offered again.
     const shippedView = dagView({
+      project: "alpha",
       records: world.journal.fold().records,
       snapshot: snapshotOf(world),
       reader: world.dagReader,
@@ -194,6 +199,7 @@ test("dagView masks specs the journal shows shipped or skipped from the next-rea
 
     world.journal.append("control.skipSpec", { specId: "003-gamma", source: "api" });
     const skippedView = dagView({
+      project: "alpha",
       records: world.journal.fold().records,
       snapshot: snapshotOf(world),
       reader: world.dagReader,
@@ -214,6 +220,7 @@ test("dagView surfaces a dependency cycle instead of an unexplained empty schedu
   });
   try {
     const view = dagView({
+      project: "alpha",
       records: world.journal.fold().records,
       snapshot: snapshotOf(world),
       reader: world.dagReader,
@@ -233,7 +240,7 @@ test("runView reports the current run, spec, stage, and attempt", () => {
   const world = freshWorld("run");
   try {
     const seeded = seedRun(world);
-    const view = runView(world.journal.fold().records);
+    const view = runView(world.journal.fold().records, "alpha");
 
     expect(view.run?.id).toBe(seeded.runId);
     expect(view.run?.status).toBe("running");
@@ -254,7 +261,7 @@ test("runView reports the current run, spec, stage, and attempt", () => {
 test("runView serializes an empty journal as explicit unknowns", () => {
   const world = freshWorld("empty");
   try {
-    const view = runView(world.journal.fold().records);
+    const view = runView(world.journal.fold().records, "alpha");
     expect(view.run).toBeNull();
     expect(view.spec).toBeNull();
     expect(view.stage).toBeNull();
@@ -274,10 +281,10 @@ test("runView surfaces the pause reason only while the run is paused", () => {
     world.journal.append("run.pause-reason", { runId: run.id, reason: "003-gamma: build failed after 2 attempt(s)" });
     const paused = transition(world.journal, run, "paused");
 
-    expect(runView(world.journal.fold().records).pauseReason).toBe("003-gamma: build failed after 2 attempt(s)");
+    expect(runView(world.journal.fold().records, "alpha").pauseReason).toBe("003-gamma: build failed after 2 attempt(s)");
 
     transition(world.journal, paused, "running");
-    expect(runView(world.journal.fold().records).pauseReason).toBeNull();
+    expect(runView(world.journal.fold().records, "alpha").pauseReason).toBeNull();
   } finally {
     world.close();
   }
@@ -288,10 +295,10 @@ test("runView folds gate waits and approvals into the awaiting-approval set", ()
   try {
     seedRun(world);
     world.journal.append("daemon.gate.waiting", { specId: "003-gamma", stage: "ship" });
-    expect(runView(world.journal.fold().records).awaitingApproval).toEqual(["003-gamma"]);
+    expect(runView(world.journal.fold().records, "alpha").awaitingApproval).toEqual(["003-gamma"]);
 
     world.journal.append("control.approve", { specId: "003-gamma", source: "api" });
-    expect(runView(world.journal.fold().records).awaitingApproval).toEqual([]);
+    expect(runView(world.journal.fold().records, "alpha").awaitingApproval).toEqual([]);
   } finally {
     world.close();
   }
@@ -305,7 +312,7 @@ test("quotaView reports the park target, the estimated flag, and the countdown",
     const now = 1_700_000_000_000;
     seedPark(world, now + 60_000, QUOTA_HEALTH_WARNING_THRESHOLD, true);
 
-    const view = quotaView(world.journal.fold().records, now);
+    const view = quotaView([{ project: "alpha", records: world.journal.fold().records }], now);
     expect(view.parked).toBe(true);
     expect(view.targetMs).toBe(now + 60_000);
     expect(view.estimated).toBe(true);
@@ -314,7 +321,7 @@ test("quotaView reports the park target, the estimated flag, and the countdown",
     expect(view.warn).toBe(true);
 
     journalResume(world.journal, now + 61_000);
-    const resumed = quotaView(world.journal.fold().records, now + 61_000);
+    const resumed = quotaView([{ project: "alpha", records: world.journal.fold().records }], now + 61_000);
     expect(resumed.parked).toBe(false);
     // The last park's own data survives the resume: it is history, not a lie.
     expect(resumed.targetMs).toBe(now + 60_000);
@@ -326,7 +333,7 @@ test("quotaView reports the park target, the estimated flag, and the countdown",
 test("quotaView reports never-parked as explicit unknowns, not zeroes", () => {
   const world = freshWorld("quota-empty");
   try {
-    const view = quotaView(world.journal.fold().records, 1_700_000_000_000);
+    const view = quotaView([{ project: "alpha", records: world.journal.fold().records }], 1_700_000_000_000);
     expect(view.parked).toBe(false);
     expect(view.targetMs).toBeNull();
     expect(view.estimated).toBeNull();
@@ -361,13 +368,13 @@ test("decisionsView filters the sealed ledger by spec, path, and full text", () 
     });
 
     const records = world.decisions.fold().records;
-    expect(decisionsView(records, {}).total).toBe(2);
+    expect(decisionsView(records, {}, "alpha").total).toBe(2);
     // Newest first, consistent with spec 020's own ordering.
-    expect(decisionsView(records, {}).decisions[0]!.id).toBe("d-2");
-    expect(decisionsView(records, { specId: "002-beta" }).decisions.map((d) => d.id)).toEqual(["d-1"]);
-    expect(decisionsView(records, { path: "src/orchestrator/api/" }).decisions.map((d) => d.id)).toEqual(["d-1"]);
-    expect(decisionsView(records, { query: "cadence" }).decisions.map((d) => d.id)).toEqual(["d-2"]);
-    expect(decisionsView(records, { query: "nothing matches this" }).total).toBe(0);
+    expect(decisionsView(records, {}, "alpha").decisions[0]!.id).toBe("d-2");
+    expect(decisionsView(records, { specId: "002-beta" }, "alpha").decisions.map((d) => d.id)).toEqual(["d-1"]);
+    expect(decisionsView(records, { path: "src/orchestrator/api/" }, "alpha").decisions.map((d) => d.id)).toEqual(["d-1"]);
+    expect(decisionsView(records, { query: "cadence" }, "alpha").decisions.map((d) => d.id)).toEqual(["d-2"]);
+    expect(decisionsView(records, { query: "nothing matches this" }, "alpha").total).toBe(0);
   } finally {
     world.close();
   }
@@ -379,7 +386,7 @@ test("historyView attributes PR, CI, verify verdict, and evidence to each spec e
   const world = freshWorld("history");
   try {
     const seeded = seedRun(world);
-    const view = historyView(world.journal.fold().records);
+    const view = historyView(world.journal.fold().records, "alpha");
 
     expect(view.entries.map((e) => e.specId)).toEqual(["002-beta", "003-gamma"]);
 
@@ -418,7 +425,7 @@ test("historyView credits a retry's stage records to the retry, not the failed a
     transition(world.journal, retry, "building");
     world.journal.append("stage.ship.result", { specId: "003-gamma", branch: "003-gamma", outcome: "passed", prNumber: 9, sessionIds: [] });
 
-    const view = historyView(world.journal.fold().records);
+    const view = historyView(world.journal.fold().records, "alpha");
     const attempts = view.entries.filter((e) => e.specId === "003-gamma");
     expect(attempts.length).toBe(2);
     expect(attempts[0]!.prNumber).toBeNull();

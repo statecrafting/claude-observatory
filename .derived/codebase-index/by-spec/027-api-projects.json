@@ -10,11 +10,32 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/commands/orchestrator.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/orchestrator/api/",
+        "source": "spec-edge"
+      },
+      {
+        "path": "web/",
         "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      },
       {
         "locations": [
           {
@@ -26,6 +47,19 @@
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/api/"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "web/"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "web/"
         }
       },
       {
@@ -46,5 +80,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "9b40bf26f99c8309b371ac6b62bf0fb76c54356c6df8137c82c2afcbd855ea30"
+  "shardHash": "0cdb9413270e53c90b239d3742ea5e91b0cd56b4edecd092880725f42430dc75"
 }

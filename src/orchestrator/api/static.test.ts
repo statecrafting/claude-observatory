@@ -9,7 +9,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { createStaticHandler, defaultWebDistDir } from "./static";
 import { createApiServer, type ApiServer } from "./server";
-import { freshWorld, seedRun, type FixtureWorld } from "./fixtures";
+import { fixtureApiDeps, freshRegistry, seedRun, type FixtureRegistry } from "./fixtures";
 import { API_ROUTES } from "./types";
 
 function get(path: string, distDir?: string): Response | null {
@@ -105,21 +105,13 @@ test("the default build directory is the checkout's own web/dist", () => {
 
 // --- wired into the daemon's one server (B-1) -------------------------------
 
-let world: FixtureWorld;
+let registry: FixtureRegistry;
 let server: ApiServer;
 
 test("the same server answers the SPA and the API, and unknown API paths still get the envelope", async () => {
-  world = freshWorld("static");
-  seedRun(world);
-  server = createApiServer({
-    journal: { records: () => world.journal.fold().records },
-    decisions: { records: () => world.decisions.fold().records },
-    dagReader: world.dagReader,
-    repoDir: world.repoDir,
-    evidenceDir: world.evidenceDir,
-    staticDir: distDir,
-    port: 0,
-  });
+  registry = freshRegistry("static");
+  seedRun(registry.add("alpha"));
+  server = createApiServer(fixtureApiDeps(registry, { staticDir: distDir }));
 
   try {
     const shell = await fetch(`${server.url}/`);
@@ -136,21 +128,14 @@ test("the same server answers the SPA and the API, and unknown API paths still g
     expect(await missing.json()).toEqual({ ok: false, error: { kind: "not-found", message: "no route for GET /api/nope" } });
   } finally {
     await server.stop();
-    world.close();
+    registry.close();
   }
 });
 
 test("a server built with staticDir: null serves no assets at all", async () => {
-  const bare = freshWorld("static-off");
-  const off = createApiServer({
-    journal: { records: () => bare.journal.fold().records },
-    decisions: { records: () => bare.decisions.fold().records },
-    dagReader: bare.dagReader,
-    repoDir: bare.repoDir,
-    evidenceDir: bare.evidenceDir,
-    staticDir: null,
-    port: 0,
-  });
+  const bare = freshRegistry("static-off");
+  bare.add("alpha");
+  const off = createApiServer(fixtureApiDeps(bare, { staticDir: null }));
 
   try {
     const root = await fetch(`${off.url}/`);

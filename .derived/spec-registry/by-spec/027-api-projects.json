@@ -16,10 +16,26 @@
           "kind": "file",
           "path": "src/orchestrator/api/"
         }
+      },
+      {
+        "nature": "additive",
+        "spec": "023-orchestrator-cli",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "024-web-ui",
+        "unit": {
+          "kind": "file",
+          "path": "web/"
+        }
       }
     ],
     "id": "027-api-projects",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "surface",
     "references": [
       {
@@ -46,6 +62,6 @@
     "summary": "The breaking apiVersion 2 (010 D15): every project-scoped fact moves under /api/projects/<name>/, the project collection gains registration and arm/disarm controls, and genuinely global facts (daemon meta with standby state, account quota, the SSE stream) stay global with a project field on every event. v1 routes are retired, not aliased; the corpus's own pin-invalidation absorbs the break. Envelope, honesty, bounded-event, and route-table-driven client rules from 022 carry over verbatim.\n",
     "title": "API v2: project-scoped routes"
   },
-  "shardHash": "316fde7edf665f74a1122ef327445d619aac43172dec6b32a011daf970adf99b",
+  "shardHash": "bb30a841335c8c64e01f7f7580c70d13a19e4f3440394e8cab7ff758e8c8e48f",
   "specVersion": "1.1.0"
 }

@@ -11,14 +11,16 @@
 // are refolded from the read routes rather than patched locally (B-7).
 import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
-import type { ApiClient, ApiError, ControlResult, ControlVerbToken, RunView } from "../api";
+import type { ApiError, ControlResult, ControlVerbToken, ProjectClient, RunView } from "../api";
 import { planControl, previewJson } from "../controls";
 import { formatJson } from "../format";
 import { Badge, ErrorNote } from "./bits";
 
 export interface ControlButtonProps {
   readonly verb: ControlVerbToken;
-  readonly client: ApiClient;
+  // Scoped to one project (spec 027 B-5); null while no project has been
+  // selected yet, which is refused rather than sent to a guessed one.
+  readonly client: ProjectClient | null;
   readonly run: RunView | null;
   readonly specId?: string | null;
   // Called once the daemon has answered, so the caller can refold every view
@@ -28,7 +30,7 @@ export interface ControlButtonProps {
 
 type Phase = "idle" | "confirming" | "sending" | "answered";
 
-function issue(client: ApiClient, verb: ControlVerbToken, specId: string | null): Promise<{ ok: true; data: ControlResult } | { ok: false; error: ApiError }> {
+function issue(client: ProjectClient, verb: ControlVerbToken, specId: string | null): Promise<{ ok: true; data: ControlResult } | { ok: false; error: ApiError }> {
   switch (verb) {
     case "start":
       return client.startRun();
@@ -61,7 +63,10 @@ export function ControlButton({ verb, client, run, specId = null, onApplied }: C
     setPhase("sending");
     setError(null);
     setResult(null);
-    const answer = await issue(client, verb, specId);
+    const answer =
+      client === null
+        ? { ok: false as const, error: { kind: "unavailable" as const, message: "no project is selected yet" } }
+        : await issue(client, verb, specId);
     if (answer.ok) setResult(answer.data);
     else setError(answer.error);
     setPhase("answered");

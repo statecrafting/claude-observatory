@@ -9,16 +9,24 @@
 // `null` rather than an empty object, and a daemon that stopped answering
 // sets `reach: "unreachable"` rather than leaving the last good fold on
 // screen looking live (AC-2).
+//
+// v2 adds a third rule (spec 027 B-3): a scoped value is only ever shown under
+// the project it was read from. The store holds one selected project, reads
+// the four scoped routes through that project's sub-client, and drops those
+// folds outright when the selection changes, because carrying one project's
+// DAG under another's name is the misstatement of scope v2 exists to prevent.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiClient,
   ApiError,
   ApiEventType,
   ApiMeta,
+  ApiResponse,
   DagView,
   DecisionQueryParams,
   DecisionsView,
   HistoryView,
+  ProjectsView,
   QuotaView,
   RunView,
 } from "./api";
@@ -54,6 +62,7 @@ export const ALL_EVENT_TYPES: readonly ApiEventType[] = [
   "quota",
   "control",
   "stage",
+  "project",
   "meta",
 ];
 
@@ -62,6 +71,10 @@ export interface StreamEvent {
   // 1 when the daemon restarts, so it is shown but not used as a React key.
   readonly key: number;
   readonly id: number | null;
+  // Which project's chain this came off (027 B-4), null for a daemon-scoped
+  // event. One stream carries every project, so a tail line that did not name
+  // its own project would be unreadable on a multi-project daemon.
+  readonly project: string | null;
   readonly type: ApiEventType;
   readonly seq: number | null;
   readonly ts: string | null;
@@ -99,6 +112,11 @@ export interface EventSourceLike {
 
 export interface ObservatoryState {
   readonly meta: Resource<ApiMeta>;
+  readonly projects: Resource<ProjectsView>;
+  // The project every scoped resource below was read from (027 B-3). null
+  // before the registry has been folded, and while it is empty: a daemon with
+  // no project registered shows no project's DAG rather than some project's.
+  readonly project: string | null;
   readonly dag: Resource<DagView>;
   readonly run: Resource<RunView>;
   readonly quota: Resource<QuotaView>;
@@ -118,6 +136,8 @@ export interface ObservatoryState {
 export function initialState(): ObservatoryState {
   return {
     meta: emptyResource<ApiMeta>(),
+    projects: emptyResource<ProjectsView>(),
+    project: null,
     dag: emptyResource<DagView>(),
     run: emptyResource<RunView>(),
     quota: emptyResource<QuotaView>(),
@@ -133,6 +153,8 @@ export function initialState(): ObservatoryState {
 
 export interface ObservatoryActions {
   refresh(): Promise<void>;
+  // Point every scoped panel at another registered project, then refold.
+  selectProject(name: string): Promise<void>;
   searchDecisions(query: DecisionQueryParams): Promise<void>;
   clearEvents(): void;
 }
@@ -146,6 +168,37 @@ export interface ObservatoryOptions {
   readonly probeIntervalMs?: number;
   readonly maxScrollback?: number;
   readonly now?: () => number;
+}
+
+// The three scoped reads behind the run, dag, and history panels, taken
+// through one project's sub-client so they cannot address two projects
+// between them.
+type ScopedReads = readonly [ApiResponse<DagView>, ApiResponse<RunView>, ApiResponse<HistoryView>];
+
+function readProject(client: ApiClient, name: string): Promise<ScopedReads> {
+  const project = client.project(name);
+  return Promise.all([project.dag(), project.run(), project.history()]);
+}
+
+// Which project the scoped panels show. A selection the operator made is kept
+// for as long as the registry still carries it; past that the daemon's own
+// active project wins, because that is the one actually being driven, and past
+// that it is the registry's first row, so a single-project daemon needs no
+// choosing at all.
+export function resolveProject(
+  projects: ApiResponse<ProjectsView>,
+  meta: ApiResponse<ApiMeta>,
+  current: string | null
+): string | null {
+  // A registry read that failed says nothing about which project is right;
+  // swapping the view out on a transient error would be the store inventing a
+  // change the daemon never reported.
+  if (!projects.ok) return current;
+  const names = projects.data.projects.map((project) => project.name);
+  if (current !== null && names.includes(current)) return current;
+  const active = meta.ok ? meta.data.daemon?.activeProject ?? null : null;
+  if (active !== null && names.includes(active)) return active;
+  return names[0] ?? null;
 }
 
 export function useObservatory(options: ObservatoryOptions): {
@@ -163,19 +216,44 @@ export function useObservatory(options: ObservatoryOptions): {
   const eventKey = useRef(0);
   const reachRef = useRef<Reachability>("unknown");
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The selected project lives in a ref as well as in state, so `refresh` keeps
+  // one identity across a project switch and the effects below are not torn
+  // down and rebuilt every time the operator picks a different project.
+  const selection = useRef<string | null>(null);
+  // Refreshes overlap routinely: an event burst schedules one while another is
+  // still in flight, and picking a project starts one of its own. Only the
+  // newest may land, because an older one carries the project that was
+  // selected when it started, and writing that back would undo the operator's
+  // choice for good rather than for one render: `selection.current` is what
+  // every later refresh reads its scope from.
+  const generation = useRef(0);
 
-  // The five read routes behind the five views, refolded together so no two
-  // panels can disagree about which moment they are showing.
+  // The three global routes plus, for the selected project, its own three,
+  // refolded together so no two panels can disagree about which moment (or
+  // which project) they are showing.
   const refresh = useCallback(async (): Promise<void> => {
-    const [meta, dag, run, quota, history] = await Promise.all([
+    const mine = ++generation.current;
+    const guessed = selection.current;
+    const [meta, quota, projects, guessedScoped] = await Promise.all([
       client.meta(),
-      client.dag(),
-      client.run(),
       client.quota(),
-      client.history(),
+      client.projects(),
+      guessed === null ? Promise.resolve(null) : readProject(client, guessed),
     ]);
+    if (generation.current !== mine) return;
+
+    // The registry can have moved underneath the selection: a project removed
+    // through the CLI, or simply the first fold arriving. When it has, the
+    // scoped reads just taken belong to a project this page is no longer
+    // showing, so they are dropped and the resolved one is read instead.
+    const project = resolveProject(projects, meta, guessed);
+    selection.current = project;
+    const scoped =
+      project === guessed ? guessedScoped : project === null ? null : await readProject(client, project);
+    if (generation.current !== mine) return;
+
     const atMs = now();
-    const results = [meta, dag, run, quota, history];
+    const results = [meta, quota, projects, ...(scoped ?? [])];
     // "Unreachable" is only claimed when nothing got through. A daemon that
     // answered even one route with an error is up and disagreeing, which is a
     // different fact and is shown as that route's error instead.
@@ -183,22 +261,55 @@ export function useObservatory(options: ObservatoryOptions): {
     const reach: Reachability = answered ? "reachable" : "unreachable";
     reachRef.current = reach;
 
-    setState((prev) => ({
-      ...prev,
-      meta: settle(prev.meta, meta, atMs),
-      dag: settle(prev.dag, dag, atMs),
-      run: settle(prev.run, run, atMs),
-      quota: settle(prev.quota, quota, atMs),
-      history: settle(prev.history, history, atMs),
-      reach,
-      lastContactMs: answered ? atMs : prev.lastContactMs,
-      serverSkewMs: quota.ok ? quota.data.nowMs - atMs : prev.serverSkewMs,
-    }));
+    setState((prev) => {
+      // A change of project drops the previous one's folds rather than letting
+      // them stand under the new name. Keeping them would be precisely the
+      // "this means the one repo" misreading v2 removed from the wire.
+      const kept = project === prev.project;
+      const before = {
+        dag: kept ? prev.dag : emptyResource<DagView>(),
+        run: kept ? prev.run : emptyResource<RunView>(),
+        history: kept ? prev.history : emptyResource<HistoryView>(),
+        decisions: kept ? prev.decisions : emptyResource<DecisionsView>(),
+      };
+      return {
+        ...prev,
+        meta: settle(prev.meta, meta, atMs),
+        quota: settle(prev.quota, quota, atMs),
+        projects: settle(prev.projects, projects, atMs),
+        project,
+        dag: scoped === null ? before.dag : settle(before.dag, scoped[0], atMs),
+        run: scoped === null ? before.run : settle(before.run, scoped[1], atMs),
+        history: scoped === null ? before.history : settle(before.history, scoped[2], atMs),
+        decisions: before.decisions,
+        reach,
+        lastContactMs: answered ? atMs : prev.lastContactMs,
+        serverSkewMs: quota.ok ? quota.data.nowMs - atMs : prev.serverSkewMs,
+      };
+    });
   }, [client, now]);
+
+  const selectProject = useCallback(
+    async (name: string): Promise<void> => {
+      selection.current = name;
+      await refresh();
+    },
+    [refresh]
+  );
 
   const searchDecisions = useCallback(
     async (query: DecisionQueryParams): Promise<void> => {
-      const result = await client.decisions(query);
+      const name = selection.current;
+      // The ledger belongs to a project (027 B-3). With none selected there is
+      // no ledger to query, which is said outright rather than answered with an
+      // empty result set that would read as "this project has no decisions".
+      const result: ApiResponse<DecisionsView> =
+        name === null
+          ? {
+              ok: false,
+              error: { kind: "unavailable", message: "no project is selected, so there is no decision ledger to query" },
+            }
+          : await client.project(name).decisions(query);
       const atMs = now();
       setState((prev) => ({ ...prev, decisions: settle(prev.decisions, result, atMs) }));
     },
@@ -251,7 +362,7 @@ export function useObservatory(options: ObservatoryOptions): {
     const source = openStream(eventsUrl);
 
     const record = (type: ApiEventType) => (event: MessageEvent) => {
-      let parsed: { seq?: unknown; ts?: unknown; kind?: unknown; data?: unknown };
+      let parsed: { project?: unknown; seq?: unknown; ts?: unknown; kind?: unknown; data?: unknown };
       try {
         parsed = JSON.parse(String(event.data)) as typeof parsed;
       } catch {
@@ -261,6 +372,7 @@ export function useObservatory(options: ObservatoryOptions): {
       const entry: StreamEvent = {
         key: eventKey.current++,
         id: Number.isSafeInteger(id) ? id : null,
+        project: typeof parsed.project === "string" ? parsed.project : null,
         type,
         seq: typeof parsed.seq === "number" ? parsed.seq : null,
         ts: typeof parsed.ts === "string" ? parsed.ts : null,
@@ -297,8 +409,8 @@ export function useObservatory(options: ObservatoryOptions): {
   );
 
   const actions = useMemo<ObservatoryActions>(
-    () => ({ refresh, searchDecisions, clearEvents }),
-    [refresh, searchDecisions, clearEvents]
+    () => ({ refresh, selectProject, searchDecisions, clearEvents }),
+    [refresh, selectProject, searchDecisions, clearEvents]
   );
 
   return { state, actions };

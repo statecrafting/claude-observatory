@@ -1,31 +1,38 @@
-// The versioned wire contract (spec 022 B-2): every response shape the
-// daemon serves, the one success/failure envelope they travel in, and the
-// stable error-kind tokens clients branch on. Nothing in this file performs
-// I/O or reads state; it is the single place the CLI (spec 023), the web UI
-// (spec 024), and the server itself agree on shapes, so a change here is
-// visible to every client at compile time rather than at runtime.
+// The versioned wire contract (spec 022 B-2, spec 027 B-1): every response
+// shape the daemon serves, the one success/failure envelope they travel in,
+// and the stable error-kind tokens clients branch on. Nothing in this file
+// performs I/O or reads state; it is the single place the CLI (spec 023), the
+// web UI (spec 024), and the server itself agree on shapes, so a change here
+// is visible to every client at compile time rather than at runtime.
 //
 // The envelope follows statecraft-cli's own output pattern: `{ok: true,
 // data}` or `{ok: false, error: {kind, message}}`, never a bare payload and
 // never an HTTP status alone carrying the meaning.
+//
+// v2 is the project-scoped contract (spec 027). One daemon answers for many
+// projects, so every project-scoped fact lives under `/api/projects/<name>/`
+// and carries its project in the payload; the facts that are genuinely global
+// (daemon meta, the account's quota pool, the event stream) stay global, with
+// every event naming the project it belongs to. There are no v1 aliases.
 import type { JsonValue, JournalRecord } from "../journal";
 import type { RunStatus, SpecExecStatus, Stage, StageExecStatus } from "../state";
 import type { ShippedSource } from "../dag";
 import type { DecisionRecord } from "../decisions";
+import type { RecordedQualification } from "../projects";
 
-// --- version (B-2) ----------------------------------------------------------
+// --- version (B-1) ----------------------------------------------------------
 
 // Bumped whenever a served shape changes incompatibly. Clients send it as
 // `X-Api-Version`; a mismatch is refused with the `api-version-mismatch`
 // token rather than being served a shape the client cannot parse. Stability
 // guarantees beyond this gate are out of scope (section 6).
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 
 export const API_VERSION_HEADER = "X-Api-Version";
 export const CONTROL_SOURCE_HEADER = "X-Control-Source";
 export const DEFAULT_CONTROL_SOURCE = "api";
 
-// --- envelope (B-2) ---------------------------------------------------------
+// --- envelope (022 B-2) -----------------------------------------------------
 
 // Server-side kinds are what a route can actually answer with; the last two
 // are produced only by the typed client (api-client.ts) when the daemon
@@ -52,40 +59,87 @@ export interface ApiError {
 
 export type ApiResponse<T> = { readonly ok: true; readonly data: T } | { readonly ok: false; readonly error: ApiError };
 
-// --- routes -----------------------------------------------------------------
+// --- routes (B-2, B-3, B-4, B-5) --------------------------------------------
 
-// One table, consumed by both the server's router and the client's fetch
-// wrapper, so a path can never drift between the two halves (FR-002).
+// The global half of the route table: the three facts that belong to the
+// daemon rather than to any one project. Consumed by both the server's router
+// and the client's fetch wrapper, so a path can never drift between the two
+// halves (FR-002).
 export const API_ROUTES = {
   meta: "/api/meta",
-  dag: "/api/dag",
-  run: "/api/run",
   quota: "/api/quota",
-  decisions: "/api/decisions",
-  history: "/api/history",
   events: "/api/events",
-  evidencePrefix: "/api/evidence/",
-  runStart: "/api/run/start",
-  runPause: "/api/run/pause",
-  runResume: "/api/run/resume",
-  specPrefix: "/api/spec/",
+  projects: "/api/projects",
+  projectPrefix: "/api/projects/",
 } as const;
+
+// Everything under `/api/projects/<name>/`, as suffixes rather than whole
+// paths: the same table drives the router's segment match and the client's
+// URL building, so a scoped route cannot drift either.
+export const PROJECT_ROUTES = {
+  dag: "dag",
+  run: "run",
+  decisions: "decisions",
+  history: "history",
+  evidencePrefix: "evidence/",
+  arm: "arm",
+  disarm: "disarm",
+  requalify: "requalify",
+  remove: "remove",
+  runStart: "run/start",
+  runPause: "run/pause",
+  runResume: "run/resume",
+  specPrefix: "spec/",
+} as const;
+
+// D-1: spec 025's slug grammar (lowercase alphanumerics and hyphens) has no
+// character that needs URL escaping, so a project name goes into the path raw
+// and the router matches it as a plain segment. Nothing ambiguous can be
+// addressed, and nothing has to be decoded back.
+export function projectRoute(project: string, suffix: string): string {
+  return `${API_ROUTES.projectPrefix}${project}/${suffix}`;
+}
+
+// The optional server-side filter on the one SSE stream (B-4).
+export const EVENTS_PROJECT_PARAM = "project";
 
 export const SPEC_CONTROL_VERBS = ["skip", "retry-stage", "reverify", "force-human-gate", "approve"] as const;
 export type SpecControlVerb = (typeof SPEC_CONTROL_VERBS)[number];
 
 export type ControlVerbToken = "start" | "pause" | "resume" | SpecControlVerb;
 
-// --- /api/meta --------------------------------------------------------------
+export const PROJECT_CONTROL_VERBS = ["register", "arm", "disarm", "requalify", "remove"] as const;
+export type ProjectControlVerb = (typeof PROJECT_CONTROL_VERBS)[number];
+
+// --- /api/meta (B-4) --------------------------------------------------------
+
+// What the daemon itself is doing, as spec 026 models it. "driving" is a
+// project holding the one flight slot; "parked" is that same slot held by a
+// run waiting out the quota horizon (spec 015), which is not the same thing
+// as idling; "standby" is the scheduler between turns.
+export type DaemonState = "starting" | "driving" | "parked" | "standby" | "stopped";
+
+export interface DaemonMetaView {
+  readonly state: DaemonState;
+  // The flight-slot holder (010 D15: at most one live stage session
+  // globally), null while the daemon is in standby.
+  readonly activeProject: string | null;
+  readonly scanIntervalMs: number | null;
+  readonly lastScanMs: number | null;
+}
 
 export interface ApiMeta {
   readonly apiVersion: number;
   readonly service: "claude-observatory-orchestrator";
-  // B-1: v1 binds loopback only. Served rather than assumed so a client can
-  // tell a loopback daemon from whatever a later, authenticated deployment
-  // looks like without guessing from the URL.
+  // 022 B-1: the daemon binds loopback only. Served rather than assumed so a
+  // client can tell a loopback daemon from whatever a later, authenticated
+  // deployment looks like without guessing from the URL.
   readonly loopbackOnly: boolean;
   readonly controlsAvailable: boolean;
+  // null when no scheduler is attached to this server (a read-only inspector
+  // over journals on disk): an explicit unknown, never an invented "standby".
+  readonly daemon: DaemonMetaView | null;
+  readonly projectCount: number;
   readonly routes: readonly string[];
 }
 
@@ -105,49 +159,7 @@ export function toApiJournalRecord(record: JournalRecord): ApiJournalRecord {
   return { seq: record.seq, ts: record.ts, kind: record.kind, payload: record.payload };
 }
 
-// --- /api/dag (B-3) ---------------------------------------------------------
-
-export interface DagSpecNode {
-  readonly id: string;
-  // Explicit unknown (B-6): the registry may carry no `implementation` field
-  // at all for a spec, which is not the same as "pending".
-  readonly implementation: string | null;
-  readonly dependsOn: readonly string[];
-  readonly shipped: boolean;
-  readonly shippedSource: ShippedSource | null;
-  // The pin recorded when the spec shipped, and the pin its spec.md hashes
-  // to right now. A difference is drift (spec 012 B-4).
-  readonly shippedPin: string | null;
-  readonly currentPin: string | null;
-  // Why currentPin is null, when it is: the spec file could not be read.
-  readonly pinError: string | null;
-  readonly drifted: boolean;
-  readonly invalidated: boolean;
-  // Skipped by an operator control (spec 021 B-4); the daemon will not pick
-  // it again this run even while the registry still calls it pending.
-  readonly skipped: boolean;
-  readonly ready: boolean;
-  readonly blockers: readonly string[];
-  // The current run's execution status for this spec, when it has one.
-  readonly specExecStatus: SpecExecStatus | null;
-}
-
-export interface DagView {
-  readonly specs: readonly DagSpecNode[];
-  readonly nextReady: string | null;
-  readonly blockers: readonly SpecBlockerView[];
-  // Non-null when depends_on contains a cycle; scheduling refuses while any
-  // spec on it is unshipped (spec 012 B-5).
-  readonly cycle: readonly string[] | null;
-  readonly invalidated: readonly string[];
-}
-
-export interface SpecBlockerView {
-  readonly specId: string;
-  readonly reasons: readonly string[];
-}
-
-// --- /api/run (B-3) ---------------------------------------------------------
+// --- /api/projects (B-2) ----------------------------------------------------
 
 export interface RunSummary {
   readonly id: string;
@@ -174,9 +186,99 @@ export interface StageExecSummary {
   readonly needsReconcile: boolean;
 }
 
+// One row of the folded registry (spec 025), with the current-run summary
+// folded from that project's own work journal.
+export interface ProjectView {
+  readonly name: string;
+  readonly repoDir: string;
+  readonly armed: boolean;
+  // 025 B-4's recorded verdict, reasons included: an unqualified project stays
+  // visible with why it was refused, never dropped from the list.
+  readonly qualification: RecordedQualification;
+  // null when this project has no run yet, or when `readError` says its state
+  // root could not be read. Never a fabricated idle run (022 B-6).
+  readonly run: RunSummary | null;
+  readonly spec: SpecExecSummary | null;
+  readonly stage: StageExecSummary | null;
+  // Why the run summary is null when it is: the project's journals could not
+  // be opened or folded. Reported, not hidden behind an empty row.
+  readonly readError: string | null;
+}
+
+export interface ProjectsView {
+  readonly projects: readonly ProjectView[];
+}
+
+export interface RegisterProjectRequest {
+  readonly path: string;
+  readonly name?: string;
+}
+
+// The answer to a registry control (B-2): spec 022 D-2's pattern applied to
+// the projects chain, so the record shown is the one the chain actually
+// carries rather than one this API composed.
+export interface ProjectControlResult {
+  readonly verb: ProjectControlVerb;
+  // The project the verb addressed; null only when a registration was refused
+  // before any name existed.
+  readonly project: string | null;
+  readonly applied: boolean;
+  readonly record: ApiJournalRecord | null;
+  // The project as it stands after the call, null once removed.
+  readonly snapshot: ProjectView | null;
+}
+
+// --- /api/projects/<name>/dag (B-3) -----------------------------------------
+
+export interface DagSpecNode {
+  readonly id: string;
+  // Explicit unknown (022 B-6): the registry may carry no `implementation`
+  // field at all for a spec, which is not the same as "pending".
+  readonly implementation: string | null;
+  readonly dependsOn: readonly string[];
+  readonly shipped: boolean;
+  readonly shippedSource: ShippedSource | null;
+  // The pin recorded when the spec shipped, and the pin its spec.md hashes
+  // to right now. A difference is drift (spec 012 B-4).
+  readonly shippedPin: string | null;
+  readonly currentPin: string | null;
+  // Why currentPin is null, when it is: the spec file could not be read.
+  readonly pinError: string | null;
+  readonly drifted: boolean;
+  readonly invalidated: boolean;
+  // Skipped by an operator control (spec 021 B-4); the daemon will not pick
+  // it again this run even while the registry still calls it pending.
+  readonly skipped: boolean;
+  readonly ready: boolean;
+  readonly blockers: readonly string[];
+  // The current run's execution status for this spec, when it has one.
+  readonly specExecStatus: SpecExecStatus | null;
+}
+
+export interface DagView {
+  // B-3: the project name travels in the payload, so a response cannot be
+  // read as if it described "the one repo".
+  readonly project: string;
+  readonly specs: readonly DagSpecNode[];
+  readonly nextReady: string | null;
+  readonly blockers: readonly SpecBlockerView[];
+  // Non-null when depends_on contains a cycle; scheduling refuses while any
+  // spec on it is unshipped (spec 012 B-5).
+  readonly cycle: readonly string[] | null;
+  readonly invalidated: readonly string[];
+}
+
+export interface SpecBlockerView {
+  readonly specId: string;
+  readonly reasons: readonly string[];
+}
+
+// --- /api/projects/<name>/run (B-3) -----------------------------------------
+
 export interface RunView {
+  readonly project: string;
   // null when no run has ever been created: an explicit unknown, not an
-  // invented idle run (B-6).
+  // invented idle run (022 B-6).
   readonly run: RunSummary | null;
   readonly spec: SpecExecSummary | null;
   readonly stage: StageExecSummary | null;
@@ -188,10 +290,16 @@ export interface RunView {
   readonly awaitingApproval: readonly string[];
 }
 
-// --- /api/quota (B-3) -------------------------------------------------------
+// --- /api/quota (B-4) -------------------------------------------------------
 
+// Global, and deliberately not scoped to a project: the account's quota is
+// one pool (026 B-5), so a parked run anywhere is the whole daemon's horizon.
 export interface QuotaView {
   readonly parked: boolean;
+  // Which project's journal recorded this park. Named because "the account is
+  // parked" is only checkable against the run that hit the wall; null when no
+  // project has ever journaled one.
+  readonly project: string | null;
   // All null until a park has ever been journaled: never a fabricated zero.
   readonly targetMs: number | null;
   readonly estimated: boolean | null;
@@ -201,7 +309,7 @@ export interface QuotaView {
   readonly nowMs: number;
 }
 
-// --- /api/decisions (B-3, spec 020 B-5) -------------------------------------
+// --- /api/projects/<name>/decisions (B-3, spec 020 B-5) ---------------------
 
 export interface DecisionQueryParams {
   readonly query?: string;
@@ -210,12 +318,13 @@ export interface DecisionQueryParams {
 }
 
 export interface DecisionsView {
+  readonly project: string;
   readonly query: DecisionQueryParams;
   readonly total: number;
   readonly decisions: readonly DecisionRecord[];
 }
 
-// --- /api/history (B-3) -----------------------------------------------------
+// --- /api/projects/<name>/history (B-3) -------------------------------------
 
 export interface HistoryStage {
   readonly id: string;
@@ -241,19 +350,21 @@ export interface HistoryEntry {
   // "quota" otherwise), null while shepherd has not reported.
   readonly ciConclusion: string | null;
   readonly verifyVerdict: string | null;
-  // Content hashes servable from /api/evidence/<hash>.
+  // Content hashes servable from /api/projects/<name>/evidence/<hash>.
   readonly evidenceRefs: readonly string[];
 }
 
 export interface HistoryView {
+  readonly project: string;
   readonly entries: readonly HistoryEntry[];
 }
 
-// --- /api/evidence/<hash> (B-3) ---------------------------------------------
+// --- /api/projects/<name>/evidence/<hash> (B-3) -----------------------------
 
 export type EvidenceMediaType = "text/plain" | "image/png";
 
 export interface EvidenceView {
+  readonly project: string;
   readonly hash: string;
   readonly mediaType: EvidenceMediaType;
   readonly bytes: number;
@@ -262,13 +373,14 @@ export interface EvidenceView {
   readonly base64: string | null;
 }
 
-// --- controls (B-5) ---------------------------------------------------------
+// --- scoped controls (B-5) --------------------------------------------------
 
 export interface ControlResult {
+  readonly project: string;
   readonly verb: ControlVerbToken;
   readonly specId: string | null;
   // false when the verb was already satisfied and nothing was journaled
-  // (the idempotent case B-5 names): a pause on an already-paused run, a
+  // (the idempotent case 022 B-5 names): a pause on an already-paused run, a
   // resume on an already-running one.
   readonly applied: boolean;
   // The control record the daemon journaled, verbatim; null when nothing
@@ -279,12 +391,24 @@ export interface ControlResult {
 
 // --- events (B-4) -----------------------------------------------------------
 
-export type ApiEventType = "journal" | "transition" | "session" | "quota" | "control" | "stage" | "meta";
+export type ApiEventType =
+  | "journal"
+  | "transition"
+  | "session"
+  | "quota"
+  | "control"
+  | "stage"
+  | "project"
+  | "meta";
 
 export interface ApiEvent {
   // Monotonic per server process; this is the `id:` field SSE clients echo
   // back as `Last-Event-ID` to request replay.
   readonly id: number;
+  // Which project's chain this event came off, null for a daemon-scoped one
+  // (a registry mutation, a server notice). Every event carries it, so one
+  // stream can serve many projects without a client having to guess.
+  readonly project: string | null;
   readonly type: ApiEventType;
   // The journal seq this event mirrors, or null for a server-synthesized
   // event (a quota tick, a replay-gap notice).

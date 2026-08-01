@@ -44,20 +44,27 @@ API. One interface means state honesty has one place to live.
   (statecraft-cli output pattern). All shapes exported from
   `src/orchestrator/api/types.ts` with an `apiVersion` constant served at
   `/api/meta`.
-- **B-3 (reads).** `/api/dag` (specs with status, readiness, blockers,
-  pins, invalidation), `/api/run` (current run, spec, stage, attempt),
-  `/api/quota` (state, target, estimated flag, consecutive parks),
-  `/api/decisions?query=` (spec 020 B-5), `/api/history` (spec executions
-  with evidence refs: PR, CI conclusion, verify verdict),
-  `/api/evidence/<hash>` (content-addressed evidence files, read-only).
+- **B-3 (reads).** Amended to the v2 contract by spec 027 B-3, which scopes
+  every project-scoped read under `/api/projects/<name>/`:
+  `/api/projects/<name>/dag` (specs with status, readiness, blockers,
+  pins, invalidation), `/api/projects/<name>/run` (current run, spec,
+  stage, attempt), `/api/projects/<name>/decisions?query=` (spec 020 B-5),
+  `/api/projects/<name>/history` (spec executions with evidence refs: PR,
+  CI conclusion, verify verdict), `/api/projects/<name>/evidence/<hash>`
+  (content-addressed evidence files, read-only). Each payload carries its
+  project name. `/api/quota` (state, target, estimated flag, consecutive
+  parks) stays global: the account's quota is one pool (026 B-5).
 - **B-4 (events).** `/api/events`: SSE with `retry: 3000`, 15 s comment
   heartbeat, subscription to journal appends, state transitions, session
   stream summaries (bounded), and quota ticks; ring-buffered replay of the
   last 256 events via `Last-Event-ID`.
-- **B-5 (controls).** POST `/api/run/start|pause|resume`,
-  `/api/spec/<id>/skip|retry-stage|reverify|force-human-gate`,
-  `/api/spec/<id>/approve` (releases a human gate). Controls return the
-  journaled control record; idempotent where the verb implies it.
+- **B-5 (controls).** Amended to the v2 contract by spec 027 B-5, which
+  scopes every control to a named project: POST
+  `/api/projects/<name>/run/start|pause|resume`,
+  `/api/projects/<name>/spec/<id>/skip|retry-stage|reverify|force-human-gate`,
+  `/api/projects/<name>/spec/<id>/approve` (releases a human gate).
+  Controls return the journaled control record; idempotent where the verb
+  implies it. An unknown project name answers `not-found`.
 - **B-6 (honesty).** Read endpoints serve only journal-derived state; there
   is no cached status that can disagree with a fold. Unknowns serialize as
   explicit unknowns.
@@ -149,11 +156,14 @@ D-8. FR-002's "generated" client is route-table driven rather than
 code-generated: `api-client.ts` takes every path from the shared
 `API_ROUTES` table and every payload type from `types.ts`, so neither can
 drift without failing typecheck, and the repo keeps its no-build-step
-convention. Control routes validate a spec id by shape only, not registry
-membership, so a control never fails for a `spec-spine` subprocess's reasons.
-`apiVersion` gating is opt-in: a request declaring `X-Api-Version` is held to
-it, one declaring nothing is served on the v1 assumption, which is what keeps
-plain `curl` the first-class client AC-2 makes it.
+convention. Under v2 the table splits with the router: `API_ROUTES` holds the
+global paths and `PROJECT_ROUTES` the scoped suffixes. Control routes validate
+a spec id by shape only, not registry membership, so a control never fails for
+a `spec-spine` subprocess's reasons. `apiVersion` gating is opt-in: a request
+declaring `X-Api-Version` is held to it, one declaring nothing is served on the
+current version's assumption, which is what keeps plain `curl` the first-class
+client AC-2 makes it. Spec 027 B-1 sets that current version to 2 and refuses a
+request declaring version 1.
 
 ## Verification
 
