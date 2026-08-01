@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '025-project-registry' file unit 'src/orchestrator/projects.ts' does not exist",
-        "path": "src/orchestrator/projects.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '025-project-registry' file unit 'src/orchestrator/projects.test.ts' does not exist",
-        "path": "src/orchestrator/projects.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "011-work-journal",
@@ -23,11 +8,23 @@
       {
         "path": "docs/design/00-ecosystem-analysis.md",
         "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/projects.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/projects.ts",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/projects.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -36,7 +33,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/projects.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -62,5 +63,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "c0a65fe847b6ce35f74e1a9cbb4e6129a5833e9025f41a1657761f4075d819f3"
+  "shardHash": "693a612e4e851b3dad78f3be2f44c4ff2346c001ac16d3d04d237967784a98e4"
 }
