@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-02"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: in-progress
+implementation: complete
 risk: medium
 depends_on:
   - "011-work-journal"
@@ -123,4 +123,48 @@ write path: this spec adds no journal record kinds.
 
 ## 7. Resolved decisions
 
-(none yet)
+D-1. "Per spec execution" folds to one row per spec id, aggregating every
+SpecExec and stage attempt the journal holds for that spec: AC-2 asks for
+a row per shipped spec and B-4 renders per-spec rows, and a retried spec
+is one line of "what did this spec need", not one line per attempt. The
+whole-journal totals carry the run-level aggregates but no wall-clock,
+since a wall-clock summed across runs measures nothing.
+
+D-2. `session.result` records carry no specId (spec 014 journals them
+from inside the driver), so the fold replays the journal in order and
+credits each one to the most recently created SpecExec, and through it to
+that exec's run: historyView's own attribution rule, exact under the
+serial loop 021 B-3 guarantees. A session with no SpecExec before it
+belongs to no spec and no run; the totals still count it.
+
+D-3. "Hook-blocked outcomes" counts StageExecs folded to `blocked`, the
+sink the daemon transitions into exactly on a hook-blocked or refused
+stage outcome; sessions that classified hook-blocked stay visible as
+their own bucket in the termination-kind map rather than being counted
+twice.
+
+D-4. Remediation rounds are stage attempts beyond the first, verbatim:
+every StageExec minted at attempt > 1 counts, whatever forced the fresh
+attempt (red gate, crash, or the re-attempt after a quota park). The fold
+reports the journal's plain count rather than inventing a retry taxonomy.
+
+D-5. A spec's wall-clock spans the first `state.transition.intent` for
+any of its StageExecs to the last outcome moving one of its SpecExecs
+into shipped or failed (SpecExec has no graph-sink terminal, 013 D-2, so
+those are the states the pipeline actually stops at; last wins keeps
+remediation inside the span). A run's spans its first stage intent to its
+own completed/failed outcome. Either end missing is null.
+
+D-6. Parked duration sums closed park windows (`quota.parked` to its
+`quota.resumed`, preferring the resume's own resumedAtMs). A park never
+resumed leaves the total null rather than a floor passed off as the
+whole; zero parks is an honest zero, since that is complete knowledge
+rather than an absence.
+
+D-7. The route suffix (`ECONOMICS_ROUTE`) and the view shapes live in
+`src/orchestrator/economics.ts`, state.ts's assembly adds only
+`generatedAt`, and the CLI fetches the one route directly under the
+typed client's envelope discipline: this spec extends only server.ts,
+state.ts, and commands/orchestrator.ts, so 027's contract files
+(types.ts, api-client.ts) stay untouched while the path remains
+single-sourced for both sides.

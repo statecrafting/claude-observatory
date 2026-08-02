@@ -18,6 +18,7 @@ import { foldOrchestratorState } from "../state";
 import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap } from "../dag";
 import { findCycle, invalidatedSet, nextReady, pinOf, pinOfBytes, statusSchedulable } from "../dag";
 import { foldQuotaState, shouldWarn } from "../quota";
+import { economicsView, type EconomicsView } from "../economics";
 import type { DecisionQuery, DecisionRecord } from "../decisions";
 import { decisionRecordsFromChain, queryDecisions } from "../decisions";
 import type { Project } from "../projects";
@@ -542,6 +543,25 @@ export function quotaView(projects: readonly ProjectQuotaInput[], nowMs: number)
     warn: shouldWarn(holder?.streak ?? 0),
     nowMs,
   };
+}
+
+// --- economics view (spec 030 B-3) ------------------------------------------
+
+// The fold as served: spec 030's pure economicsView plus the one field only
+// the serving side can add honestly, the daemon's own clock reading at
+// response time (030 FR-002). Recomputed from records on every request like
+// the dag and run views (022 B-6): there is no cached rollup the journal
+// could disagree with.
+export interface ServedEconomicsView extends EconomicsView {
+  readonly generatedAt: number;
+}
+
+export function servedEconomicsView(
+  records: readonly JournalRecord[],
+  project: string,
+  nowMs: number
+): ServedEconomicsView {
+  return { ...economicsView(records, project), generatedAt: nowMs };
 }
 
 // --- decisions view (B-3, spec 020 B-5) -------------------------------------

@@ -132,3 +132,12 @@ plane whose verbs journal irreversible facts is worse than an annoyance,
 and a flag that parses but addresses nothing is the same defect wearing a
 different hat. An unknown command is still reported as an unknown command
 first, so a typo does not come back as a complaint about its flags.
+
+D-6 (2026-08-02, spec 030's build, per its granted authority). Spec 030
+adds one read verb additively: `economics [--project <name>]`, scoped
+like the other read verbs (D-4's sole-project resolution and D-5's flag
+discipline apply, and B-3's exit codes and `--json` verbatim-envelope
+rule carry over). It fetches its single route directly, building the
+path from the shared constants and mapping transport failure into the
+envelope exactly as api-client.ts does, because that client is outside
+030's declared territory.

@@ -42,9 +42,11 @@ import {
   projectsView,
   quotaView,
   runView,
+  servedEconomicsView,
   type ProjectQuotaInput,
   type ProjectRowInput,
 } from "./state";
+import { ECONOMICS_ROUTE } from "../economics";
 import { createStaticHandler, defaultWebDistDir, type StaticHandler } from "./static";
 import {
   API_ROUTES,
@@ -746,6 +748,7 @@ function metaView(deps: ApiDeps, nowMs: number): ApiMeta {
       projectRoute(NAMED, PROJECT_ROUTES.run),
       projectRoute(NAMED, PROJECT_ROUTES.decisions),
       projectRoute(NAMED, PROJECT_ROUTES.history),
+      projectRoute(NAMED, ECONOMICS_ROUTE),
       projectRoute(NAMED, `${PROJECT_ROUTES.evidencePrefix}<hash>`),
       ...PROJECT_CONTROL_VERBS.filter((verb) => verb !== "register").map((verb) => projectRoute(NAMED, verb)),
       projectRoute(NAMED, PROJECT_ROUTES.runStart),
@@ -783,7 +786,8 @@ async function routeProject(
   request: Request,
   url: URL,
   method: string,
-  segments: readonly string[]
+  segments: readonly string[],
+  clock: { now(): number }
 ): Promise<Response> {
   const path = url.pathname;
   const name = segments[0];
@@ -853,6 +857,11 @@ async function routeProject(
       return requireGet() ?? ok(decisionsView(scoped.api.decisions.records(), decisionQueryFrom(url), scoped.name));
     case PROJECT_ROUTES.history:
       return requireGet() ?? ok(historyView(scoped.api.journal.records(), scoped.name));
+    case ECONOMICS_ROUTE:
+      // Spec 030 B-3: the economics rollup, recomputed from records on every
+      // request exactly like the views above; generatedAt is this daemon's
+      // clock at response time (030 FR-002).
+      return requireGet() ?? ok(servedEconomicsView(scoped.api.journal.records(), scoped.name, clock.now()));
     case PROJECT_ROUTES.runStart:
       return (
         requirePost() ?? requireControls() ?? handleRunStart(scoped, controlSourceFrom(request, await readJsonBody(request)))
@@ -956,7 +965,7 @@ async function route(
       .slice(API_ROUTES.projectPrefix.length)
       .split("/")
       .filter((s) => s.length > 0);
-    return await routeProject(deps, request, url, method, segments);
+    return await routeProject(deps, request, url, method, segments, clock);
   }
 
   // Last, and never for `/api`: the built SPA (spec 024 B-1). static.ts
