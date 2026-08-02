@@ -125,3 +125,25 @@ registration defaults to armed (010 D14), so pointing the daemon at a
 project is the consent to build it, and disarming is the one lever that
 makes a project observation-only. There is no second global autopilot
 switch to disagree with the per-project flag.
+
+D-3 (recorded post-ship; the build session cited it in code without an
+entry). A virgin projects chain bootstraps itself: the first start
+registers the `--repo` checkout as the first project at its qualification
+verdict, so the self-hosted daemon needs no manual registration step.
+Once anything has ever been registered this path never fires again.
+
+D-4 (recorded post-ship; same provenance). A concluded project settles
+the registry signature its conclusion was reached on, and the scan only
+re-wakes it when the signature changes; without this, a completed or
+permanently blocked backlog would be re-driven every scan. The settle map
+is in-memory, so a daemon restart re-drives each armed project once.
+
+D-5 (operator, 2026-08-01). Found closing the wave: 021 D-18's
+requalification runs from a live daemon's loop, but controls only attach
+to live daemons, so a reverify for a project nothing was driving answered
+`unavailable` forever: the one control whose whole point is a project at
+rest was the one control that could never reach it. The scheduler gains
+`openForControl(name)`: start the project's daemon (journals held,
+recovery run), park it in the live map, and let B-3's priority half,
+extended from `hasQueuedResume` to also cover a queued reverify, drive it
+on the next cycle. Every other verb still answers `unavailable` honestly.

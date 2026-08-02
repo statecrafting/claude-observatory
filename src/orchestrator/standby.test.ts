@@ -652,6 +652,54 @@ test("a parked run keeps the flight slot, so no other project starts a session w
   expect(standby.state).toBe("stopped");
 });
 
+// --- D-5: reverify wakes a daemon for a project nothing is driving ----------
+
+test("openForControl wakes a project daemon and the next cycle drives its queued reverify (D-5)", async () => {
+  const home = freshDir("wake-home");
+  const alpha = new FixtureRepo("wake-alpha", { "800-done": { implementation: "complete" } });
+  seedRegistry(home, [["alpha", alpha]]);
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const factory = makeProjectDepsFactory({ alpha }, (name, repo) => passingStageFns(name, repo, order), counter);
+
+  const standby = new StandbyDaemon({
+    daemonHomeDir: home,
+    makeProjectDeps: factory,
+    processInspector: createProcessInspector(),
+    clock: { now: () => Date.now() },
+    sleep: (ms: number) => Bun.sleep(ms),
+    log: () => {},
+    scanIntervalMs: 20,
+    sleepChunkMs: 5,
+  });
+
+  await standby.start();
+  // The backlog is already complete, so the scan settles without driving.
+  await waitFor("the idle settle", () => standby.state === "standby");
+
+  const daemon = await standby.openForControl("alpha");
+  expect(daemon).not.toBeNull();
+  daemon!.reverify("800-done", "test");
+
+  // The priority half drives the woken daemon for its queued control on the
+  // next cycle; the drive concludes and retires the daemon, releasing its
+  // journals. With no shipped exec anywhere the reverify is refused
+  // honestly, which exercises the wake machinery end to end.
+  await waitFor("the drive to conclude", () => standby.daemonFor("alpha") === null, 10_000);
+
+  const journal = openJournal(alpha.stateRoot);
+  try {
+    const fold = journal.fold();
+    expect((fold.byKind["control.reverify"] ?? []).length).toBeGreaterThan(0);
+    expect((fold.byKind["control.reverify.refused"] ?? []).length).toBeGreaterThan(0);
+  } finally {
+    journal.close();
+  }
+  await standby.shutdown();
+  expect(standby.state).toBe("stopped");
+});
+
 // --- D-3: the virgin-registry bootstrap -------------------------------------
 
 test("a virgin registry chain adopts the checkout the daemon was pointed at as its first project (D-3)", async () => {

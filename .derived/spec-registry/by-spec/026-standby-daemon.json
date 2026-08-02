@@ -64,6 +64,6 @@
     "summary": "The daemon stops dying of success: a terminal run drops it to standby, still serving the API, instead of exiting the process. Above the per-run loop sits a scheduler over the project registry (025): armed, qualified projects with ready work get a fresh run, serviced serially in registration order, with at most one live stage session globally. A bounded standby scan refreshes the registry and each armed project's spec DAG, so new pending specs wake a run automatically per 010 D14. Quota parking is global: the account's quota is one pool, so no project starts a session while parked. Runs, journals, and recovery semantics from 013, 011, and 021 are unchanged; the daemon simply outlives them.\n",
     "title": "Standby daemon and the multi-project scheduler"
   },
-  "shardHash": "cbeccacddf908172f610b46aa9d13960830033d7d4db2451ad069f05aa89f0ff",
+  "shardHash": "0827c3890d2adb75e8cd12f07498b21b3b90a22a79e44dea964c5fc3b19d4ea8",
   "specVersion": "1.1.0"
 }

@@ -120,3 +120,12 @@ projects group and --project grammar, the UI switcher and standby view)
 remain 028's and 029's territory, built by their own sessions on top of
 this landing. A waiver was deliberately not used: the coupling now states
 the truth instead of being excused from it.
+
+D-3 (operator, 2026-08-01). The reverify route alone may wake a daemon
+when no controls are attached: `ProjectApi` gains an optional
+`wakeControls` seam (composed from the scheduler's `openForControl`, 026
+D-5), and the reverify handler awaits it before giving up. The response
+contract is unchanged: the woken daemon journals the control record
+synchronously, so the diffed-record rule (022 D-2) holds. All other
+control verbs keep answering `unavailable` for a project with no live
+run, which remains the honest answer for verbs that need one.

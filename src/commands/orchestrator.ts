@@ -921,6 +921,10 @@ function standbyProjects(standby: StandbyDaemon, probe: ProjectProbe): ProjectsT
         repoDir: project.repoDir,
         evidenceDir: join(stateRoot, "verify-evidence"),
         controls: standby.daemonFor(project.name),
+        // 026 D-5 / 027 D-3: reverify may wake a daemon for a project
+        // nothing is driving; the scheduler parks it live and drives it on
+        // the next cycle for the queued requalification.
+        wakeControls: () => standby.openForControl(project.name),
       };
     },
     register(path: string, name: string | undefined, source: ProjectSource): void {
