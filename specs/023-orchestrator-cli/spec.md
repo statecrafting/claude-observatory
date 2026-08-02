@@ -152,6 +152,16 @@ verbs under two names. Every control the CLI issues carries
 terminal rather than defaulting to `api`, which is what lets the ledger
 distinguish an operator's action from the web UI's.
 
+D-8 (operator, 2026-08-02). Found by this spec's first live
+re-qualification (021 D-18): the unreachable-client assertion targeted
+the default port, and re-qualification runs from a daemon that is, by
+construction, alive and serving it, so the assertion failed against the
+very machinery verifying it. The assertion now targets a scratch loopback
+port: it asserts the client's honesty about an absent server, which was
+always its point, not the accident of an idle machine. The daemon's tests
+passed in the same requalification, so this was the only environmental
+dependence in the section.
+
 ## Verification
 
 ```verify:cli
@@ -159,7 +169,10 @@ bun test src/commands/orchestrator.test.ts
 ```
 
 ```verify:cli
-# With no daemon serving HTTP, the client must exit 2 (unreachable), the
-# documented honest outcome, never a crash.
-bun src/index.ts orchestrator status --json > /dev/null 2>&1; test $? -eq 2
+# The client must exit 2 (unreachable), the documented honest outcome,
+# never a crash, when nothing answers. Asserted against a scratch loopback
+# port (D-8): the default port may legitimately hold a live daemon while
+# this runs, re-qualification included, and the assertion is about the
+# client's honesty, not about the operator's machine being idle.
+bun src/index.ts orchestrator status --url http://127.0.0.1:4599 --json > /dev/null 2>&1; test $? -eq 2
 ```
