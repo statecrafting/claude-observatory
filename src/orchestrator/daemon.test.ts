@@ -241,6 +241,7 @@ interface MakeDepsParams {
   readonly readCheckoutBranch?: () => string | null;
   readonly readSpecFileAtSha?: (sha: string, specId: string) => Buffer | null;
   readonly normalizeCheckoutForScheduling?: () => void;
+  readonly readHeadSha?: () => string | null;
 }
 
 // Real clock and real (small-chunk) sleep by default: most tests exercise
@@ -274,6 +275,7 @@ function makeDeps(p: MakeDepsParams): DaemonDeps {
     readCheckoutBranch: p.readCheckoutBranch,
     readSpecFileAtSha: p.readSpecFileAtSha,
     normalizeCheckoutForScheduling: p.normalizeCheckoutForScheduling,
+    readHeadSha: p.readHeadSha,
   };
 }
 
@@ -1296,6 +1298,100 @@ test("a dependent of a pipeline-shipped spec schedules after the flip merge; a p
         b.blockers.some((s) => s.reasons.some((reason) => reason.includes("invalidated")))
       )
     ).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+// --- regression: reverify requalifies a prior-run pipeline-shipped spec
+// amended after its merge (found live: 026's session amended spec 023 and
+// 028 was unbuildable, the invalidation having no re-qualification path) ------
+
+test("reverify requalifies an amended prior-run shipped spec and unblocks its dependent", async () => {
+  const dataDir = freshDir("requalify-data");
+  const repoDir = freshDir("requalify-repo");
+
+  let baseContent = "800 content: original\n";
+  const mergedContent = "800 content: merged flip\n";
+  let includeDependents = false;
+  const dagReader: DagReader = {
+    registryListJson: () => {
+      const rows = [{ id: "800-base", implementation: "pending", dependsOn: [] as string[] }];
+      if (includeDependents) {
+        rows.push({ id: "900-dependent", implementation: "pending", dependsOn: ["800-base"] });
+        rows.push({ id: "950-solo", implementation: "pending", dependsOn: [] });
+      }
+      return JSON.stringify(rows);
+    },
+    registryShowJson: (_repoDir: string, specId: string) =>
+      JSON.stringify({
+        id: specId,
+        implementation: "pending",
+        dependsOn: specId === "900-dependent" ? ["800-base"] : [],
+      }),
+    readSpecFile: (_repoDir: string, specId: string) =>
+      Buffer.from(specId === "800-base" ? baseContent : `content for ${specId}\n`, "utf8"),
+  };
+  const readSpecFileAtSha = (sha: string, specId: string): Buffer | null =>
+    sha === "800-base-merge" && specId === "800-base" ? Buffer.from(mergedContent, "utf8") : null;
+
+  const stageFnsShipAll: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => {
+      if (options.specId === "800-base") baseContent = mergedContent;
+      return shepherdResult(options.specId, "passed", `${options.specId}-merge`);
+    },
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  // Lifetime 1: 800 pipeline-ships; the run completes.
+  const daemon1 = new Daemon(makeDeps({ dataDir, repoDir, dagReader, stageFns: stageFnsShipAll, readSpecFileAtSha }));
+  await daemon1.start();
+  await daemon1.join();
+  expect(daemon1.runStatus).toBe("completed");
+  await daemon1.shutdown();
+
+  // 800 is amended after its merge, and the backlog gains a dependent plus
+  // an independent spec whose build gives us a deterministic moment to
+  // queue the reverify control mid-run.
+  baseContent = "800 content: amended after merge\n";
+  includeDependents = true;
+
+  let daemon2: Daemon;
+  const stageFnsLifetime2: DaemonStageFns = {
+    build: async (options) => {
+      if (options.specId === "950-solo") daemon2.reverify("800-base", "test");
+      return buildResult(options.specId, "passed");
+    },
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+  daemon2 = new Daemon(
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns: stageFnsLifetime2,
+      readSpecFileAtSha,
+      readHeadSha: () => "head-sha-after-amendment",
+    })
+  );
+  await daemon2.start();
+  await daemon2.join();
+  // 950 builds first (ready), the queued reverify requalifies 800 at its
+  // amended pin, and 900 becomes ready instead of blocking the run.
+  expect(daemon2.runStatus).toBe("completed");
+  await daemon2.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const fold = journal.fold();
+    const requalified = (fold.byKind["spec.requalified"] ?? []).map(
+      (r) => r.payload as { specId: string; sha: string }
+    );
+    expect(requalified.some((p) => p.specId === "800-base" && p.sha === "head-sha-after-amendment")).toBe(true);
   } finally {
     journal.close();
   }

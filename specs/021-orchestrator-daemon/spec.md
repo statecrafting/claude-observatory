@@ -278,3 +278,20 @@ the checkout back to the default branch through a best-effort
 `normalizeCheckoutForScheduling` seam (production: clean tree and not on
 the default branch means checkout plus fast-forward; anything else is a
 no-op). D-15's guard remains the backstop when normalization cannot run.
+
+D-18. Found when 028 became unbuildable: 026's build session amended spec
+023 post-ship under its declared authority, D-16's rule invalidated 023,
+and the sanctioned re-qualification edge (reverify, D-8) only reaches
+specs shipped under the current run, so the invalidation was permanent.
+Reverify now widens: when the named spec has no shipped exec in the
+current run but is pipeline-shipped under a prior run, the daemon
+requalifies it directly: normalize the checkout, read the default-branch
+head sha, journal `spec.requalify.intent`, run the verify stage at that
+sha (`isReVerification`), and on a passed or vacuous not-declared outcome
+journal `spec.requalified` with the amended content's pin, which
+`computeShippedMap` replays over the pipeline entry (latest record wins).
+No SpecExec is created, so spec 013's transition table stays untouched; a
+failed or crashed requalification journals `spec.requalify.failed` and
+changes nothing. A later amendment drifts against the requalified pin and
+invalidates again: D-8's scoping sentence is superseded exactly this far
+and no further.
