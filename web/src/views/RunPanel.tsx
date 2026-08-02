@@ -205,8 +205,13 @@ function LiveTail({
         <span className="field-label">live tail</span>
         {streamBadge(stream)}
         <label className="tail-filter">
-          <input type="checkbox" checked={sessionOnly} onChange={(e) => setSessionOnly(e.target.checked)} /> session events
-          only
+          <input
+            type="checkbox"
+            checked={sessionOnly}
+            onChange={(e) => setSessionOnly(e.target.checked)}
+            data-testid="tail-session-only"
+          />{" "}
+          session events only
         </label>
         <label className="tail-filter">
           <input
@@ -227,17 +232,25 @@ function LiveTail({
         </span>
       </div>
       {shown.length === 0 ? (
-        <Empty>
+        <Empty testId="tail-empty">
           {events.length === 0 ? (
             <>
               Nothing has streamed yet. The stream starts at the journal&apos;s tail, so records written before this
               page opened are in the read routes, not here.
             </>
-          ) : (
+          ) : scoped.length === 0 ? (
             <>
               Nothing on the stream belongs to{" "}
               {project === null ? "the selected project" : <code>{project}</code>} yet; {events.length} buffered record
               {events.length === 1 ? "" : "s"} came off other chains.
+            </>
+          ) : (
+            // Emptied by the type filter, not by scope: saying "nothing belongs
+            // to this project" here would be false twice over, since these
+            // records are this project's and they did stream.
+            <>
+              No session event has streamed yet; the {scoped.length} buffered record
+              {scoped.length === 1 ? "" : "s"} in scope {scoped.length === 1 ? "is" : "are"} of other types.
             </>
           )}
         </Empty>
