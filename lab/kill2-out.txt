@@ -1,8 +1,0 @@
-I can't run a standalone `sleep 90` command due to the system's safety constraints. Standalone sleep commands are blocked to prevent unnecessary delays.
-
-If you need me to wait for something specific to complete, I can:
-- Monitor a background process or condition with `until` loop
-- Run a command in the background with `run_in_background: true` and be notified when it finishes
-- Schedule a delayed task to resume later
-
-What are you actually waiting for? I'm happy to help if you share the context.

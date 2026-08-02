@@ -36,6 +36,6 @@ extra_hashed_inputs = [
 # The PR-body waiver keyword (the reason follows the colon).
 waiver_keyword = "Spec-Drift-Waiver:"
 # Adopter bypass entries are ADDITIVE to the built-in generic floor.
-# FINDINGS.md is a research artifact consumed as data; lab/ is scratch.
+# FINDINGS.md is a research artifact consumed as data.
 # bun.lock joins the floor's package-lock.json/pnpm-lock.yaml lockfile set.
-bypass_prefixes = ["FINDINGS.md", "lab/", "bun.lock"]
+bypass_prefixes = ["FINDINGS.md", "bun.lock"]

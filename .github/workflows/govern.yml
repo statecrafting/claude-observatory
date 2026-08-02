@@ -30,10 +30,7 @@ jobs:
       # on the machine that wrote it. The output is never committed (.gitignore).
       - name: Build web UI
         run: bun run web:build
+      # Unconditional: `bun test` discovers every test file itself (src/ and
+      # web/test/); a conditional glob here silently narrows the contract.
       - name: Tests
-        run: |
-          if ls src/**/*.test.ts src/*.test.ts 2>/dev/null | grep -q .; then
-            bun test
-          else
-            echo "no tests yet; skipping (recorded, visible)"
-          fi
+        run: bun test
