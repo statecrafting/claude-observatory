@@ -45,7 +45,7 @@ import type { LastParkInfo, ParkPlan } from "./quota";
 import { foldQuotaState, isResumeDue, journalPark, journalResume, planPark, resumeJitterMs } from "./quota";
 import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap, ShippedSource } from "./dag";
 import { adoptedShipped, createProcessDagReader, loadRegistrySnapshot, makePinLookup, nextReady, pinOfBytes, ready } from "./dag";
-import { runSession } from "./session";
+import { killLiveSession, runSession } from "./session";
 import type {
   BuildResult,
   ReadinessCheck,
@@ -211,6 +211,11 @@ export interface DaemonDeps {
   // every stage-adjacent seam that needs it, and so a test can inject a
   // throwing stub to prove the daemon's own code path never reaches it.
   readonly runSession: typeof runSession;
+  // B-6, D-19: shutdown severs the live session child through this seam
+  // (production: session.ts killLiveSession, process-wide because of the
+  // serial invariant). Absent is a no-op, which keeps fixture deps that
+  // never spawn a real child working unchanged.
+  readonly killLiveSession?: (graceMs?: number) => boolean;
   readonly processInspector: ProcessInspector;
   readonly clock: { now(): number };
   readonly sleep: (ms: number) => Promise<void>;
@@ -319,6 +324,7 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
     verifyRunner: createProcessVerifyRunner({ repoDir }),
     browserVerifier: createClaudeChromeBrowserVerifier({ repo: repoDir, claudeBin }),
     runSession,
+    killLiveSession,
     processInspector: createProcessInspector(),
     clock: { now: () => Date.now() },
     sleep: (ms: number) => Bun.sleep(ms),
@@ -327,8 +333,9 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
   };
 }
 
-// SIGTERM finishes the current journal write, releases the lock, and exits
-// (B-6). Never registered by tests; a fresh process is expected to call this
+// SIGTERM finishes the current journal write, kills any live session child,
+// releases the lock, and exits (B-6; the kill itself lives in shutdown(),
+// D-19). Never registered by tests; a fresh process is expected to call this
 // exactly once.
 export function installShutdownSignalHandler(daemon: Daemon): void {
   process.on("SIGTERM", () => {
@@ -622,13 +629,16 @@ export class Daemon {
     this.shutdownRequested = true;
   }
 
-  // B-6: interrupts the sleep, lets the current journal write finish (mid-
-  // stage shutdown waits for the stage in v1, Resolved decisions D-4),
-  // releases the lock, resolves. A supervised daemon has no loop of its own
-  // to await here; its supervisor awaits the in-flight drive() before calling
-  // this, so closing is all that is left.
+  // B-6: interrupts the sleep, severs any live session child (D-19; the
+  // severed stage call returns promptly and its outcome, classification
+  // "killed", is journaled normally before the loop notices the flag), lets
+  // the current journal write finish, releases the lock, resolves. A
+  // supervised daemon has no loop of its own to await here; its supervisor
+  // awaits the in-flight drive() before calling this, so closing is all
+  // that is left.
   async shutdown(): Promise<void> {
     this.shutdownRequested = true;
+    this.deps.killLiveSession?.();
     if (this.loopPromise) await this.loopPromise;
     this.closeResources();
   }

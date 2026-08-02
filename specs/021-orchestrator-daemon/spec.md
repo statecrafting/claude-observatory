@@ -295,3 +295,23 @@ failed or crashed requalification journals `spec.requalify.failed` and
 changes nothing. A later amendment drifts against the requalified pin and
 invalidates again: D-8's scoping sentence is superseded exactly this far
 and no further.
+
+D-19 (2026-08-02, operator-directed fix wave). B-6's "kills any live
+session child" is now wired; it previously was not, and a mid-build
+SIGTERM left the claude child alive while `daemon stop` timed out
+(operator SIGKILL plus 011 recovery was the workaround). Both shutdown
+verbs that a SIGTERM reaches (`Daemon.shutdown()` and the standby
+scheduler's `shutdown()`, which the production signal handler calls) now
+sever the live child through an injectable `killLiveSession` seam
+(production: spec 014's module-global kill, D-7 there; absent in fixture
+deps is a no-op). D-2 is superseded exactly this far: shutdown no longer
+waits out an in-flight stage's session, it severs the child and the stage
+call returns promptly; D-2's second half stands unchanged, the severed
+stage's outcome (classification "killed") is still journaled normally
+before the loop notices the flag and unwinds. `requestShutdown()` remains
+flag-only: the scheduler that calls it performs the kill itself, and a
+supervisor that only flags was exactly the gap this closes. One narrower
+gap is recorded rather than closed: a stage that spawns its next session
+after the kill fired (a between-attempts window) is not severed;
+cooperative stage cancellation remains future work exactly as D-2 left
+it, and the loop's flag checks still stop the run at the stage boundary.

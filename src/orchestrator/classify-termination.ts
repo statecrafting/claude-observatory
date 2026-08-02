@@ -9,7 +9,15 @@
 // transition tables) so the classification policy is unit-testable against
 // fixtures independent of ever spawning a process.
 
-export type TerminationKind = "completed" | "auth" | "quota" | "hook-blocked" | "transient" | "timeout" | "crashed";
+export type TerminationKind =
+  | "completed"
+  | "auth"
+  | "quota"
+  | "hook-blocked"
+  | "transient"
+  | "timeout"
+  | "killed"
+  | "crashed";
 
 // The subset of a stream-json `result` event this module reads. session.ts
 // owns the full event shape; this module only needs the fields that carry
@@ -27,6 +35,9 @@ export interface ClassifyTerminationInput {
   // Set by the driver, never inferred here: true only when the driver
   // itself killed the child at its configured deadline (B-5).
   readonly timedOut?: boolean;
+  // Set by the driver, never inferred here: true only when the daemon's
+  // shutdown path severed the live child (spec 021 B-6, D-19).
+  readonly shutdownKilled?: boolean;
 }
 
 export interface Classification {
@@ -145,16 +156,26 @@ export function extractResetAtMs(text: string, nowMs: number = Date.now()): numb
 
 // --- classification (B-4) ---------------------------------------------------
 
-// Order: completed, timeout (driver flag), auth, quota, hook-blocked,
-// transient, crashed (fallback). completed and timeout are checked ahead of
-// the regex table: a result event that actually reports success wins even
-// if the driver raced it with a deadline kill, and a driver-confirmed
-// timeout with no result never gets second-guessed by stderr text.
+// Order: completed, killed (driver flag), timeout (driver flag), auth,
+// quota, hook-blocked, transient, crashed (fallback). completed and the two
+// driver flags are checked ahead of the regex table: a result event that
+// actually reports success wins even if the driver raced it with a kill,
+// and a driver-confirmed kill or timeout with no result never gets
+// second-guessed by stderr text. killed outranks timeout so a shutdown
+// that lands after the deadline fired still records the operator's intent.
 export function classifyTermination(input: ClassifyTerminationInput): Classification {
-  const { exitCode, resultEvent, stderrTail, timedOut } = input;
+  const { exitCode, resultEvent, stderrTail, timedOut, shutdownKilled } = input;
 
   if (resultEvent && !resultEvent.is_error) {
     return { kind: "completed", resetAtMs: null, detail: "result event reported is_error: false" };
+  }
+
+  if (shutdownKilled) {
+    return {
+      kind: "killed",
+      resetAtMs: null,
+      detail: "the daemon's shutdown path severed the live session child (021 B-6)",
+    };
   }
 
   if (timedOut) {
