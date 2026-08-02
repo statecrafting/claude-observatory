@@ -19,7 +19,7 @@
       }
     ],
     "id": "028-cli-projects",
-    "implementation": "pending",
+    "implementation": "in-progress",
     "kind": "surface",
     "references": [
       {
@@ -45,6 +45,6 @@
     "summary": "The orchestrator command group follows the API to v2: a projects subgroup (list, add, arm, disarm, requalify, remove), a --project flag scoping the existing verbs to a named project, a composite status that renders the daemon state plus one row per project, and an offline journal verify that resolves a project's state root through the daemon home's registry chain. Client-not-engine, exit codes, and the X-Control-Source discipline from 023 carry over unchanged.\n",
     "title": "CLI v2: the projects group and project-scoped verbs"
   },
-  "shardHash": "d30c127c4c458ec94de815eec5572404ef52b15c639fa16d820703b8d194ae50",
+  "shardHash": "d3c5f76d9d05f01ddc86d00c434ecb5ed569a3f94fe1bc745c349a9661d492f1",
   "specVersion": "1.1.0"
 }

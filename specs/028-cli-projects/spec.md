@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-01"
 authors: ["Bartek Kus"]
 kind: surface
-implementation: pending
+implementation: in-progress
 risk: low
 depends_on:
   - "023-orchestrator-cli"
