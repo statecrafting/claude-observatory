@@ -1,18 +1,18 @@
 {
   "diagnostics": {
-    "errors": [],
-    "warnings": [
+    "errors": [
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '030-run-economics' file unit 'src/orchestrator/economics.ts' does not exist",
         "path": "src/orchestrator/economics.ts"
       },
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '030-run-economics' file unit 'src/orchestrator/economics.test.ts' does not exist",
         "path": "src/orchestrator/economics.test.ts"
       }
-    ]
+    ],
+    "warnings": []
   },
   "mapping": {
     "dependsOn": [
@@ -116,5 +116,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "fa87172cb69b5fe94dbed64ccfa2811276eac198617f457236c4aa9c4512b9d4"
+  "shardHash": "17a448df0035c629bbc3ac6b2603d53d975de28226886b22aec01faabdab8bf0"
 }

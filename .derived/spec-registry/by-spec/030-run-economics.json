@@ -48,7 +48,7 @@
       }
     ],
     "id": "030-run-economics",
-    "implementation": "pending",
+    "implementation": "in-progress",
     "kind": "feature",
     "references": [
       {
@@ -75,6 +75,6 @@
     "summary": "Every session's cost, termination class, and attempt number is already journaled; nothing aggregates them, so \"what did last night cost\" and \"how much rework did that spec need\" are answerable only by folding the journal by hand. This spec adds the rollup as a pure function over journal records, per spec and per run: sessions consumed (by termination kind), remediation rounds, hook blocks, quota parks, cost in micro-USD, and wall-clock duration; served project-scoped by the API and rendered by the CLI. Absent facts stay null, never zero: a session whose CLI reported no cost is \"cost unknown\", not free.\n",
     "title": "Run economics: cost and autonomy-yield rollups from the journal"
   },
-  "shardHash": "8282a8465d56e766768c3e4e6407ee8d13ca59b05e6e4b128827b40ea5e2b05b",
+  "shardHash": "c309c7946d0bb2668e4be488101daca9ec03b7667eeb19fc078e9a82deb6c6fc",
   "specVersion": "1.1.0"
 }
