@@ -507,6 +507,93 @@ test("FR-003: a branch that already exists from a crashed attempt is reused, not
   decisionsChain.close();
 });
 
+// --- B-2/D-8: the bracket regenerates the codebase index ----------------------
+
+test("D-8: the flip commit carries a regenerated index (compile, index, then commit)", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const base = createProcessRunner({ repoDir: dir });
+  const ops: string[] = [];
+  const runner: Runner = {
+    ...base,
+    runGate: (cmd) => {
+      ops.push(`gate:${cmd.join(" ")}`);
+      return { exitCode: 0, stdoutTail: "", stderrTail: "" };
+    },
+    commit: (message) => {
+      ops.push("commit");
+      base.commit(message);
+    },
+    runSession: fakeWritingSession(dir, specId),
+  };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+  });
+
+  expect(result.outcome).toBe("passed");
+  // The bracket's own sequence, right before its flip commit: compile, then
+  // the index regeneration. The stale-shard defect was the middle step
+  // missing, which left the flip commit carrying the pre-flip shard.
+  const firstCommit = ops.indexOf("commit");
+  expect(ops.slice(firstCommit - 2, firstCommit + 1)).toEqual([
+    "gate:spec-spine compile",
+    "gate:spec-spine index",
+    "commit",
+  ]);
+
+  const bracket = journal.fold().byKind["stage.build.bracket"]![0]!.payload as Record<string, unknown>;
+  expect(bracket.compileExitCode).toBe(0);
+  expect(bracket.indexExitCode).toBe(0);
+
+  journal.close();
+  decisionsChain.close();
+});
+
+test("D-8: a failing index regeneration fails the bracket with both gate evidences", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const runner: Runner = {
+    ...createProcessRunner({ repoDir: dir }),
+    runGate: (cmd) =>
+      cmd.join(" ") === "spec-spine index"
+        ? { exitCode: 3, stdoutTail: "", stderrTail: "index exploded" }
+        : { exitCode: 0, stdoutTail: "", stderrTail: "" },
+    runSession: async () => {
+      throw new Error("must not spawn a session after a failed bracket");
+    },
+  };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+  });
+
+  expect(result.outcome).toBe("failed");
+  expect(result.evidence.gates.map((g) => g.cmd.join(" "))).toEqual(["spec-spine compile", "spec-spine index"]);
+  expect(result.evidence.gates[1]!.exitCode).toBe(3);
+  const bracket = journal.fold().byKind["stage.build.bracket"]![0]!.payload as Record<string, unknown>;
+  expect(bracket.indexExitCode).toBe(3);
+
+  journal.close();
+  decisionsChain.close();
+});
+
 // --- B-4: hook-blocked classification maps to the blocked outcome -----------
 
 test("B-4: a hook-blocked session classification maps the stage outcome to blocked", async () => {

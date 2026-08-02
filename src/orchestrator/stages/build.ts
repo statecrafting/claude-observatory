@@ -214,6 +214,12 @@ export const GATE_COMMANDS: readonly (readonly string[])[] = [
   ["bun", "test"],
 ];
 
+// The bracket's index REGENERATION (D-8): distinct from GATE_COMMANDS[1],
+// which only checks staleness. The gate list stays read-only; only the
+// bracket, which just changed a hashed input (the spec's frontmatter),
+// rewrites derived artifacts.
+export const INDEX_REGENERATE_COMMAND: readonly string[] = ["spec-spine", "index"];
+
 export interface GateEvidence extends GateResult {
   readonly cmd: readonly string[];
 }
@@ -570,9 +576,19 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
   const beforeContent = runner.readFile(specPath);
   const flip = flipImplementation(beforeContent, "pending", "in-progress");
   let bracketGate: GateEvidence | null = null;
+  let bracketIndex: GateEvidence | null = null;
   if (flip.changed) {
     runner.writeFile(specPath, flip.content);
     bracketGate = { cmd: GATE_COMMANDS[0]!, ...runner.runGate(GATE_COMMANDS[0]!) };
+    // D-8: the flip touches the codebase-index shards too, so the bracket
+    // regenerates them before its commit. A flip commit carrying the
+    // pre-flip shard is absorbed by the session's final commit on the happy
+    // path, but an early crash leaves the next `spec-spine index` run to
+    // dirty the tree, which is exactly what makes 021 D-17's normalization
+    // refuse to act.
+    if (bracketGate.exitCode === 0) {
+      bracketIndex = { cmd: INDEX_REGENERATE_COMMAND, ...runner.runGate(INDEX_REGENERATE_COMMAND) };
+    }
     runner.add([specPath, ".derived"]);
     runner.commit(`chore(${specId}): flip implementation to in-progress`);
   }
@@ -585,10 +601,12 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     flipped: flip.changed,
     headSha: bracketHeadSha,
     compileExitCode: bracketGate?.exitCode ?? null,
+    indexExitCode: bracketIndex?.exitCode ?? null,
   };
   journal.append("stage.build.bracket", bracketPayload);
 
-  if (bracketGate && bracketGate.exitCode !== 0) {
+  const bracketEvidence = [bracketGate, bracketIndex].filter((g): g is GateEvidence => g !== null);
+  if (bracketEvidence.some((g) => g.exitCode !== 0)) {
     const resultPayload: Record<string, JsonValue> = { specId, outcome: "failed", branch, headSha: bracketHeadSha };
     journal.append("stage.build.result", resultPayload);
     return {
@@ -600,7 +618,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
         promptVersion: null,
         refusal: null,
         sessions: [],
-        gates: [bracketGate],
+        gates: bracketEvidence,
         frontmatterComplete: false,
         decisions: null,
       },
