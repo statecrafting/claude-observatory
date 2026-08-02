@@ -13,8 +13,8 @@ import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import type { ApiError, ControlResult, ControlVerbToken, ProjectClient, RunView } from "../api";
 import { planControl, previewJson } from "../controls";
-import { formatJson } from "../format";
-import { Badge, ErrorNote } from "./bits";
+import { ErrorNote } from "./bits";
+import { ConfirmPrompt, ControlDialog, DismissButton, JournaledRecord } from "./ConfirmDialog";
 
 export interface ControlButtonProps {
   readonly verb: ControlVerbToken;
@@ -88,60 +88,22 @@ export function ControlButton({ verb, client, run, specId = null, onApplied }: C
   }
 
   return (
-    <div className="control-dialog" role="dialog" aria-label={`${plan.label} confirmation`} data-testid={`${testId}-dialog`}>
-      <header className="control-dialog-head">
-        <strong>{plan.label}</strong>
-        {plan.specId ? <code className="control-target">{plan.specId}</code> : null}
-        <EffectBadge effect={plan.effect} />
-      </header>
-
+    <ControlDialog testId={testId} label={plan.label} target={plan.specId} effect={plan.effect}>
       {phase === "confirming" || phase === "sending" ? (
-        <>
-          {plan.record === null ? (
-            <p className="control-preview-empty" data-testid={`${testId}-preview`}>
-              No record will be journaled.
-            </p>
-          ) : (
-            <>
-              <p className="control-preview-lead">This appends exactly one record to the work journal:</p>
-              <pre className="control-preview" data-testid={`${testId}-preview`}>
-                {previewJson(plan)}
-              </pre>
-            </>
-          )}
-          <p className="control-note">{plan.note}</p>
-          <div className="control-dialog-actions">
-            <button
-              type="button"
-              className="control-confirm"
-              data-testid={`${testId}-confirm`}
-              disabled={phase === "sending"}
-              onClick={() => void confirm()}
-            >
-              {plan.effect === "refused" ? "Send anyway" : "Confirm"}
-            </button>
-            <button
-              type="button"
-              className="control-cancel"
-              data-testid={`${testId}-cancel`}
-              disabled={phase === "sending"}
-              onClick={dismiss}
-            >
-              Cancel
-            </button>
-          </div>
-        </>
+        <ConfirmPrompt
+          testId={testId}
+          previewJson={previewJson(plan)}
+          note={plan.note}
+          effect={plan.effect}
+          sending={phase === "sending"}
+          onConfirm={() => void confirm()}
+          onCancel={dismiss}
+        />
       ) : (
         <Answer result={result} error={error} testId={testId} onDismiss={dismiss} />
       )}
-    </div>
+    </ControlDialog>
   );
-}
-
-function EffectBadge({ effect }: { effect: ReturnType<typeof planControl>["effect"] }): ReactNode {
-  if (effect === "journals") return <Badge tone="info">writes one record</Badge>;
-  if (effect === "no-op") return <Badge tone="neutral">no-op, writes nothing</Badge>;
-  return <Badge tone="warn">the daemon will refuse this</Badge>;
 }
 
 // What actually happened, straight from the envelope. `applied: false` is
@@ -160,14 +122,7 @@ function Answer({
   return (
     <div className="control-answer" data-testid={`${testId}-answer`}>
       {error !== null ? <ErrorNote error={error} /> : null}
-      {result !== null && result.applied && result.record !== null ? (
-        <>
-          <p className="control-answer-lead">
-            Journaled at seq <code>{result.record.seq}</code> ({result.record.ts}):
-          </p>
-          <pre className="control-preview">{formatJson({ kind: result.record.kind, payload: result.record.payload })}</pre>
-        </>
-      ) : null}
+      {result !== null && result.applied && result.record !== null ? <JournaledRecord record={result.record} /> : null}
       {result !== null && !result.applied ? (
         <p className="control-answer-lead">Nothing was journaled: the daemon reported this control as already satisfied.</p>
       ) : null}
@@ -181,11 +136,7 @@ function Answer({
           run status after the call: <code>{result.runStatus ?? "unknown"}</code>
         </p>
       ) : null}
-      <div className="control-dialog-actions">
-        <button type="button" className="control-cancel" data-testid={`${testId}-dismiss`} onClick={onDismiss}>
-          Dismiss
-        </button>
-      </div>
+      <DismissButton testId={testId} onDismiss={onDismiss} />
     </div>
   );
 }

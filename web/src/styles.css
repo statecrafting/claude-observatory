@@ -176,6 +176,38 @@ input:not([type]) {
 
 /* --- the honesty surfaces ------------------------------------------------ */
 
+/* The two account-wide facts (spec 029 B-4). Deliberately a strip across the
+   top rather than a panel: it governs everything below it, including whichever
+   project is selected, and must not read as one panel's content. */
+.global-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.7rem;
+  margin-top: 0.7rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  font-size: 0.84rem;
+}
+
+.global-banner-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-dim);
+}
+
+.global-banner-item {
+  color: var(--fg-muted);
+}
+
+.global-banner-scope {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+
 .banner {
   margin: 0.9rem 0 0;
   padding: 0.6rem 0.8rem;
@@ -341,6 +373,137 @@ input:not([type]) {
   padding-left: 1.1rem;
   font-size: 0.86rem;
   color: var(--fg-muted);
+}
+
+/* --- the fleet view (spec 029 B-1, B-2, B-3) ----------------------------- */
+
+.project-list {
+  list-style: none;
+  margin: 0.8rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.project-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  padding: 0.6rem 0.75rem;
+}
+
+.project-row-selected {
+  border-color: var(--accent);
+}
+
+.project-row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.project-name {
+  font-weight: 600;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.project-repo {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-select {
+  margin-left: auto;
+  font-size: 0.78rem;
+  padding: 0.12rem 0.45rem;
+}
+
+.project-backlog {
+  margin-top: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.project-backlog-headline {
+  font-family: var(--mono);
+}
+
+.project-backlog-why,
+.project-backlog-detail {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  max-width: 84ch;
+}
+
+.project-run {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.project-qualification {
+  margin-top: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-decoration: underline dotted;
+}
+
+.qualification-checks,
+.qualification-warnings {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.84rem;
+  color: var(--fg-muted);
+}
+
+.project-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.project-controls button {
+  font-size: 0.78rem;
+  padding: 0.12rem 0.45rem;
+}
+
+.register-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
+}
+
+.register-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-dim);
 }
 
 /* --- dag ----------------------------------------------------------------- */

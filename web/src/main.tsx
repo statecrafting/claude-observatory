@@ -5,7 +5,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { browserClient, eventsUrl } from "./api";
+import { browserClient } from "./api";
 import type { EventSourceLike } from "./store";
 import "./styles.css";
 
@@ -14,8 +14,10 @@ if (container === null) throw new Error("web: #root is missing from index.html")
 
 const openStream = (url: string): EventSourceLike => new EventSource(url);
 
+// The stream url comes off the client's own route table rather than being
+// built here, which is the same rule every other path in this app follows.
 createRoot(container).render(
   <StrictMode>
-    <App client={browserClient()} eventsUrl={eventsUrl()} openStream={openStream} />
+    <App client={browserClient()} openStream={openStream} />
   </StrictMode>
 );

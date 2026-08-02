@@ -11,7 +11,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import type { ApiError, ApiEventType, ProjectClient, RunView } from "../api";
 import type { StreamEvent, StreamStatus } from "../store";
-import { ALL_EVENT_TYPES } from "../store";
+import { ALL_EVENT_TYPES, eventBelongsToProject } from "../store";
 import { formatDuration, formatElapsed, formatTimestamp, parseTimestamp, shortHash, summarizePayload, UNKNOWN } from "../format";
 import { Badge, Empty, ErrorNote, Field, Panel, Unknown } from "../components/bits";
 import { ControlButton } from "../components/ControlButton";
@@ -22,6 +22,9 @@ export interface RunPanelProps {
   readonly events: readonly StreamEvent[];
   readonly stream: StreamStatus;
   readonly nowMs: number;
+  // Which project this panel is showing, so the tail carries that project's
+  // lines rather than every project's (spec 029 B-5).
+  readonly project: string | null;
   readonly client: ProjectClient | null;
   readonly stale?: boolean;
   readonly onApplied?: () => void;
@@ -51,6 +54,7 @@ export function RunPanel({
   events,
   stream,
   nowMs,
+  project,
   client,
   stale = false,
   onApplied,
@@ -160,7 +164,7 @@ export function RunPanel({
         </Field>
       </div>
 
-      <LiveTail events={events} stream={stream} {...(onClearEvents ? { onClear: onClearEvents } : {})} />
+      <LiveTail events={events} stream={stream} project={project} {...(onClearEvents ? { onClear: onClearEvents } : {})} />
     </Panel>
   );
 }
@@ -171,17 +175,29 @@ function streamBadge(stream: StreamStatus): ReactNode {
   return <Badge tone="bad">stream closed</Badge>;
 }
 
+// The tail is one project's (029 B-5). One stream carries every project, so the
+// default view applies the same predicate the server's own `?project=` filter
+// applies: this project's records plus the daemon-scoped ones, which belong to
+// no project and matter to whichever is being watched. The unfiltered view is
+// one click away and says what it is, because a line from another project under
+// this project's run panel would be a scope error, not extra information.
 function LiveTail({
   events,
   stream,
+  project,
   onClear,
 }: {
   events: readonly StreamEvent[];
   stream: StreamStatus;
+  project: string | null;
   onClear?: () => void;
 }): ReactNode {
   const [sessionOnly, setSessionOnly] = useState(false);
-  const shown: readonly StreamEvent[] = sessionOnly ? events.filter((e) => e.type === "session") : events;
+  const [everyProject, setEveryProject] = useState(false);
+
+  const filter = everyProject ? null : project;
+  const scoped = events.filter((event) => eventBelongsToProject(event, filter));
+  const shown: readonly StreamEvent[] = sessionOnly ? scoped.filter((e) => e.type === "session") : scoped;
 
   return (
     <div className="tail">
@@ -189,22 +205,54 @@ function LiveTail({
         <span className="field-label">live tail</span>
         {streamBadge(stream)}
         <label className="tail-filter">
-          <input type="checkbox" checked={sessionOnly} onChange={(e) => setSessionOnly(e.target.checked)} /> session events
-          only
+          <input
+            type="checkbox"
+            checked={sessionOnly}
+            onChange={(e) => setSessionOnly(e.target.checked)}
+            data-testid="tail-session-only"
+          />{" "}
+          session events only
+        </label>
+        <label className="tail-filter">
+          <input
+            type="checkbox"
+            checked={everyProject}
+            onChange={(e) => setEveryProject(e.target.checked)}
+            data-testid="tail-every-project"
+          />{" "}
+          every project
         </label>
         {onClear ? (
           <button type="button" className="tail-clear" onClick={onClear}>
             clear
           </button>
         ) : null}
-        <span className="muted">
-          {events.length} buffered ({countByType(events)})
+        <span className="muted" data-testid="tail-counts">
+          {shown.length} of {events.length} buffered ({countByType(scoped)})
         </span>
       </div>
       {shown.length === 0 ? (
-        <Empty>
-          Nothing has streamed yet. The stream starts at the journal&apos;s tail, so records written before this page
-          opened are in the read routes, not here.
+        <Empty testId="tail-empty">
+          {events.length === 0 ? (
+            <>
+              Nothing has streamed yet. The stream starts at the journal&apos;s tail, so records written before this
+              page opened are in the read routes, not here.
+            </>
+          ) : scoped.length === 0 ? (
+            <>
+              Nothing on the stream belongs to{" "}
+              {project === null ? "the selected project" : <code>{project}</code>} yet; {events.length} buffered record
+              {events.length === 1 ? "" : "s"} came off other chains.
+            </>
+          ) : (
+            // Emptied by the type filter, not by scope: saying "nothing belongs
+            // to this project" here would be false twice over, since these
+            // records are this project's and they did stream.
+            <>
+              No session event has streamed yet; the {scoped.length} buffered record
+              {scoped.length === 1 ? "" : "s"} in scope {scoped.length === 1 ? "is" : "are"} of other types.
+            </>
+          )}
         </Empty>
       ) : (
         <ol className="tail-list" data-testid="run-tail">

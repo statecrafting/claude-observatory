@@ -13,7 +13,8 @@ import { expect, test } from "bun:test";
 import { act } from "react";
 import { useDom, mount } from "./harness";
 import type { ReactNode } from "react";
-import { resolveProject, useObservatory } from "../src/store";
+import { eventBelongsToProject, resolveProject, useObservatory } from "../src/store";
+import { matchesProjectFilter } from "../../src/orchestrator/api/events";
 import type { ObservatoryActions, ObservatoryState } from "../src/store";
 import type {
   ApiClient,
@@ -210,5 +211,26 @@ test("a refresh that started before the operator picked a project cannot revert 
     expect(view.text("project")).toBe(BETA);
   } finally {
     view.unmount();
+  }
+});
+
+// --- the stream filter (spec 029 B-5) ---------------------------------------
+
+// web/src/store.ts re-declares the server's `?project=` predicate, because the
+// module that owns it folds journals and so cannot be bundled for a browser.
+// A re-declared contract drifts silently, so the two are pinned against each
+// other here: this is what makes the duplication safe rather than convenient.
+test("the tail's project filter is the server's own predicate", () => {
+  const cases: readonly (readonly [string | null, string | null])[] = [
+    ["alpha", null],
+    ["beta", null],
+    ["alpha", "alpha"],
+    ["beta", "alpha"],
+    [null, "alpha"],
+    [null, null],
+  ];
+
+  for (const [project, filter] of cases) {
+    expect(eventBelongsToProject({ project }, filter)).toBe(matchesProjectFilter({ project }, filter));
   }
 });

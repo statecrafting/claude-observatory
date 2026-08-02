@@ -17,10 +17,13 @@ import type {
   ApiResponse,
   ControlResult,
   ControlVerbToken,
+  DaemonState,
   DagView,
   DecisionsView,
   HistoryView,
   ProjectClient,
+  ProjectControlResult,
+  ProjectControlVerb,
   ProjectView,
   ProjectsView,
   QuotaView,
@@ -204,6 +207,103 @@ export const FIXTURE_PROJECT_VIEW: ProjectView = {
 
 export const FIXTURE_PROJECTS: ProjectsView = { projects: [FIXTURE_PROJECT_VIEW] };
 
+// --- the fleet (spec 029) ---------------------------------------------------
+
+// A registry row for a second project, so the switcher and the standby view
+// have something to be wrong about. Defaults are the ordinary case (armed,
+// qualified, no run yet); every test overrides only the fact it is about.
+export function fixtureProjectView(name: string, overrides: Partial<ProjectView> = {}): ProjectView {
+  return {
+    name,
+    repoDir: `/repo/${name}`,
+    armed: true,
+    qualification: {
+      qualified: true,
+      checks: [{ id: "git-repo", ok: true, detail: "git work tree root" }],
+      warnings: [],
+      checkedAt: "2026-08-01T09:00:00.000Z",
+    },
+    run: null,
+    spec: null,
+    stage: null,
+    readError: null,
+    ...overrides,
+  };
+}
+
+export const FIXTURE_UNQUALIFIED = {
+  qualified: false,
+  checks: [
+    { id: "git-repo" as const, ok: true, detail: "git work tree root" },
+    { id: "origin-remote" as const, ok: false, detail: `no "origin" remote` },
+  ],
+  warnings: ["/repo/gamma does not gitignore data/"],
+  checkedAt: "2026-08-01T09:00:00.000Z",
+};
+
+// The three backlog shapes the standby view has to tell apart (029 B-2), as
+// the DAG route serves them: nothing pending, pending work with a pick, and
+// pending work with none.
+export type FixtureBacklog = "complete" | "ready" | "blocked";
+
+export function fixtureDagFor(project: string, shape: FixtureBacklog): DagView {
+  const alpha: DagView["specs"][number] = {
+    id: "001-alpha",
+    implementation: "complete",
+    dependsOn: [],
+    shipped: true,
+    shippedSource: "adopted",
+    shippedPin: PIN_ALPHA,
+    currentPin: PIN_ALPHA,
+    pinError: null,
+    drifted: false,
+    invalidated: false,
+    skipped: false,
+    ready: true,
+    blockers: [],
+    specExecStatus: null,
+  };
+
+  if (shape === "complete") {
+    return { project, specs: [alpha], nextReady: null, blockers: [], cycle: null, invalidated: [] };
+  }
+
+  const beta: DagView["specs"][number] = {
+    id: "002-beta",
+    implementation: "pending",
+    dependsOn: ["001-alpha"],
+    shipped: false,
+    shippedSource: null,
+    shippedPin: null,
+    currentPin: PIN_BETA,
+    pinError: null,
+    drifted: false,
+    invalidated: false,
+    skipped: false,
+    ready: shape === "ready",
+    blockers: shape === "ready" ? [] : ["dependency 001-alpha is invalidated (pin drift)"],
+    specExecStatus: null,
+  };
+
+  return shape === "ready"
+    ? { project, specs: [alpha, beta], nextReady: "002-beta", blockers: [], cycle: null, invalidated: [] }
+    : {
+        project,
+        specs: [{ ...alpha, drifted: true, invalidated: true }, beta],
+        nextReady: null,
+        blockers: [{ specId: "002-beta", reasons: ["dependency 001-alpha is invalidated (pin drift)"] }],
+        cycle: null,
+        invalidated: ["001-alpha"],
+      };
+}
+
+export function metaWithDaemon(state: DaemonState, activeProject: string | null): ApiMeta {
+  return {
+    ...FIXTURE_META,
+    daemon: { state, activeProject, scanIntervalMs: 60_000, lastScanMs: null },
+  };
+}
+
 export const FIXTURE_META: ApiMeta = {
   apiVersion: 2,
   service: "claude-observatory-orchestrator",
@@ -219,6 +319,9 @@ export const FIXTURE_META: ApiMeta = {
 export interface RecordedCall {
   readonly method: string;
   readonly specId: string | null;
+  // Set only by the registry half, whose verbs address a project rather than a
+  // spec; the scoped calls keep the two-field shape the older tests assert on.
+  readonly project?: string | null;
 }
 
 export interface FixtureProjectClient extends ProjectClient {
@@ -253,6 +356,38 @@ export function controlAnswer(
 
 export interface FixtureClientOptions {
   readonly control?: (verb: ControlVerbToken, specId: string | null) => ApiResponse<ControlResult>;
+  // The registry half's answer (027 B-2). The default journals a record shaped
+  // like spec 025's own, because the confirmation flow's whole promise is that
+  // what is shown afterwards is the record the chain carries.
+  readonly registryControl?: (verb: ProjectControlVerb, name: string | null) => ApiResponse<ProjectControlResult>;
+  // What `GET /api/projects` answers with; a single armed project by default.
+  readonly projects?: ProjectsView;
+  // Per-project DAG folds for the standby view, keyed by project name.
+  readonly dags?: ReadonlyMap<string, DagView>;
+}
+
+const REGISTRY_KIND: Readonly<Record<ProjectControlVerb, string>> = {
+  register: "project.registered",
+  arm: "project.armed",
+  disarm: "project.disarmed",
+  requalify: "project.requalified",
+  remove: "project.removed",
+};
+
+export function registryAnswerFor(verb: ProjectControlVerb, name: string | null, seq: number = 12): ProjectControlResult {
+  const project = name ?? "derived";
+  return {
+    verb,
+    project,
+    applied: true,
+    record: {
+      seq,
+      ts: "2026-08-01T12:00:00.000Z",
+      kind: REGISTRY_KIND[verb],
+      payload: { name: project, source: "ui" },
+    },
+    snapshot: fixtureProjectView(project, { armed: verb !== "disarm" }),
+  };
 }
 
 const BASE_URL = "http://127.0.0.1:4519";
@@ -276,7 +411,7 @@ function projectClient(name: string, calls: RecordedCall[], options: FixtureClie
   return {
     calls,
     name,
-    dag: () => ok(FIXTURE_DAG),
+    dag: () => ok(options.dags?.get(name) ?? FIXTURE_DAG),
     run: () => ok(FIXTURE_RUN),
     decisions: () => ok(FIXTURE_DECISIONS),
     history: () => ok(FIXTURE_HISTORY),
@@ -302,9 +437,12 @@ export function fixtureClient(options: FixtureClientOptions = {}): FixtureProjec
 // scoped half above (027 B-2, B-4).
 export function fixtureApiClient(options: FixtureClientOptions = {}): FixtureClient {
   const calls: RecordedCall[] = [];
-  const registryAnswer = (verb: "register" | "arm" | "disarm" | "requalify" | "remove", name: string | null) => {
-    calls.push({ method: verb, specId: null });
-    return ok({ verb, project: name, applied: true, record: null, snapshot: FIXTURE_PROJECT_VIEW });
+  const registryAnswer = (
+    verb: ProjectControlVerb,
+    name: string | null
+  ): Promise<ApiResponse<ProjectControlResult>> => {
+    calls.push({ method: verb, specId: null, project: name });
+    return Promise.resolve(options.registryControl?.(verb, name) ?? { ok: true, data: registryAnswerFor(verb, name) });
   };
 
   return {
@@ -314,7 +452,7 @@ export function fixtureApiClient(options: FixtureClientOptions = {}): FixtureCli
       project === undefined ? `${BASE_URL}/api/events` : `${BASE_URL}/api/events?project=${project}`,
     meta: () => ok(FIXTURE_META),
     quota: () => ok(FIXTURE_QUOTA),
-    projects: () => ok(FIXTURE_PROJECTS),
+    projects: () => ok(options.projects ?? FIXTURE_PROJECTS),
     registerProject: (request) => registryAnswer("register", request.name ?? null),
     armProject: (name) => registryAnswer("arm", name),
     disarmProject: (name) => registryAnswer("disarm", name),

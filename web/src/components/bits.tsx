@@ -4,7 +4,7 @@
 // rendering an unknown as a spinner or a plausible default, so the app needs
 // a way to say "the daemon did not tell us" that is as easy to reach for as
 // printing a value. `NotServed` is the sharper case, for a field this UI
-// would like to show and the v1 API does not carry at all; naming the route
+// would like to show and the API does not carry at all; naming the route
 // keeps the gap traceable instead of mysterious.
 import type { ReactNode } from "react";
 import type { ApiError } from "../api";
@@ -19,7 +19,7 @@ export function Unknown({ why }: { why?: string }): ReactNode {
 
 export function NotServed({ route, field }: { route: string; field: string }): ReactNode {
   return (
-    <span className="not-served" title={`${route} carries no ${field} in API v1`}>
+    <span className="not-served" title={`${route} carries no ${field}`}>
       not served by {route}
     </span>
   );
@@ -81,6 +81,10 @@ export function ErrorNote({ error }: { error: ApiError | null }): ReactNode {
   );
 }
 
-export function Empty({ children }: { children: ReactNode }): ReactNode {
-  return <p className="empty">{children}</p>;
+export function Empty({ children, testId }: { children: ReactNode; testId?: string }): ReactNode {
+  return (
+    <p className="empty" {...(testId === undefined ? {} : { "data-testid": testId })}>
+      {children}
+    </p>
+  );
 }

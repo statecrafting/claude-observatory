@@ -57,20 +57,31 @@ the fall-through that hands non-`/api` paths to the static handler.
   only to the same-origin API and SSE stream. No external network requests
   (fonts, CDNs, telemetry: none).
 - **B-2 (DAG view).** Nodes show spec id, title, lifecycle +
-  implementation, readiness or the blocker list verbatim from `/api/dag`,
-  pin drift (invalidation) prominently. Edges are `depends_on`.
+  implementation, readiness or the blocker list verbatim from the selected
+  project's `dag` route (`/api/dag` in v1, `/api/projects/<name>/dag`
+  since 027 B-3), pin drift (invalidation) prominently. Edges are
+  `depends_on`.
 - **B-3 (live run).** Current spec, stage, attempt, elapsed, and a
   scrollback-bounded live tail of session events from SSE; disconnects
-  reconnect with `Last-Event-ID` replay.
+  reconnect with `Last-Event-ID` replay. On a v2 daemon one stream carries
+  every project, and the tail renders the selected one's events (029 B-5).
 - **B-4 (quota).** Parked state shows the countdown target, the estimated
-  flag when the horizon is inferred, and consecutive-park warnings.
+  flag when the horizon is inferred, and consecutive-park warnings. The
+  pool is the account's rather than any project's (027 B-4), so v2 also
+  renders it once in the global banner (029 B-4).
 - **B-5 (decisions and history).** Ledger browser with query passthrough
-  to `/api/decisions`; history lists spec executions with links to PR, CI
-  run, verify verdict, and evidence files served from `/api/evidence/`.
+  to the selected project's `decisions` route (`/api/decisions` in v1,
+  `/api/projects/<name>/decisions` since 027 B-3); history lists spec
+  executions with links to PR, CI run, verify verdict, and evidence files
+  served from that project's `evidence` route (`/api/evidence/` in v1,
+  `/api/projects/<name>/evidence/` since 027).
 - **B-6 (controls).** Start, pause, resume, skip, retry stage, re-run
-  verify, force human gate, approve. Each control shows the exact control
-  record that will be journaled before confirming. Controls are the only
-  writes; everything else is read-only.
+  verify, force human gate, approve, each addressing the selected
+  project's scoped routes in v2. Each control shows the exact control
+  record that will be journaled before confirming; 029 B-3 puts the same
+  pattern over the registry verbs, which address the daemon's projects
+  chain rather than a run. Controls are the only writes; everything else
+  is read-only.
 - **B-7 (read-mostly and honest).** No optimistic UI: state changes render
   only after the SSE event or a refetch confirms them. Unknowns render as
   unknown, never as spinners that imply progress.
