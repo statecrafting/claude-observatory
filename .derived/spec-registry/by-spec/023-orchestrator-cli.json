@@ -43,6 +43,6 @@
     "summary": "The observatory binary gains an `orchestrator` command group that is a pure client of the HTTP API: status, dag, next, start/pause/resume, spec controls (skip, retry-stage, reverify, force-gate, approve), decisions search, history, journal verify (offline, direct), and daemon start/stop/status with the identity-checked lock. Anything the UI can do, the CLI can do; several things (journal verify, daemon lifecycle) only the CLI does.\n",
     "title": "Orchestrator CLI: the primary control plane"
   },
-  "shardHash": "e7394f773d04b2d114d681bc532560ee9724388da99bf355d74fa14df519f9c4",
+  "shardHash": "67310d0f3693b671c9e2b09da37073468e71ee7014921e3d05a8fc4c3a269b65",
   "specVersion": "1.1.0"
 }
