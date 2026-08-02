@@ -44,8 +44,11 @@ the session makes recorded.
   started-then-failed stage, after the statecraft-cli pattern.
 - **B-2 (branch first).** Create `NNN-slug` branch before the session, so a
   failed build leaves an inspectable branch, then flip the spec frontmatter
-  to `implementation: in-progress`, recompile, commit. This bracket is
-  orchestrator-owned, not session-owned.
+  to `implementation: in-progress`, recompile, reindex, commit. This
+  bracket is orchestrator-owned, not session-owned, and the commit it
+  leaves must be self-consistent: every derived artifact the flip touches
+  (registry and codebase-index shards alike) is regenerated inside the
+  bracket, never left for the session's final commit to absorb (D-8).
 - **B-3 (prompt).** The prompt contains: the spec body verbatim, the repo's
   AGENTS.md backlog step for one spec, the decision-ledger entries whose
   scope matches the spec or its dependencies (spec 020 injection), and the
@@ -151,3 +154,16 @@ checkout to the default branch between specs. B-1's wrong-branch check is
 now a normalization: a clean tree on another branch checks out the default
 branch and fast-forwards it (no upstream is a no-op); only a dirty tree,
 or a failed normalization, refuses. The Runner gains pullFfOnly.
+
+D-8 (2026-08-02, operator-directed fix wave). Found when a 029 build
+session crashed early: the bracket ran only `spec-spine compile` before
+its flip commit, so the commit carried the pre-flip codebase-index shard
+(verified: flip-commit shard == pre-flip main shard). Normally the
+session's own final commit regenerates the index and absorbs it; on an
+early crash the next `spec-spine index` run dirties the tree, and a dirty
+tree is exactly what makes 021 D-17's checkout normalization refuse to
+act, stranding the checkout on the spec branch. The bracket now runs
+`spec-spine index` after compile and commits both regenerated artifact
+sets; either command failing fails the bracket (same honest path the
+compile failure already took), and the bracket journal record carries
+`indexExitCode` beside `compileExitCode`.
