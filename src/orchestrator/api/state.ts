@@ -16,7 +16,7 @@ import { foldState } from "../journal";
 import type { OrchestratorState, FoldedStageExec } from "../state";
 import { foldOrchestratorState } from "../state";
 import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap } from "../dag";
-import { findCycle, invalidatedSet, nextReady, pinOf, pinOfBytes } from "../dag";
+import { findCycle, invalidatedSet, nextReady, pinOf, pinOfBytes, statusSchedulable } from "../dag";
 import { foldQuotaState, shouldWarn } from "../quota";
 import type { DecisionQuery, DecisionRecord } from "../decisions";
 import { decisionRecordsFromChain, queryDecisions } from "../decisions";
@@ -206,13 +206,16 @@ export function makeSafePins(
 // computed here for every spec rather than only for the pending ones
 // nextReady reports on.
 function blockerReasons(
-  dependsOn: readonly string[],
+  entry: RegistrySpecEntry,
   snapshot: RegistrySnapshot,
   shipped: ShippedMap,
   invalid: ReadonlySet<string>
 ): string[] {
   const reasons: string[] = [];
-  for (const dep of dependsOn) {
+  // 012 D-3: an unapproved spec is reported here exactly like nextReady
+  // reports it, so the UI never renders a draft as merely dependency-blocked.
+  if (!statusSchedulable(entry)) reasons.push(`status ${entry.status} is not approved`);
+  for (const dep of entry.dependsOn) {
     if (shipped.has(dep) && !invalid.has(dep)) continue;
     if (!snapshot.has(dep)) reasons.push(`dependency ${dep} is not in the registry`);
     else if (invalid.has(dep)) reasons.push(`dependency ${dep} is invalidated (pin drift)`);
@@ -301,7 +304,7 @@ export function dagView(input: DagViewInput): DagView {
   for (const [id, entry] of snapshot) {
     const shippedEntry = shipped.get(id) ?? null;
     const currentPin = pins.pins.get(id) ?? null;
-    const reasons = blockerReasons(entry.dependsOn, snapshot, shipped, invalid);
+    const reasons = blockerReasons(entry, snapshot, shipped, invalid);
     specs.push({
       id,
       implementation: entry.implementation ?? null,

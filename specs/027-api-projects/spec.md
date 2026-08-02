@@ -141,3 +141,10 @@ recomputed-fold path this time. The fold now takes an optional
 the dag route) and replays `spec.requalified` last, latest wins, pipeline
 entries only. Absent reader (fixtures) falls back to exec creation pins,
 which can only over-invalidate, never under-invalidate.
+
+D-7 (2026-08-02, operator-directed fix wave). The dag view's per-node
+blocker reasons gate on 012 D-3 exactly like the resolver: an unapproved
+spec's node leads its reasons with "status <s> is not approved" so the UI
+never renders a draft as merely dependency-blocked, and nextReady's own
+blocker (computed by dag.ts) surfaces the same wording. No shape change;
+reasons only.
