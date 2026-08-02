@@ -50,7 +50,6 @@ export type { ApiClient, ProjectClient } from "../../src/orchestrator/api/api-cl
 
 import { createApiClient } from "../../src/orchestrator/api/api-client";
 import type { ApiClient } from "../../src/orchestrator/api/api-client";
-import { API_ROUTES } from "../../src/orchestrator/api/types";
 
 // What the daemon records as the `source` of every control this UI issues
 // (spec 021 B-4). It is also what the confirmation dialog previews, so the
@@ -61,8 +60,4 @@ export const WEB_UI_CONTROL_SOURCE = "web-ui";
 // there is no configuration to get wrong and no second origin to trust.
 export function browserClient(origin: string = window.location.origin): ApiClient {
   return createApiClient({ baseUrl: origin, source: WEB_UI_CONTROL_SOURCE });
-}
-
-export function eventsUrl(origin: string = window.location.origin): string {
-  return `${origin.replace(/\/+$/, "")}${API_ROUTES.events}`;
 }

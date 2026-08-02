@@ -60,6 +60,6 @@
     "summary": "A read-mostly single-page app served same-origin by the daemon (built assets embedded, statecraft pattern): DAG view with status, readiness, blockers, and invalidation; live run view with current spec, stage, and streaming session output over SSE; quota state with time-to-reset (estimates marked); searchable decision-ledger browser; run history with the per-spec evidence trail (PR, CI result, verify verdict, costs); and the control verbs the API exposes, each with a confirmation that names what will be journaled. It is an observability surface, not a wizard: every number on screen is traceable to a journal record or an evidence file.\n",
     "title": "Localhost web UI: the observability surface"
   },
-  "shardHash": "f18934f9e0eb0fff73c48616a933a07a4c2abb8d3e39af7503009b7a4bec99c5",
+  "shardHash": "549a0d18a1637c7d66ba4ed8ab6d993bebd6da6d4affdf3a0c40bda3123fcd98",
   "specVersion": "1.1.0"
 }

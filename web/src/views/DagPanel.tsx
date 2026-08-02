@@ -44,9 +44,9 @@ export function DagPanel({
       stale={stale}
       note={
         <>
-          Spec title and lifecycle status are not carried by <code>/api/dag</code> in API v1, so each node shows the
-          registry <code>implementation</code> value and this run&apos;s execution status instead. Blocker text is the
-          scheduler&apos;s own.
+          Spec title and lifecycle status are not carried by <code>/api/projects/&lt;name&gt;/dag</code>, so each node
+          shows the registry <code>implementation</code> value and this run&apos;s execution status instead. Blocker
+          text is the scheduler&apos;s own.
         </>
       }
     >

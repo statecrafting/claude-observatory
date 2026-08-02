@@ -15,6 +15,12 @@
 // the four scoped routes through that project's sub-client, and drops those
 // folds outright when the selection changes, because carrying one project's
 // DAG under another's name is the misstatement of scope v2 exists to prevent.
+//
+// Spec 029 adds the fleet's half of that: the standby view needs every
+// registered project's backlog at once (B-2), which is a fold per project
+// rather than one more global route. Those folds are kept in their own map,
+// keyed by project name, and are read on demand rather than with every
+// refresh (D-1).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiClient,
@@ -85,6 +91,24 @@ export interface StreamEvent {
 export type StreamStatus = "connecting" | "open" | "closed";
 export type Reachability = "unknown" | "reachable" | "unreachable";
 
+// Which project's tail an event belongs to (spec 029 B-5). This is the server's
+// own `?project=` predicate (spec 027 B-4's matchesProjectFilter), re-declared
+// here rather than imported because that module folds journals and so is not a
+// browser module; the two must agree, and a test pins the agreement.
+//
+// D-2: the subscription itself stays unfiltered and the filter is applied to
+// what is rendered. One stream is also this page's refetch trigger, and a
+// server-side filter would leave every other project's row in the switcher and
+// the standby view refreshing only on the meta probe.
+export function eventBelongsToProject(event: Pick<StreamEvent, "project">, project: string | null): boolean {
+  if (project === null) return true;
+  // A daemon-scoped event (a registry mutation, a server notice) belongs to no
+  // project and is carried into every project's tail, exactly as the server's
+  // filtered stream carries it: a client watching one project has to see that
+  // project being disarmed.
+  return event.project === null || event.project === project;
+}
+
 // B-3's "scrollback-bounded": the tail is a window on the stream, not a
 // transcript. The full history lives in the journal, which the read routes
 // serve.
@@ -122,6 +146,12 @@ export interface ObservatoryState {
   readonly quota: Resource<QuotaView>;
   readonly history: Resource<HistoryView>;
   readonly decisions: Resource<DecisionsView>;
+  // One DAG fold per registered project, for the standby view's backlog
+  // summaries (029 B-2). Keyed by name and rebuilt from the registry on every
+  // refold, so a project that was removed cannot leave a backlog behind. A
+  // project absent from the map has not been folded yet, which the view says
+  // rather than reading as an empty backlog.
+  readonly backlogs: ReadonlyMap<string, Resource<DagView>>;
   readonly events: readonly StreamEvent[];
   readonly stream: StreamStatus;
   readonly reach: Reachability;
@@ -143,6 +173,7 @@ export function initialState(): ObservatoryState {
     quota: emptyResource<QuotaView>(),
     history: emptyResource<HistoryView>(),
     decisions: emptyResource<DecisionsView>(),
+    backlogs: new Map(),
     events: [],
     stream: "connecting",
     reach: "unknown",
@@ -155,6 +186,8 @@ export interface ObservatoryActions {
   refresh(): Promise<void>;
   // Point every scoped panel at another registered project, then refold.
   selectProject(name: string): Promise<void>;
+  // Refold every registered project's DAG, for the standby view (029 B-2).
+  refreshBacklogs(): Promise<void>;
   searchDecisions(query: DecisionQueryParams): Promise<void>;
   clearEvents(): void;
 }
@@ -220,6 +253,10 @@ export function useObservatory(options: ObservatoryOptions): {
   // one identity across a project switch and the effects below are not torn
   // down and rebuilt every time the operator picks a different project.
   const selection = useRef<string | null>(null);
+  // The names the last registry fold carried, so a backlog refold addresses
+  // exactly the projects the daemon just said it has rather than whatever the
+  // standby view happens to be rendering.
+  const registered = useRef<readonly string[]>([]);
   // Refreshes overlap routinely: an event burst schedules one while another is
   // still in flight, and picking a project starts one of its own. Only the
   // newest may land, because an older one carries the project that was
@@ -248,6 +285,7 @@ export function useObservatory(options: ObservatoryOptions): {
     // showing, so they are dropped and the resolved one is read instead.
     const project = resolveProject(projects, meta, guessed);
     selection.current = project;
+    if (projects.ok) registered.current = projects.data.projects.map((row) => row.name);
     const scoped =
       project === guessed ? guessedScoped : project === null ? null : await readProject(client, project);
     if (generation.current !== mine) return;
@@ -296,6 +334,31 @@ export function useObservatory(options: ObservatoryOptions): {
     },
     [refresh]
   );
+
+  // The standby view's fold (029 B-2): every registered project's DAG, read
+  // through that project's own sub-client so no row can carry another's
+  // backlog.
+  //
+  // D-1: this is deliberately not part of `refresh`. A DAG fold runs
+  // `spec-spine registry list` inside the target, so folding the whole registry
+  // on every event burst would multiply that cost by the number of projects
+  // several times a second, for a view that is usually not on screen. It is
+  // read when the standby view asks, and every row renders the moment its own
+  // fold was confirmed.
+  const refreshBacklogs = useCallback(async (): Promise<void> => {
+    const names = registered.current;
+    const folds = await Promise.all(
+      names.map(async (name) => [name, await client.project(name).dag()] as const)
+    );
+    const atMs = now();
+    setState((prev) => {
+      const backlogs = new Map<string, Resource<DagView>>();
+      for (const [name, fold] of folds) {
+        backlogs.set(name, settle(prev.backlogs.get(name) ?? emptyResource<DagView>(), fold, atMs));
+      }
+      return { ...prev, backlogs };
+    });
+  }, [client, now]);
 
   const searchDecisions = useCallback(
     async (query: DecisionQueryParams): Promise<void> => {
@@ -409,8 +472,8 @@ export function useObservatory(options: ObservatoryOptions): {
   );
 
   const actions = useMemo<ObservatoryActions>(
-    () => ({ refresh, selectProject, searchDecisions, clearEvents }),
-    [refresh, selectProject, searchDecisions, clearEvents]
+    () => ({ refresh, selectProject, refreshBacklogs, searchDecisions, clearEvents }),
+    [refresh, selectProject, refreshBacklogs, searchDecisions, clearEvents]
   );
 
   return { state, actions };
