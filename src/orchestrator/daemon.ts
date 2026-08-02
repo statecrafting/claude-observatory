@@ -239,6 +239,9 @@ export interface DaemonDeps {
   // Best-effort: put a clean checkout back on the default branch before a
   // scheduling pass reads the registry (D-17). Absent is a no-op.
   readonly normalizeCheckoutForScheduling?: () => void;
+  // The current checkout's head sha, or null when unreadable. D-18's
+  // requalification verifies an amended prior-run spec at this sha.
+  readonly readHeadSha?: () => string | null;
   // 026 B-6: this instance is one project's run inside a standby daemon that
   // already holds the daemon home's identity lock, so it acquires none of its
   // own; spec 011's per-chain writer locks in this project's own state root
@@ -288,6 +291,13 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
       const result = Bun.spawnSync(["git", "-C", repoDir, "show", `${sha}:specs/${specId}/spec.md`]);
       if (result.exitCode !== 0) return null;
       return Buffer.from(result.stdout);
+    },
+    readHeadSha: () => {
+      try {
+        return runner.headSha();
+      } catch {
+        return null;
+      }
     },
     normalizeCheckoutForScheduling: () => {
       try {
@@ -908,6 +918,16 @@ export class Daemon {
         merged.set(specExec.specId, { pin: this.pipelinePin(specExec.specId, specExec.pin), source: "pipeline" });
       }
     }
+    // D-18: a successful requalification re-pins the shipped entry at the
+    // amended content it verified; records replay in order, latest wins. A
+    // further amendment drifts against the requalified pin and invalidates
+    // again, so strictness is preserved.
+    for (const rec of fold.byKind["spec.requalified"] ?? []) {
+      const p = rec.payload as { specId?: string; pin?: string };
+      if (typeof p?.specId === "string" && typeof p?.pin === "string" && merged.get(p.specId)?.source === "pipeline") {
+        merged.set(p.specId, { pin: p.pin, source: "pipeline" });
+      }
+    }
     return merged;
   }
 
@@ -1116,6 +1136,18 @@ export class Daemon {
       (se) => se.runId === this.run.id && se.specId === specId && se.status === "shipped"
     );
     if (!specExec) {
+      // D-18: a spec pipeline-shipped under a PRIOR run has no exec to
+      // transition in this one, but an amendment after its merge is exactly
+      // spec 012 B-4's re-qualification case, and without this path the
+      // invalidation blocks every dependent forever (found live: 026's
+      // session amended 023, and 028 was unbuildable).
+      const priorShipped = [...state.specExecs.values()].find(
+        (se) => se.specId === specId && se.status === "shipped"
+      );
+      if (priorShipped) {
+        await this.requalifyPriorShipped(specId);
+        return;
+      }
       this.workJournal.append("control.reverify.refused", {
         specId,
         reason: "no shipped specExec found for this spec under the current run",
@@ -1314,6 +1346,48 @@ export class Daemon {
         const result = await this.deps.stageFns.verify(options);
         return { stage, result };
       }
+    }
+  }
+
+  // D-18: verify an amended, prior-run pipeline-shipped spec at the current
+  // default-branch head; a pass re-pins its shipped entry at the amended
+  // content. No SpecExec is created: the run bookkeeping (spec 013) stays
+  // untouched, and the journal carries intent and outcome directly.
+  private async requalifyPriorShipped(specId: string): Promise<void> {
+    this.deps.normalizeCheckoutForScheduling?.();
+    const sha = this.deps.readHeadSha?.() ?? null;
+    if (sha === null) {
+      this.workJournal.append("spec.requalify.refused", {
+        specId,
+        reason: "the current checkout's head sha is not readable",
+      });
+      return;
+    }
+    const pin = makePinLookup(this.deps.dagReader, this.deps.repoDir)(specId);
+    this.workJournal.append("spec.requalify.intent", { specId, sha, pin });
+    const options: RunVerifyStageOptions = {
+      runner: this.deps.verifyRunner,
+      browserVerifier: this.deps.browserVerifier,
+      specId,
+      sha,
+      journal: this.workJournal,
+      evidenceDir: this.evidenceDir,
+      isReVerification: true,
+    };
+    try {
+      const result = await this.deps.stageFns.verify(options);
+      if (result.outcome === "passed" || result.outcome === "not-declared") {
+        this.workJournal.append("spec.requalified", { specId, sha, pin, outcome: result.outcome });
+      } else {
+        this.workJournal.append("spec.requalify.failed", { specId, sha, outcome: result.outcome });
+      }
+    } catch (err) {
+      this.workJournal.append("spec.requalify.failed", {
+        specId,
+        sha,
+        outcome: "crashed",
+        detail: (err as Error).message,
+      });
     }
   }
 
