@@ -322,3 +322,10 @@ inline closure in the daemon factory to `createProcessSpecFileAtShaReader`
 in dag.ts, memoized per (repoDir, sha, specId) since sha-addressed content
 is immutable, so the daemon and the API server compose the same evidence
 read instead of the API refolding without it. Daemon behavior unchanged.
+
+D-21 (2026-08-02, operator-directed fix wave). The adoption refresh in
+computeShippedMap gates on 012 D-3's `statusSchedulable` before treating
+a registry entry as adoptable: an unapproved spec never enters the
+shipped set through adoption, no matter what its implementation field
+claims. Companion to 012 D-3; the deferral and journaling semantics of
+D-15 are unchanged.

@@ -26,8 +26,13 @@ function snapshotFrom(entries: readonly RegistrySpecEntry[]): RegistrySnapshot {
   return new Map(entries.map((e) => [e.id, e]));
 }
 
-function spec(id: string, dependsOn: readonly string[] = [], implementation = "pending"): RegistrySpecEntry {
-  return { id, implementation, dependsOn };
+function spec(
+  id: string,
+  dependsOn: readonly string[] = [],
+  implementation = "pending",
+  status: string | undefined = "approved"
+): RegistrySpecEntry {
+  return { id, implementation, status, dependsOn };
 }
 
 function shippedFrom(entries: Record<string, ShippedEntry>): ShippedMap {
@@ -293,8 +298,13 @@ test("loadRegistrySnapshot: parses implementation and dependsOn from a realistic
     readSpecFile: () => Buffer.from(""),
   };
   const snapshot = loadRegistrySnapshot(reader, "/fake/repo");
-  expect(snapshot.get("010-a")).toEqual({ id: "010-a", implementation: "n-a", dependsOn: [] });
-  expect(snapshot.get("011-b")).toEqual({ id: "011-b", implementation: "complete", dependsOn: ["010-a"] });
+  expect(snapshot.get("010-a")).toEqual({ id: "010-a", implementation: "n-a", status: "approved", dependsOn: [] });
+  expect(snapshot.get("011-b")).toEqual({
+    id: "011-b",
+    implementation: "complete",
+    status: "approved",
+    dependsOn: ["010-a"],
+  });
 });
 
 test("showRegistrySpec: parses a single spec-spine registry show --json entry", () => {
@@ -306,8 +316,55 @@ test("showRegistrySpec: parses a single spec-spine registry show --json entry", 
   expect(showRegistrySpec(reader, "/fake/repo", "011-b")).toEqual({
     id: "011-b",
     implementation: "complete",
+    status: undefined,
     dependsOn: ["010-a"],
   });
+});
+
+// --- status guard (D-3) --------------------------------------------------
+
+test("D-3: an unapproved pending spec is never offered by nextReady and blocks with its status named", () => {
+  const snapshot = snapshotFrom([
+    spec("010-a", [], "complete"),
+    spec("011-draft", ["010-a"], "pending", "draft"),
+    spec("012-c", ["010-a"], "pending"),
+  ]);
+  const shipped = shippedFrom({ "010-a": { pin: "pin-a", source: "adopted" } });
+  const pinOf: PinLookup = () => "pin-a";
+
+  // 011-draft is lower-numbered and dependency-ready, but its status keeps
+  // it out of the schedule; 012-c is offered instead.
+  expect(nextReady(snapshot, shipped, pinOf)).toBe("012-c");
+
+  // With nothing else pending, the draft is reported, never offered.
+  const alone = snapshotFrom([spec("010-a", [], "complete"), spec("011-draft", ["010-a"], "pending", "draft")]);
+  const result = nextReady(alone, shipped, pinOf);
+  expect(typeof result).not.toBe("string");
+  if (typeof result !== "string") {
+    expect(result.blockers).toEqual([{ specId: "011-draft", reasons: ["status draft is not approved"] }]);
+  }
+});
+
+test("D-3: ready() is false for an unapproved spec regardless of its dependencies", () => {
+  const snapshot = snapshotFrom([spec("010-a", [], "complete"), spec("011-draft", ["010-a"], "pending", "draft")]);
+  const shipped = shippedFrom({ "010-a": { pin: "pin-a", source: "adopted" } });
+  const pinOf: PinLookup = () => "pin-a";
+  expect(ready(snapshot, shipped, pinOf, "011-draft")).toBe(false);
+});
+
+test("D-3: adoptedShipped never adopts an unapproved spec, whatever its implementation claims", () => {
+  const snapshot = snapshotFrom([
+    spec("010-a", [], "complete"),
+    spec("011-generated", [], "complete", "draft"),
+    spec("012-c", [], "n-a", "proposed"),
+  ]);
+  const adopted = adoptedShipped(snapshot, () => "pin");
+  expect([...adopted.keys()]).toEqual(["010-a"]);
+});
+
+test("D-3: an absent status (a reader that does not emit it) stays schedulable, the fixture-trust convention", () => {
+  const snapshot = snapshotFrom([spec("010-a", [], "pending", undefined)]);
+  expect(nextReady(snapshot, shippedFrom({}), () => "pin")).toBe("010-a");
 });
 
 test("createProcessDagReader: spec-spine missing on PATH surfaces as a typed error", () => {

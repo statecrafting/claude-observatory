@@ -53,6 +53,7 @@ import {
   nextReady,
   pinOfBytes,
   ready,
+  statusSchedulable,
 } from "./dag";
 import { killLiveSession, runSession } from "./session";
 import type {
@@ -909,7 +910,12 @@ export class Daemon {
     const trust = this.adoptionTrust();
     const deferred: string[] = [];
     for (const [id, registryEntry] of snapshot) {
-      const adoptable = registryEntry.implementation === "complete" || registryEntry.implementation === "n-a";
+      // 012 D-3: an unapproved spec is never adoptable, no matter what its
+      // implementation field claims; adoption is trust a draft has not
+      // earned.
+      const adoptable =
+        statusSchedulable(registryEntry) &&
+        (registryEntry.implementation === "complete" || registryEntry.implementation === "n-a");
       if (!adoptable || pipelineShipped.has(id)) continue;
       const currentPin = pinOf(id);
       const existing = adopted.get(id);

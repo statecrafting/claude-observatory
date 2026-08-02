@@ -45,10 +45,12 @@ answers, computed honestly from the target repo's corpus.
   `specs/<id>/spec.md` after BOM strip and CRLF/CR to LF normalization
   (identical rules to spec-spine's input hashing, so the pin equals the
   registry shard's notion of the spec's content).
-- **B-3 (readiness).** `ready(specId)` iff every `depends_on` target is
-  shipped (spec 010 definition, tracked in the journal) AND the pin recorded
-  at that dependency's ship time equals `pinOf(dep)` now. A spec with no
-  dependencies is ready.
+- **B-3 (readiness).** `ready(specId)` iff the spec's own registry status
+  is schedulable (approved, or absent from a reader that does not emit it;
+  D-3) AND every `depends_on` target is shipped (spec 010 definition,
+  tracked in the journal) AND the pin recorded at that dependency's ship
+  time equals `pinOf(dep)` now. A spec with no dependencies and a
+  schedulable status is ready.
 - **B-4 (invalidation).** When `pinOf(dep)` drifts from the recorded pin,
   every transitive dependent that was shipped drops to `invalidated` and
   requires re-verification (spec 019) before counting as shipped again; the
@@ -58,9 +60,10 @@ answers, computed honestly from the target repo's corpus.
   shipped refuses scheduling with the cycle path named. spec-spine compiles
   cycles clean, so this is the only guard.
 - **B-6 (next).** `nextReady()` returns the lowest-numbered ready spec with
-  `implementation: pending`, mirroring the AGENTS.md backlog protocol, or
-  null with the blocking reasons per pending spec (honest blockers for the
-  UI).
+  `implementation: pending` and a schedulable status (D-3), mirroring the
+  AGENTS.md backlog protocol, or null with the blocking reasons per pending
+  spec (honest blockers for the UI). An unapproved pending spec is reported
+  as a blocker naming its status, never offered and never silently hidden.
 
 ## 4. Functional requirements
 
@@ -104,3 +107,22 @@ memoized per repoDir/sha/specId; only successful reads cached) beside
 (the daemon factory, the API server) shares one implementation. The pure
 readiness functions are untouched; this module simply becomes the home of
 both governed process reads.
+
+D-3 (2026-08-02, operator-directed; the structural precondition for any
+machine-authored spec wave). `RegistrySpecEntry` previously carried only
+`id`, `implementation`, and `dependsOn`: a spec with `status: draft` and
+`implementation: pending` was schedulable, and one with `status: draft`
+plus `implementation: complete` was adoptable into the shipped set. Both
+paths now gate on `statusSchedulable`: status must be `approved`, or
+absent when a reader does not emit it (the fixture-trust convention the
+daemon's other seams follow; production spec-spine always emits status).
+This is enforced in the resolver, not in convention, because the failure
+mode it guards against is an agent authoring a plausible spec,
+implementing it, gating it green, and scheduling it with no human in the
+loop: approval is the one edge a machine cannot traverse. Consumers
+updated in the same change: `ready`, `nextReady` (blocker: "status <s> is
+not approved"), `adoptedShipped`, the daemon's adoption refresh (021
+D-21), and the API dag view's per-node blockers (027 D-7). Also in this
+change: the D-2 cache key's separators became the two-character `\0`
+escape they were always meant to be; the first landing embedded literal
+NUL bytes, which made git classify dag.ts as binary.
