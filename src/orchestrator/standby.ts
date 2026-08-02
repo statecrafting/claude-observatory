@@ -248,6 +248,26 @@ export class StandbyDaemon {
     return this.live.get(name) ?? null;
   }
 
+  // D-5: open a registered project's daemon so a control can reach it when
+  // nothing is driving (the re-qualification case: 021 D-18's reverify needs
+  // a loop, and the loop only exists in a live daemon). The daemon is
+  // started (journals held, recovery run, a fresh run created if the latest
+  // was terminal) and parked in the live map, where the scheduler's priority
+  // half drives it on the next cycle once its queued control makes it worth
+  // entering. Returns the live daemon when one already exists; null for an
+  // unknown project or a failed start.
+  async openForControl(name: string): Promise<Daemon | null> {
+    const existing = this.daemonFor(name);
+    if (existing) return existing;
+    if (this.shutdownRequested) return null;
+    const project = this.registry.get(name);
+    if (!project) return null;
+    const daemon = await this.openProjectDaemon(project);
+    if (daemon === null) return null;
+    this.live.set(name, daemon);
+    return daemon;
+  }
+
   get snapshot(): StandbySnapshot {
     return {
       state: this.stateValue,
@@ -401,9 +421,12 @@ export class StandbyDaemon {
 
     // B-3, priority half: an approval or retry resumes a paused run before
     // any new run starts, wherever that project sits in registration order.
+    // D-5 extends the same priority to a queued reverify: a daemon opened by
+    // openForControl to receive one sits live with its loop stopped until
+    // this drive lets the requalification run.
     for (const project of this.schedulable()) {
       const daemon = this.live.get(project.name);
-      if (daemon?.hasQueuedResume) {
+      if (daemon?.hasQueuedResume || daemon?.hasQueuedReverify) {
         await this.driveProject(project, daemon);
         return true;
       }

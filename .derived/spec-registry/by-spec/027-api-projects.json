@@ -62,6 +62,6 @@
     "summary": "The breaking apiVersion 2 (010 D15): every project-scoped fact moves under /api/projects/<name>/, the project collection gains registration and arm/disarm controls, and genuinely global facts (daemon meta with standby state, account quota, the SSE stream) stay global with a project field on every event. v1 routes are retired, not aliased; the corpus's own pin-invalidation absorbs the break. Envelope, honesty, bounded-event, and route-table-driven client rules from 022 carry over verbatim.\n",
     "title": "API v2: project-scoped routes"
   },
-  "shardHash": "bb30a841335c8c64e01f7f7580c70d13a19e4f3440394e8cab7ff758e8c8e48f",
+  "shardHash": "0a5b4edeb9ce2522891ef6d3734d15884d7bb01f22f0cbe669b978597dad66b9",
   "specVersion": "1.1.0"
 }

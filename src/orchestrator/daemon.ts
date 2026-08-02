@@ -599,6 +599,13 @@ export class Daemon {
     );
   }
 
+  // 026 D-5: a queued reverify is also worth driving for: D-18's
+  // requalification runs from the loop's reverify queue, so a daemon opened
+  // solely to receive the control must be driven for it to act.
+  get hasQueuedReverify(): boolean {
+    return this.reverifyQueue.length > 0 || this.pendingControls.some((cmd) => cmd.verb === "reverify");
+  }
+
   // Resolves once the loop actually exits (run completed/failed, or shutdown
   // honored); rethrows whatever the loop itself threw (an unhandled error
   // inside a stage call, simulating a crash).

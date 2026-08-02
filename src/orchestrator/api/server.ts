@@ -131,6 +131,11 @@ export interface ProjectApi {
   // `unavailable` rather than pretending to have journaled something. That is
   // the honest answer for a project with no live run to control.
   readonly controls?: ControlTarget | null;
+  // 027 D-3: the reverify route's escape hatch when `controls` is null: wake
+  // a daemon for this project (composition: the scheduler's openForControl)
+  // so the requalification control has a loop to land in. Absent or a null
+  // answer keeps the honest `unavailable`.
+  readonly wakeControls?: () => Promise<ControlTarget | null>;
 }
 
 // The project registry (spec 025) as this API sees it: a fold per request
@@ -374,7 +379,40 @@ function runControl(
       message: `no daemon controls are attached to project "${scoped.name}" (read-only)`,
     };
   }
+  return applyControl(scoped, controls, verb, specId, apply);
+}
 
+// 027 D-3: reverify alone may wake a daemon to receive it. Requalification
+// (021 D-18) is the one control whose whole point is a project nothing is
+// driving, so refusing it there would leave an invalidated prior-run spec
+// permanently unrecoverable over the API. Every other verb still answers
+// `unavailable` honestly: there is no live run for it to act on.
+async function runControlWaking(
+  scoped: Scoped,
+  verb: ControlVerbToken,
+  specId: string | null,
+  apply: (controls: ControlTarget) => void
+): Promise<ControlOutcome | ApiError> {
+  let controls = scoped.api.controls ?? null;
+  if (!controls && scoped.api.wakeControls) {
+    controls = await scoped.api.wakeControls();
+  }
+  if (!controls) {
+    return {
+      kind: "unavailable",
+      message: `no daemon controls are attached to project "${scoped.name}" and none could be woken (read-only)`,
+    };
+  }
+  return applyControl(scoped, controls, verb, specId, apply);
+}
+
+function applyControl(
+  scoped: Scoped,
+  controls: ControlTarget,
+  verb: ControlVerbToken,
+  specId: string | null,
+  apply: (controls: ControlTarget) => void
+): ControlOutcome | ApiError {
   const journal = scoped.api.journal;
   const before = journal.records().length;
   try {
@@ -440,14 +478,14 @@ function handleRunResume(scoped: Scoped, source: string): Response {
   return controlResponse(runControl(scoped, "resume", null, (c) => c.resume(source)));
 }
 
-function handleSpecControl(scoped: Scoped, verb: SpecControlVerb, specId: string, source: string): Response {
+async function handleSpecControl(scoped: Scoped, verb: SpecControlVerb, specId: string, source: string): Promise<Response> {
   switch (verb) {
     case "skip":
       return controlResponse(runControl(scoped, verb, specId, (c) => c.skipSpec(specId, source)));
     case "retry-stage":
       return controlResponse(runControl(scoped, verb, specId, (c) => c.retryStage(specId, source)));
     case "reverify":
-      return controlResponse(runControl(scoped, verb, specId, (c) => c.reverify(specId, source)));
+      return controlResponse(await runControlWaking(scoped, verb, specId, (c) => c.reverify(specId, source)));
     case "force-human-gate":
       return controlResponse(runControl(scoped, verb, specId, (c) => c.forceHumanGate(specId, source)));
     case "approve":
