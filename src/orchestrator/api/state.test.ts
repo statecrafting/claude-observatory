@@ -4,6 +4,7 @@ import { join } from "path";
 import { createSpecExec, foldOrchestratorState, transition } from "../state";
 import { journalResume, QUOTA_HEALTH_WARNING_THRESHOLD } from "../quota";
 import { loadRegistrySnapshot } from "../dag";
+import { pinOfBytes } from "../dag";
 import { dagView, decisionsView, historyView, quotaView, runView, shippedMapFromJournal } from "./state";
 import { freshWorld, seedAdoption, seedPark, seedRun, FIXTURE_SPECS } from "./fixtures";
 
@@ -50,6 +51,62 @@ test("shippedMapFromJournal replays dag.adopted.refreshed over the adoption reco
   }
 });
 
+// 021 D-16 parity: a pipeline-shipped spec's pin is the file at its
+// journaled merge sha, not the pre-flip content the exec was created at.
+// Without this the view renders a pin drift the scheduler has already
+// resolved.
+test("shippedMapFromJournal resolves pipeline pins from the journaled merge sha (021 D-16)", () => {
+  const world = freshWorld("d16");
+  try {
+    seedRun(world);
+    // The merged content differs from what the exec was pinned at (the
+    // build session's own frontmatter flip is part of the ship).
+    const mergedBytes = Buffer.from("# 002-beta\n\nas merged\n");
+    const reads: string[] = [];
+    const readSpecFileAtSha = (sha: string, specId: string): Buffer | null => {
+      reads.push(`${specId}@${sha}`);
+      return sha === "0".repeat(40) && specId === "002-beta" ? mergedBytes : null;
+    };
+
+    const shipped = shippedMapFromJournal(world.journal.fold().records, readSpecFileAtSha);
+    expect(shipped.get("002-beta")).toEqual({ pin: pinOfBytes(mergedBytes), source: "pipeline" });
+    expect(reads).toEqual([`002-beta@${"0".repeat(40)}`]);
+  } finally {
+    world.close();
+  }
+});
+
+test("shippedMapFromJournal falls back to the exec pin when the merge-sha read fails (021 D-16)", () => {
+  const world = freshWorld("d16-fallback");
+  try {
+    seedRun(world);
+    const shipped = shippedMapFromJournal(world.journal.fold().records, () => null);
+    // Fallback can only over-invalidate, never under-invalidate.
+    expect(shipped.get("002-beta")).toEqual({ pin: world.dagReader.pin("002-beta"), source: "pipeline" });
+  } finally {
+    world.close();
+  }
+});
+
+// 021 D-18 parity: a successful requalification re-pins the shipped entry;
+// records replay in order, latest wins, and only pipeline entries are
+// eligible (an adopted spec heals through dag.adopted.refreshed instead).
+test("shippedMapFromJournal replays spec.requalified re-pins, latest wins (021 D-18)", () => {
+  const world = freshWorld("d18");
+  try {
+    seedRun(world);
+    world.journal.append("spec.requalified", { specId: "002-beta", pin: "requalified-pin-1" });
+    world.journal.append("spec.requalified", { specId: "002-beta", pin: "requalified-pin-2" });
+    world.journal.append("spec.requalified", { specId: "001-alpha", pin: "must-not-apply" });
+
+    const shipped = shippedMapFromJournal(world.journal.fold().records);
+    expect(shipped.get("002-beta")).toEqual({ pin: "requalified-pin-2", source: "pipeline" });
+    expect(shipped.get("001-alpha")!.pin).not.toBe("must-not-apply");
+  } finally {
+    world.close();
+  }
+});
+
 // --- /api/dag ---------------------------------------------------------------
 
 test("a re-adopted spec is not reported as drifted, and its dependents stay ready", () => {
@@ -78,6 +135,47 @@ test("a re-adopted spec is not reported as drifted, and its dependents stay read
     // The whole backlog would otherwise stall behind a pin drift the daemon
     // has already resolved.
     expect(view.nextReady).toBe("002-beta");
+  } finally {
+    world.close();
+  }
+});
+
+// The live bug this guards against: after 026 amended 023 post-ship and
+// requalification healed the cascade, the CLI/API dag still rendered
+// "invalidated (pin drift)" blockers the scheduler contradicted, because
+// this fold pinned the shipped spec at its pre-flip exec pin.
+test("dagView agrees with the scheduler once the merge-sha read resolves a post-ship flip", () => {
+  const world = freshWorld("d16-dag");
+  try {
+    seedRun(world);
+    // The checkout's current content is what 002-beta's own merge landed;
+    // it differs from the exec creation pin.
+    const merged = "# 002-beta\n\nas merged\n";
+    world.dagReader.amend("002-beta", merged);
+
+    const stale = dagView({
+      project: "alpha",
+      records: world.journal.fold().records,
+      snapshot: snapshotOf(world),
+      reader: world.dagReader,
+      repoDir: world.repoDir,
+    });
+    // Without the D-16 read the view invents a drift.
+    expect(stale.specs.find((s) => s.id === "002-beta")!.drifted).toBe(true);
+
+    const view = dagView({
+      project: "alpha",
+      records: world.journal.fold().records,
+      snapshot: snapshotOf(world),
+      reader: world.dagReader,
+      repoDir: world.repoDir,
+      readSpecFileAtSha: (sha, specId) =>
+        sha === "0".repeat(40) && specId === "002-beta" ? Buffer.from(merged) : null,
+    });
+    const beta = view.specs.find((s) => s.id === "002-beta")!;
+    expect(beta.drifted).toBe(false);
+    expect(beta.invalidated).toBe(false);
+    expect(view.invalidated).toEqual([]);
   } finally {
     world.close();
   }

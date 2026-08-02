@@ -129,3 +129,15 @@ contract is unchanged: the woken daemon journals the control record
 synchronously, so the diffed-record rule (022 D-2) holds. All other
 control verbs keep answering `unavailable` for a project with no live
 run, which remains the honest answer for verbs that need one.
+
+D-6 (2026-08-02, operator-directed fix wave). Found live after the 023/026
+requalifications: the API's `shippedMapFromJournal` fold lacked two of the
+scheduler's own sources, 021 D-16's merge-sha pin resolution and 021
+D-18's `spec.requalified` replay, so the dag/state views rendered
+"invalidated (pin drift)" blockers the scheduler had already resolved:
+exactly the cached-status disagreement 022 B-6 forbids, reproduced by the
+recomputed-fold path this time. The fold now takes an optional
+`readSpecFileAtSha` (production: dag.ts's shared process reader, wired at
+the dag route) and replays `spec.requalified` last, latest wins, pipeline
+entries only. Absent reader (fixtures) falls back to exec creation pins,
+which can only over-invalidate, never under-invalidate.

@@ -16,7 +16,7 @@ import * as fs from "fs";
 import { join } from "path";
 import type { JournalHandle, JournalRecord, JsonValue } from "../journal";
 import type { DagReader } from "../dag";
-import { loadRegistrySnapshot } from "../dag";
+import { createProcessSpecFileAtShaReader, loadRegistrySnapshot } from "../dag";
 import type { RunStatus } from "../state";
 import type { Project, ProjectSource, ProjectsSnapshot } from "../projects";
 import { isValidProjectName } from "../projects";
@@ -840,6 +840,10 @@ async function routeProject(
             snapshot: loadRegistrySnapshot(scoped.api.dagReader, scoped.api.repoDir),
             reader: scoped.api.dagReader,
             repoDir: scoped.api.repoDir,
+            // 021 D-16: without this read the view pins pipeline-shipped
+            // specs at their pre-flip exec pins and renders a drift the
+            // scheduler has already resolved.
+            readSpecFileAtSha: createProcessSpecFileAtShaReader(scoped.api.repoDir),
           })
         )
       );

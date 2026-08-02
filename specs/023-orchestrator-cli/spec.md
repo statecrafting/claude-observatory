@@ -188,3 +188,13 @@ bun test src/commands/orchestrator.test.ts
 # client's honesty, not about the operator's machine being idle.
 bun src/index.ts orchestrator status --url http://127.0.0.1:4599 --json > /dev/null 2>&1; test $? -eq 2
 ```
+
+D-9 (2026-08-02, operator-directed fix wave). The status/run views' blocker
+list is the run's own journaled stop reason (`run.blocked`), a historical
+fact that a later requalification can heal without the run record changing;
+rendered bare it read as a live claim the scheduler contradicted (found
+live: after 023/026 requalified and 028 built, `status` still showed the
+stale cascade). The render now labels it "blocked (journaled at run stop;
+`dag` shows the live view):" rather than recomputing it, because the run
+view reports the run, and the dag view, whose fold 027 D-6 brought to
+scheduler parity, is the live surface.

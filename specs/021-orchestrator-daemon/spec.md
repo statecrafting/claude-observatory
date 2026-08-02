@@ -315,3 +315,10 @@ gap is recorded rather than closed: a stage that spawns its next session
 after the kill fired (a between-attempts window) is not severed;
 cooperative stage cancellation remains future work exactly as D-2 left
 it, and the loop's flag checks still stop the run at the stage boundary.
+
+D-20 (2026-08-02, operator-directed fix wave). D-16's production read (the
+spec file's bytes at the journaled merge sha, via `git show`) moves from an
+inline closure in the daemon factory to `createProcessSpecFileAtShaReader`
+in dag.ts, memoized per (repoDir, sha, specId) since sha-addressed content
+is immutable, so the daemon and the API server compose the same evidence
+read instead of the API refolding without it. Daemon behavior unchanged.

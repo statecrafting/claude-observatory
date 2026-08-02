@@ -16,7 +16,7 @@ import { foldState } from "../journal";
 import type { OrchestratorState, FoldedStageExec } from "../state";
 import { foldOrchestratorState } from "../state";
 import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap } from "../dag";
-import { findCycle, invalidatedSet, nextReady, pinOf } from "../dag";
+import { findCycle, invalidatedSet, nextReady, pinOf, pinOfBytes } from "../dag";
 import { foldQuotaState, shouldWarn } from "../quota";
 import type { DecisionQuery, DecisionRecord } from "../decisions";
 import { decisionRecordsFromChain, queryDecisions } from "../decisions";
@@ -59,13 +59,37 @@ function numberField(payload: JsonValue, field: string): number | null {
 
 // --- shipped-set (spec 012 D-1) ---------------------------------------------
 
-// The same three sources the daemon's own computeShippedMap composes: the
+// The latest journaled merge sha per spec (spec 021 D-16): a pipeline-
+// shipped spec's contract is the content its own merge landed, so the pin
+// is derived from the file at that sha, not from the pre-flip content the
+// exec was pinned at when scheduled.
+function mergeShaBySpec(records: readonly JournalRecord[]): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  for (const record of records) {
+    if (record.kind !== "daemon.merge-sha") continue;
+    const specId = stringField(record.payload, "specId");
+    const mergeSha = stringField(record.payload, "mergeSha");
+    if (specId !== null && mergeSha !== null) out.set(specId, mergeSha);
+  }
+  return out;
+}
+
+// The same sources the daemon's own computeShippedMap composes: the
 // one-time `dag.adopted` record (bootstrap-era specs, pinned at first
 // observation), every `dag.adopted.refreshed` re-adoption replayed over it,
-// plus every SpecExec this journal shows reaching `shipped`. Recomputed from
-// records on every request rather than read from a cached map, so the API
-// can never report a shipped-set the journal does not support (B-6).
-export function shippedMapFromJournal(records: readonly JournalRecord[]): ShippedMap {
+// every SpecExec this journal shows reaching `shipped` (pinned per 021 D-16
+// at the file the journaled merge sha landed, when the reader can see it),
+// and every `spec.requalified` re-pin replayed last (021 D-18, latest
+// wins). Recomputed from records on every request rather than read from a
+// cached map, so the API can never report a shipped-set the journal does
+// not support (B-6); a fold missing D-16 or D-18 reports pin drift the
+// scheduler has already resolved, which is exactly the cached-status
+// disagreement B-6 forbids (found live: after 023/026 requalified, status
+// still rendered their old blocker list while the daemon built 028).
+export function shippedMapFromJournal(
+  records: readonly JournalRecord[],
+  readSpecFileAtSha?: (sha: string, specId: string) => Buffer | null
+): ShippedMap {
   const out = new Map<string, ShippedEntry>();
   let adoptionSeen = false;
 
@@ -98,9 +122,30 @@ export function shippedMapFromJournal(records: readonly JournalRecord[]): Shippe
     }
   }
 
+  const mergeShas = mergeShaBySpec(records);
   const state = foldOrchestratorState(records);
   for (const specExec of state.specExecs.values()) {
-    if (specExec.status === "shipped") out.set(specExec.specId, { pin: specExec.pin, source: "pipeline" });
+    if (specExec.status !== "shipped") continue;
+    let pin = specExec.pin;
+    const sha = mergeShas.get(specExec.specId);
+    if (sha !== undefined && readSpecFileAtSha) {
+      const bytes = readSpecFileAtSha(sha, specExec.specId);
+      // An unreadable file falls back to the exec pin, which can only
+      // over-invalidate, never under-invalidate (021 D-16).
+      if (bytes) pin = pinOfBytes(bytes);
+    }
+    out.set(specExec.specId, { pin, source: "pipeline" });
+  }
+
+  // 021 D-18: a successful requalification re-pins the shipped entry at the
+  // amended content it verified; records replay in order, latest wins.
+  for (const record of records) {
+    if (record.kind !== "spec.requalified") continue;
+    const specId = stringField(record.payload, "specId");
+    const pin = stringField(record.payload, "pin");
+    if (specId !== null && pin !== null && out.get(specId)?.source === "pipeline") {
+      out.set(specId, { pin, source: "pipeline" });
+    }
   }
   return out;
 }
@@ -217,11 +262,14 @@ export interface DagViewInput {
   readonly snapshot: RegistrySnapshot;
   readonly reader: DagReader;
   readonly repoDir: string;
+  // 021 D-16's read, so this view resolves pipeline pins exactly like the
+  // scheduler does. Absent (fixtures) falls back to exec creation pins.
+  readonly readSpecFileAtSha?: (sha: string, specId: string) => Buffer | null;
 }
 
 export function dagView(input: DagViewInput): DagView {
   const { records, snapshot, reader, repoDir } = input;
-  const shipped = shippedMapFromJournal(records);
+  const shipped = shippedMapFromJournal(records, input.readSpecFileAtSha);
   const skipped = skippedFromJournal(records);
   const pins = makeSafePins(reader, repoDir, snapshot.keys(), shipped);
   const invalid = invalidatedSet(snapshot, shipped, pins.lookup);

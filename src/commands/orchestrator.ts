@@ -505,7 +505,10 @@ function renderStatus(run: RunView, quota: QuotaView, nowMs: number): string[] {
   else lines.push(`beat:    ${fmtIso(run.lastHeartbeatMs)} (${fmtDuration(nowMs - run.lastHeartbeatMs)} ago)`);
   if (run.awaitingApproval.length > 0) lines.push(`gated:   ${run.awaitingApproval.join(", ")}`);
   if (run.blockers.length > 0) {
-    lines.push("blocked:");
+    // The run's own journaled stop reason (run.blocked), not a live
+    // readiness read: a requalification can heal the cascade afterwards,
+    // and `dag` is the view that reflects that (023 D-9).
+    lines.push("blocked (journaled at run stop; `dag` shows the live view):");
     lines.push(...renderBlockers(run.blockers, "  "));
   }
   return lines;
