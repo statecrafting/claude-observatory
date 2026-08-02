@@ -1,14 +1,29 @@
 # claude-observatory
 
-Filesystem observability for `~/.claude`: a watcher daemon plus a CLI that
-turns raw FSEvents into semantic, queryable activity, and `FINDINGS.md`, an
-evidence-backed map of what every path in that tree is and when it changes.
+One Bun + TypeScript repo, two layers and a governance substrate:
 
-The observed tree is treated as strictly read-only. Everything this project
-produces (SQLite db, logs, baselines) lives here, under `data/`, which is
-gitignored because it describes private activity.
+- **The observatory (specs 001-008, shipped):** filesystem observability for
+  `~/.claude`: a watcher daemon plus a CLI that turns raw FSEvents into
+  semantic, queryable activity, and `FINDINGS.md`, an evidence-backed map of
+  what every path in that tree is and when it changes.
+- **The orchestrator (specs 010+):** an autonomous build system for
+  spec-spine governed repositories. A standby daemon drives one spec per
+  fresh Claude Code session through build, ship, shepherd, and verify, for
+  any project registered with it; this repo was its first target and was
+  largely built by it.
+- **The governance substrate:** the spec corpus under `specs/`, compiled and
+  gated by [`spec-spine`](https://www.npmjs.com/package/spec-spine). Every
+  code change must be coupled to an authoring edit of the spec that owns it
+  (or carry a cited `Spec-Drift-Waiver:` line); agents may not amend an
+  owning spec to match code they just wrote. The orchestrator judges stage
+  completion by re-running this gate, never by the session's own claim.
 
-## How it works
+The observed `~/.claude` tree is treated as strictly read-only. Everything
+this project produces (SQLite db, logs, baselines, the orchestrator's
+journals) lives here under `data/`, which is gitignored because it describes
+private activity.
+
+## The observatory
 
 - `src/watcher.ts` keeps a state table (path, size, mtime, inode) for every
   entry under `~/.claude` plus `~/.claude.json`, watches recursively via
@@ -22,8 +37,6 @@ gitignored because it describes private activity.
   (bun:sqlite, WAL) so questions can be asked retrospectively.
 - `src/redact.ts` guards the only content-viewing path (`peek`): key-like
   tokens, JWTs, secret-named fields, and long hex/base64 runs are masked.
-
-## CLI
 
 ```
 bun src/index.ts watch [--raw] [--no-db] [--quiet]
@@ -40,7 +53,57 @@ bun src/index.ts daemon start|stop|status|plist
 the observed event history in the db. `daemon plist` prints a launchd plist but
 never installs it.
 
+## The orchestrator
+
+`src/orchestrator/` is the build system:
+
+- **Work journal (011):** hash-linked, fsynced JSONL with intent/outcome
+  bracketing around every state transition. Daemon state is rebuilt by
+  folding the journal, so a resumed daemon and the process that crashed
+  mid-move agree on what happened. `orchestrator journal verify` checks the
+  chains offline, no daemon needed.
+- **DAG readiness (012):** specs become schedulable when their dependencies
+  are shipped at pinned contract hashes; post-ship spec amendments invalidate
+  dependents until requalification re-pins them.
+- **Stages (016-019):** build, ship, shepherd (CI-watching merge), verify.
+  Stage completion is evaluated from gate exit codes and spec frontmatter
+  after the session ends; the session's claim that it finished is not an
+  input. Hook-blocked is a terminal stage outcome that is never
+  self-resolved.
+- **Quota scheduler (015):** quota exhaustion parks the run with a countdown
+  and resumes at the next spec boundary; the daemon itself consumes no model
+  quota.
+- **Decision ledger (020):** sealed, queryable record of every D-n decision
+  with provenance.
+- **Standby daemon + project registry (021, 025-026):** the daemon idles in
+  standby instead of exiting, serves the API and web UI, and schedules
+  across every registered, armed project (one live stage session globally).
+  `projects add` registers a target repo; arm/disarm is the consent toggle.
+
+```
+bun src/index.ts orchestrator status | dag | next | history
+bun src/index.ts orchestrator projects [add <path>] [arm|disarm <name>] [requalify <name>]
+bun src/index.ts orchestrator start | pause | resume
+bun src/index.ts orchestrator decisions <query>
+bun src/index.ts orchestrator spec <id> skip|retry|reverify|force-gate|approve
+bun src/index.ts orchestrator journal verify
+bun src/index.ts orchestrator daemon start|stop|status|run
+```
+
+The HTTP API (022, 027) is project-scoped under
+`http://127.0.0.1:4519/api/projects/<name>/`, with one global SSE event
+stream; the React dashboard (024, 029) is served by the same daemon and
+mirrors the CLI's honesty rules (never-loaded is null, an unreachable daemon
+is a named state, estimates say "estimate").
+
+## Governance
+
+`spec-spine compile | index | lint | couple` must stay green. Derived
+artifacts under `.derived/` are read only through `spec-spine` subcommands.
+The session protocol and backlog discipline live in `AGENTS.md`; the standing
+rules, including the coherence guard, live under `.claude/rules/`.
+
 ## Findings
 
-See `FINDINGS.md` for the path-by-path map, with the observed evidence behind
-each claim and open questions marked as such.
+See `FINDINGS.md` for the path-by-path map of `~/.claude`, with the observed
+evidence behind each claim and open questions marked as such.
