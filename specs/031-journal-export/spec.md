@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-02"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: pending
+implementation: in-progress
 risk: medium
 depends_on:
   - "011-work-journal"
