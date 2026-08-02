@@ -1,7 +1,15 @@
-// The orchestrator's primary control plane (spec 023): one command group on
-// the observatory binary that is a pure client of the daemon's HTTP API
-// (spec 022), plus the two jobs only a terminal can do: verifying both hash
-// chains offline, and owning the daemon process's own lifecycle.
+// The orchestrator's primary control plane (specs 023 and 028): one command
+// group on the observatory binary that is a pure client of the daemon's HTTP
+// API (specs 022 and 027), plus the two jobs only a terminal can do:
+// verifying both hash chains offline, and owning the daemon process's own
+// lifecycle.
+//
+// v2 is project-scoped, because one daemon now answers for many projects
+// (028): a `projects` subgroup registers and arms them, `--project <name>`
+// says which one a verb means, and `status` without it is the composite view
+// of the daemon itself plus one row per project. What a verb addresses is
+// therefore always explicit or always the sole registered project, never a
+// silent guess.
 //
 // Three disciplines shape everything below.
 //
@@ -9,7 +17,9 @@
 // start|stop|status` goes through the typed client in api-client.ts. Nothing
 // here folds a journal, reads the registry, or re-derives readiness while a
 // daemon is running; if the answer is not in an envelope the daemon served,
-// this file does not know it.
+// this file does not know it. `journal verify --project` is the one place
+// this file folds the registry itself, and precisely because it must not ask
+// the daemon where to look (028 B-3).
 //
 // Second, B-3: the exit code carries the outcome for scripts (0 ok, 1
 // operational failure, 2 unreachable daemon, 3 usage), `--json` prints the
@@ -23,7 +33,7 @@
 // process-exiting wrapper `cmdOrchestrator` is the only thing index.ts sees.
 import { spawn } from "child_process";
 import * as fs from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { DATA_DIR, PROJECT_DIR } from "../paths";
 import { verifyChain, type JournalHandle, type JournalRecord } from "../orchestrator/journal";
 import { createApiClient, type ApiClient, type ProjectClient } from "../orchestrator/api/api-client";
@@ -39,6 +49,7 @@ import { createProcessInspector, createProductionDaemonDeps, type ProcessInspect
 import { StandbyDaemon } from "../orchestrator/standby";
 import { createProcessDagReader } from "../orchestrator/dag";
 import {
+  PROJECTS_CHAIN_BASENAME,
   createProcessProjectProbe,
   foldProjects,
   projectStateRoot,
@@ -50,9 +61,11 @@ import {
   type Project,
   type ProjectProbe,
   type ProjectSource,
+  type RecordedQualification,
 } from "../orchestrator/projects";
 import type {
   ApiErrorKind,
+  ApiMeta,
   ApiResponse,
   ControlResult,
   DagSpecNode,
@@ -60,6 +73,9 @@ import type {
   DecisionsView,
   HistoryEntry,
   HistoryView,
+  ProjectControlResult,
+  ProjectView,
+  ProjectsView,
   QuotaView,
   RunView,
   SpecBlockerView,
@@ -85,7 +101,12 @@ function exitCodeFor(kind: ApiErrorKind): number {
 
 export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--json] [--url <base>]
 
-  status                       run, spec, stage, and quota state
+  status                       daemon state, quota, and one row per project
+  projects                     the registry: name, armed, qualification, run
+  projects add <path>          register a project [--name <slug>] [--disarmed]
+  projects arm|disarm <name>   let the scheduler drive it, or hold it back
+  projects requalify <name>    re-run the preflight and journal the verdict
+  projects remove <name>       drop it from the registry (a tombstone)
   dag                          every spec with readiness, blockers, drift
   next                         the next ready spec, or why there is none
   start | pause | resume       run controls
@@ -96,9 +117,13 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   daemon start|stop|status     daemon process lifecycle (identity-checked lock)
   daemon run                   run the daemon in the foreground (what start spawns)
 
+  --project <name>             scope a verb (status through spec) to one project
   --json                       print the raw envelope instead of human output
   --url <base>                 daemon base url (default http://${DEFAULT_API_HOST}:${DEFAULT_API_PORT})
-  --data-dir <dir>             orchestrator data directory
+  --data-dir <dir>             the daemon home (lock, log, projects chain)
+  --dir <dir>                  state root for journal verify, bypassing the registry
+  --name <slug>                project name for projects add
+  --disarmed                   register disarmed (projects add)
   --repo <dir>                 target repository (daemon run|start only)
 
 exit: 0 ok, 1 operational failure, 2 unreachable daemon, 3 usage`;
@@ -189,6 +214,11 @@ interface ParsedArgs {
   readonly url: string | null;
   readonly dataDir: string | null;
   readonly repoDir: string | null;
+  // 028 B-2's scoping flag, and the two flags the projects group's `add` takes.
+  readonly project: string | null;
+  readonly dir: string | null;
+  readonly name: string | null;
+  readonly disarmed: boolean;
   readonly rest: readonly string[];
 }
 
@@ -200,9 +230,13 @@ type ParseResult = { readonly ok: true; readonly args: ParsedArgs } | { readonly
 // cosmetic annoyance.
 function parseArgs(argv: readonly string[]): ParseResult {
   let json = false;
+  let disarmed = false;
   let url: string | null = null;
   let dataDir: string | null = null;
   let repoDir: string | null = null;
+  let project: string | null = null;
+  let dir: string | null = null;
+  let name: string | null = null;
   const rest: string[] = [];
 
   const valued: Readonly<Record<string, (value: string) => void>> = {
@@ -215,6 +249,15 @@ function parseArgs(argv: readonly string[]): ParseResult {
     "--repo": (v) => {
       repoDir = v;
     },
+    "--project": (v) => {
+      project = v;
+    },
+    "--dir": (v) => {
+      dir = v;
+    },
+    "--name": (v) => {
+      name = v;
+    },
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -223,7 +266,16 @@ function parseArgs(argv: readonly string[]): ParseResult {
       json = true;
       continue;
     }
-    const setter = valued[arg];
+    if (arg === "--disarmed") {
+      disarmed = true;
+      continue;
+    }
+    // `Object.hasOwn`, not a truthiness test: a plain object literal inherits
+    // Object.prototype, so a bare word like "toString" or "constructor" would
+    // otherwise look up as a valued flag and silently swallow the argument
+    // after it. That is the flag-swallowing 023 D-6 refuses, reached by a
+    // different door. Every string-keyed table in this file is read this way.
+    const setter = Object.hasOwn(valued, arg) ? valued[arg] : undefined;
     if (setter) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("--")) return { ok: false, reason: `${arg} needs a value` };
@@ -235,7 +287,39 @@ function parseArgs(argv: readonly string[]): ParseResult {
     rest.push(arg);
   }
 
-  return { ok: true, args: { json, url, dataDir, repoDir, rest } };
+  return { ok: true, args: { json, url, dataDir, repoDir, project, dir, name, disarmed, rest } };
+}
+
+// The extra flags each command accepts. 023 D-6 refuses an unknown flag
+// rather than ignoring it, and a known flag that means nothing to the verb at
+// hand is the same defect in different clothes: `--project` on `daemon status`
+// would silently address nothing at all. A command absent from this table is
+// an unknown command, reported as one before its flags are judged.
+const EXTRA_FLAGS: Readonly<Record<string, readonly string[] | undefined>> = {
+  status: ["--project"],
+  dag: ["--project"],
+  next: ["--project"],
+  start: ["--project"],
+  pause: ["--project"],
+  resume: ["--project"],
+  history: ["--project"],
+  decisions: ["--project"],
+  spec: ["--project"],
+  projects: [],
+  journal: ["--project", "--dir"],
+  daemon: [],
+};
+
+const PROJECTS_ADD_FLAGS: readonly string[] = ["--name", "--disarmed"];
+
+function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null {
+  const present = [
+    args.project !== null ? "--project" : null,
+    args.dir !== null ? "--dir" : null,
+    args.name !== null ? "--name" : null,
+    args.disarmed ? "--disarmed" : null,
+  ].filter((flag): flag is string => flag !== null);
+  return present.find((flag) => !accepted.includes(flag)) ?? null;
 }
 
 function resolveBaseUrl(parsed: ParsedArgs, deps: OrchestratorCliDeps): string {
@@ -341,8 +425,55 @@ function renderQuota(quota: QuotaView): string[] {
         : `target ${fmtIso(quota.targetMs)} passed ${fmtDuration(quota.msUntilTarget)} ago`;
     lines.push(`quota:   parked, ${remaining} (${basis})`);
   }
+  // The pool is the account's, but the park was journaled by one project's
+  // run (027 B-4), and an operator who cannot see which one cannot check the
+  // horizon against anything.
+  if (quota.parked && quota.project !== null) lines.push(`         park journaled by project ${quota.project}`);
   lines.push(`         consecutive quota parks: ${quota.consecutiveQuotaParks}${quota.warn ? " (warn)" : ""}`);
   return lines;
+}
+
+// 027 B-4's daemon meta: standby, driving, or parked, plus who holds the one
+// flight slot. A server with no scheduler attached says so rather than having
+// a state invented for it.
+function renderDaemon(meta: ApiMeta, nowMs: number): string[] {
+  const daemon = meta.daemon;
+  if (daemon === null) return ["daemon:  no scheduler attached (this server answers reads only)"];
+  const holder = daemon.activeProject === null ? "" : `  ${daemon.activeProject}`;
+  const scan = daemon.scanIntervalMs === null ? "scan interval unknown" : `scan every ${fmtDuration(daemon.scanIntervalMs)}`;
+  const last = daemon.lastScanMs === null ? "no scan yet" : `last scan ${fmtDuration(nowMs - daemon.lastScanMs)} ago`;
+  return [`daemon:  ${daemon.state}${holder}`, `         ${scan}, ${last}`];
+}
+
+// 025 B-4: an unqualified project stays visible with why it was refused, so
+// the row names the checks that failed rather than reducing the verdict to a
+// word.
+function qualificationCell(qualification: RecordedQualification): string {
+  if (qualification.qualified) return "qualified";
+  const failed = qualification.checks.filter((check) => !check.ok).map((check) => check.id);
+  return failed.length === 0 ? "unqualified" : `unqualified (${failed.join(", ")})`;
+}
+
+// What that project's run is doing, as its row's last column. A state root
+// that could not be read says so (022 B-6): it is not the same fact as a
+// project that has no run yet.
+function projectRunCell(view: ProjectView): string {
+  if (view.readError !== null) return `unreadable: ${view.readError}`;
+  if (view.run === null) return "no run yet";
+  const spec = view.spec === null ? "" : `  ${view.spec.specId}`;
+  const stage = view.stage === null ? "" : `/${view.stage.stage}`;
+  return `${view.run.status}${spec}${stage}${view.run.needsReconcile ? "  (needs reconcile)" : ""}`;
+}
+
+// B-1's one row per project, shared by the `projects` list, the composite
+// `status`, and the snapshot a registry control returns.
+function renderProjectRows(projects: readonly ProjectView[]): string[] {
+  if (projects.length === 0) return ["no projects are registered with this daemon"];
+  const nameWidth = projects.reduce((max, view) => Math.max(max, view.name.length), 0);
+  return projects.map((view) =>
+    `${view.name.padEnd(nameWidth)}  ${(view.armed ? "armed" : "disarmed").padEnd(8)}  ` +
+    `${qualificationCell(view.qualification).padEnd(11)}  ${projectRunCell(view)}`.trimEnd()
+  );
 }
 
 function renderStatus(run: RunView, quota: QuotaView, nowMs: number): string[] {
@@ -480,15 +611,28 @@ function renderControl(result: ControlResult): string[] {
   return lines;
 }
 
+// A registry control's answer (027 B-2): the journaled record itself, plus the
+// project's row as it stands afterwards, which is what makes an arm or a
+// disarm checkable without a second command.
+function renderProjectControl(result: ProjectControlResult): string[] {
+  const target = result.project ?? "(no name journaled)";
+  if (!result.applied) return [`${result.verb} ${target}: no-op, nothing journaled`];
+  const lines = [`${result.verb} ${target}: applied`];
+  if (result.record !== null) lines.push(`journaled: seq ${result.record.seq}  ${result.record.kind}  ${result.record.ts}`);
+  if (result.snapshot !== null) lines.push(...renderProjectRows([result.snapshot]).map((line) => `  ${line}`));
+  return lines;
+}
+
 // --- API-backed commands (B-1) ----------------------------------------------
 
-// Which project a project-scoped verb addresses. Spec 028 gives the CLI its
-// own `--project <name>`; until it does, the sole registered project is the
-// only unambiguous answer, and zero or several is refused by name rather than
-// guessed at. That refusal used to live in the daemon, back when the routes
-// could not say which project they meant; spec 027 moved the scope into the
-// path, so choosing is the client's job now.
-async function resolveProject(client: ApiClient): Promise<ApiResponse<ProjectClient>> {
+// Which project a project-scoped verb addresses (028 B-2). `--project <name>`
+// says it outright and the daemon resolves it: an unknown name comes back
+// `not-found` from the route itself, which is B-4's operational failure and
+// not something a client should pre-empt by listing the registry first.
+// Without the flag the sole registered project is the only unambiguous
+// answer, and zero or several is refused by name rather than guessed at.
+async function resolveProject(client: ApiClient, named: string | null): Promise<ApiResponse<ProjectClient>> {
+  if (named !== null) return { ok: true, data: client.project(named) };
   const listed = await client.projects();
   if (!listed.ok) return listed;
   const names = listed.data.projects.map((project) => project.name);
@@ -500,16 +644,48 @@ async function resolveProject(client: ApiClient): Promise<ApiResponse<ProjectCli
     ok: false,
     error: {
       kind: "conflict",
-      message: `${names.length} projects are registered (${names.join(", ")}); naming one arrives with spec 028's --project flag`,
+      message: `${names.length} projects are registered (${names.join(", ")}); name one with --project`,
     },
   };
 }
 
-// `status` is the one composite read: a run without its quota state cannot
-// answer "what is it doing" honestly, because a parked run looks idle. The
-// run is the project's and the quota is the account's (027 B-4), and both
-// travel as the shapes types.ts already defines, so `--json` is still the
-// served envelopes and not a third declaration of either.
+// The composite `status` (028 B-2, spec 023 D-1 as amended): what the daemon
+// itself is doing, the account's one quota pool, and one row per project.
+// Composed from three served envelopes whose payloads are the types the API
+// already declares, so `--json` is still the daemon's own shapes and not a
+// fourth declaration of any of them.
+interface CompositeStatusView {
+  readonly meta: ApiMeta;
+  readonly quota: QuotaView;
+  readonly projects: ProjectsView;
+}
+
+function renderCompositeStatus(view: CompositeStatusView): string[] {
+  const lines = renderDaemon(view.meta, view.quota.nowMs);
+  lines.push(...renderQuota(view.quota));
+  const rows = view.projects.projects;
+  lines.push(`projects: ${rows.length}`);
+  lines.push(...renderProjectRows(rows).map((line) => `  ${line}`));
+  return lines;
+}
+
+async function cmdStatusAll(deps: OrchestratorCliDeps, client: ApiClient, json: boolean): Promise<number> {
+  const [meta, quota, projects] = await Promise.all([client.meta(), client.quota(), client.projects()]);
+  if (!meta.ok) return respond(deps, json, meta, () => []);
+  if (!quota.ok) return respond(deps, json, quota, () => []);
+  if (!projects.ok) return respond(deps, json, projects, () => []);
+  const composed: ApiResponse<CompositeStatusView> = {
+    ok: true,
+    data: { meta: meta.data, quota: quota.data, projects: projects.data },
+  };
+  return respond(deps, json, composed, renderCompositeStatus);
+}
+
+// `status --project <name>`: a run without its quota state cannot answer
+// "what is it doing" honestly, because a parked run looks idle. The run is
+// the project's and the quota is the account's (027 B-4), and both travel as
+// the shapes types.ts already defines, so `--json` is still the served
+// envelopes and not a third declaration of either.
 async function cmdStatus(
   deps: OrchestratorCliDeps,
   client: ApiClient,
@@ -521,6 +697,93 @@ async function cmdStatus(
   if (!quota.ok) return respond(deps, json, quota, () => []);
   const composed: ApiResponse<{ run: RunView; quota: QuotaView }> = { ok: true, data: { run: run.data, quota: quota.data } };
   return respond(deps, json, composed, (data) => renderStatus(data.run, data.quota, data.quota.nowMs));
+}
+
+// --- the projects group (028 B-1) -------------------------------------------
+
+const PROJECT_REGISTRY_CALLS: Readonly<
+  Record<string, ((client: ApiClient, name: string) => Promise<ApiResponse<ProjectControlResult>>) | undefined>
+> = {
+  arm: (client, name) => client.armProject(name),
+  disarm: (client, name) => client.disarmProject(name),
+  requalify: (client, name) => client.requalifyProject(name),
+  remove: (client, name) => client.removeProject(name),
+};
+
+// What `projects add --disarmed` prints under `--json` (D-1): the two served
+// payloads, because registering disarmed is two controls against a v2
+// registration route that has no armed field of its own.
+interface ProjectAddView {
+  readonly registered: ProjectControlResult;
+  readonly disarmed: ProjectControlResult;
+}
+
+async function cmdProjectsAdd(
+  deps: OrchestratorCliDeps,
+  client: ApiClient,
+  json: boolean,
+  path: string,
+  name: string | null,
+  disarmed: boolean
+): Promise<number> {
+  // D-2: the path is resolved against this shell's working directory before
+  // it travels, because the registry stores an absolute path and the daemon's
+  // own cwd is not the operator's.
+  const absolute = resolve(path);
+  const registered = await client.registerProject({ path: absolute, ...(name === null ? {} : { name }) });
+  if (!registered.ok) return respond(deps, json, registered, renderProjectControl);
+  if (!disarmed) return respond(deps, json, registered, renderProjectControl);
+
+  // Registration derives its own name when none was passed (025 D-1), so the
+  // follow-up control addresses the name the chain journaled, not a guess.
+  const journaled = registered.data.project;
+  if (journaled === null) return respond(deps, json, registered, renderProjectControl);
+
+  const held = await client.disarmProject(journaled);
+  if (!held.ok) {
+    // Half-applied, and said so: the project is registered and armed. `--json`
+    // still prints the served failure envelope verbatim.
+    if (!json) deps.err(`registered "${journaled}", but disarming it failed`);
+    return respond(deps, json, held, () => []);
+  }
+  const composed: ApiResponse<ProjectAddView> = { ok: true, data: { registered: registered.data, disarmed: held.data } };
+  return respond(deps, json, composed, (data) => [
+    ...renderProjectControl(data.registered),
+    ...renderProjectControl(data.disarmed),
+  ]);
+}
+
+async function cmdProjects(
+  deps: OrchestratorCliDeps,
+  client: ApiClient,
+  args: ParsedArgs,
+  rest: readonly string[]
+): Promise<number> {
+  const sub = rest[0];
+  if (sub === undefined) {
+    return respond(deps, args.json, await client.projects(), (view) => renderProjectRows(view.projects));
+  }
+
+  if (sub === "add") {
+    const path = rest[1];
+    // An empty path is refused rather than resolved: `resolve("")` is the
+    // working directory, so `projects add "$UNSET"` would otherwise register
+    // whatever repository the operator happened to be standing in (D-2).
+    if (path === undefined || path.trim().length === 0) {
+      return usage(deps, "projects add needs a repository path");
+    }
+    if (rest.length > 2) return usage(deps, `unexpected argument "${rest[2]}" after projects add`);
+    return cmdProjectsAdd(deps, client, args.json, path, args.name, args.disarmed);
+  }
+
+  const call = Object.hasOwn(PROJECT_REGISTRY_CALLS, sub) ? PROJECT_REGISTRY_CALLS[sub] : undefined;
+  if (call === undefined) {
+    return usage(deps, `unknown projects subcommand "${sub}" (expected add, arm, disarm, requalify, or remove)`);
+  }
+  const name = rest[1];
+  if (name === undefined) return usage(deps, `projects ${sub} needs a project name`);
+  if (rest.length > 2) return usage(deps, `unexpected argument "${rest[2]}" after projects ${sub}`);
+  return respond(deps, args.json, await call(client, name), renderProjectControl);
 }
 
 const SPEC_VERB_ALIASES: Readonly<Record<string, SpecControlVerb>> = {
@@ -563,6 +826,12 @@ interface ChainVerdict {
 
 interface JournalVerifyData {
   readonly dir: string;
+  // Which registered project's state root `dir` is, null when the root came
+  // from `--dir` or from this checkout's own daemon home.
+  readonly project: string | null;
+  // Why `dir` is empty, when it is: the named project could not be resolved
+  // out of the registry, so no chain was walked at all (D-3).
+  readonly resolveError: string | null;
   readonly verified: boolean;
   readonly chains: readonly ChainVerdict[];
 }
@@ -581,12 +850,55 @@ function verifyOneChain(dir: string, chain: string, basename?: string): ChainVer
   }
 }
 
+interface VerifyRoot {
+  readonly dir: string | null;
+  readonly error: string | null;
+}
+
+// 028 B-3: which state root the offline check walks. `--dir` names one
+// outright; `--project` folds the daemon home's own projects chain off disk
+// and takes that project's root (010 D13's inside-the-target layout); neither
+// leaves the self-hosted root, which is what this command has always walked.
+//
+// The fold is a file read, never an API call: `journal verify` is the
+// operator's independent check (023 B-4), and a check that had to ask the
+// daemon where to look would not be independent of it. The chain is read
+// through the same file-backed view the hosted API uses, so this never opens
+// a second writer against a lock a live daemon holds (spec 011 B-2).
+function verifyRoot(deps: OrchestratorCliDeps, project: string | null, dir: string | null): VerifyRoot {
+  if (dir !== null) return { dir: resolve(dir), error: null };
+  if (project === null) return { dir: deps.dataDir, error: null };
+  try {
+    const registry = foldProjects(journalViewFromDir(deps.dataDir, PROJECTS_CHAIN_BASENAME).records());
+    const found = registry.get(project);
+    if (found !== undefined) return { dir: projectStateRoot(found.repoDir), error: null };
+    const known = [...registry.keys()];
+    return {
+      dir: null,
+      error:
+        known.length === 0
+          ? `no registered project named "${project}": the registry under ${deps.dataDir} holds none`
+          : `no registered project named "${project}" (registered: ${known.join(", ")})`,
+    };
+  } catch (err) {
+    return { dir: null, error: `the projects chain under ${deps.dataDir} could not be folded: ${(err as Error).message}` };
+  }
+}
+
 // B-4: the operator's independent check walks both chains from their anchors
 // with no daemon involved. It is deliberately not an API route, because a
 // daemon vouching for its own chain is not an independent check.
-function cmdJournalVerify(deps: OrchestratorCliDeps, json: boolean): number {
-  const chains = [verifyOneChain(deps.dataDir, "work"), verifyOneChain(deps.dataDir, "decisions", "decisions")];
-  const data: JournalVerifyData = { dir: deps.dataDir, verified: chains.every((c) => c.verified), chains };
+function cmdJournalVerify(deps: OrchestratorCliDeps, json: boolean, project: string | null, dir: string | null): number {
+  const root = verifyRoot(deps, project, dir);
+  const chains =
+    root.dir === null ? [] : [verifyOneChain(root.dir, "work"), verifyOneChain(root.dir, "decisions", "decisions")];
+  const data: JournalVerifyData = {
+    dir: root.dir ?? "",
+    project,
+    resolveError: root.error,
+    verified: root.dir !== null && chains.every((c) => c.verified),
+    chains,
+  };
 
   if (json) {
     // Offline commands answer in the same envelope shape, with the verdict
@@ -596,7 +908,11 @@ function cmdJournalVerify(deps: OrchestratorCliDeps, json: boolean): number {
     return data.verified ? EXIT_OK : EXIT_FAILURE;
   }
 
-  deps.out(`chains under ${data.dir}`);
+  if (data.resolveError !== null) {
+    deps.err(`journal verify: ${data.resolveError}`);
+    return EXIT_FAILURE;
+  }
+  deps.out(project === null ? `chains under ${data.dir}` : `chains under ${data.dir} (project ${project})`);
   for (const chain of chains) {
     if (chain.verified) deps.out(`  ${chain.chain.padEnd(9)} ok, ${chain.count} record${chain.count === 1 ? "" : "s"} (${chain.file})`);
     else if (chain.brokenSeq !== null) deps.err(`  ${chain.chain.padEnd(9)} BROKEN at seq ${chain.brokenSeq}: ${chain.reason}`);
@@ -1106,24 +1422,47 @@ async function dispatch(
   command: string,
   rest: readonly string[]
 ): Promise<number> {
+  // A flag the verb at hand has no use for is refused, not ignored: see
+  // EXTRA_FLAGS. A command that table does not name is an unknown command,
+  // left to the switch below to report as one, so a typo does not come back
+  // as a complaint about its flags.
+  const accepted =
+    command === "projects" && rest[0] === "add"
+      ? PROJECTS_ADD_FLAGS
+      : Object.hasOwn(EXTRA_FLAGS, command)
+        ? EXTRA_FLAGS[command]
+        : undefined;
+  if (accepted !== undefined) {
+    const stray = strayFlag(args, accepted);
+    if (stray !== null) return usage(scoped, `${stray} is not a flag of "${command}"`);
+  }
+
   // The two offline commands (B-4 and the daemon lifecycle) are dispatched
   // before a client is ever created: they must work with nothing listening.
   if (command === "journal") {
     if (rest[0] !== "verify") return usage(scoped, `journal needs the "verify" subcommand`);
     if (rest.length > 1) return usage(scoped, `unexpected argument "${rest[1]}" after journal verify`);
-    return cmdJournalVerify(scoped, args.json);
+    if (args.project !== null && args.dir !== null) {
+      return usage(scoped, "journal verify takes --project or --dir, not both");
+    }
+    return cmdJournalVerify(scoped, args.json, args.project, args.dir);
   }
   if (command === "daemon") return cmdDaemon(scoped, url, args.json, rest);
 
   const client = scoped.createClient(url);
+  if (command === "projects") return cmdProjects(scoped, client, args, rest);
+
   // Usage is checked before the project is resolved, in every case below: a
   // wrong argument is exit 3 whether or not a daemon is listening, and asking
   // one which projects it has would turn that into exit 2.
-  const project = async (): Promise<ApiResponse<ProjectClient>> => resolveProject(client);
+  const project = async (): Promise<ApiResponse<ProjectClient>> => resolveProject(client, args.project);
 
   switch (command) {
     case "status": {
       if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after status`);
+      // 028 B-2: unscoped `status` is the composite over the whole daemon, so
+      // it addresses no project and resolves none.
+      if (args.project === null) return cmdStatusAll(scoped, client, args.json);
       const target = await project();
       if (!target.ok) return respond(scoped, args.json, target, () => []);
       return cmdStatus(scoped, client, target.data, args.json);
@@ -1165,7 +1504,7 @@ async function dispatch(
       if (specId === undefined) return usage(scoped, "spec needs a spec id");
       if (verbToken === undefined) return usage(scoped, `spec ${specId} needs a verb (skip|retry|reverify|force-gate|approve)`);
       if (rest.length > 2) return usage(scoped, `unexpected argument "${rest[2]}" after spec ${specId} ${verbToken}`);
-      const verb = SPEC_VERB_ALIASES[verbToken];
+      const verb = Object.hasOwn(SPEC_VERB_ALIASES, verbToken) ? SPEC_VERB_ALIASES[verbToken] : undefined;
       if (verb === undefined) {
         return usage(scoped, `unknown spec verb "${verbToken}" (expected skip, retry, reverify, force-gate, or approve)`);
       }

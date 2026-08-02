@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-01"
 authors: ["Bartek Kus"]
 kind: surface
-implementation: in-progress
+implementation: complete
 risk: low
 depends_on:
   - "023-orchestrator-cli"
@@ -84,3 +84,51 @@ authority is granted here.
 
 Interactive TUI, shell completions, configuration profiles, and any
 engine behavior (the daemon and API own it all).
+
+## 7. Resolved decisions
+
+D-1. `projects add --disarmed` is two controls, not one: `POST
+/api/projects` registers (armed, because pointing the orchestrator at a
+project is the consent, 010 D14) and `POST /api/projects/<name>/disarm`
+holds it back, addressing the name the chain journaled rather than the one
+the caller may not have passed. The v2 registration route carries no
+`armed` field and the API is spec 027's territory, so the alternative was
+widening a route this spec does not own. `--json` prints
+`{ok: true, data: {registered, disarmed}}` composed from the two served
+payloads, exactly 023 D-1's composition rule; without the flag the single
+served envelope is printed verbatim. A registration that lands and a
+disarm that then fails prints the served failure, exits 1, and says on
+stderr that the project is registered and still armed: half-applied and
+saying so beats a rollback this client has no right to perform.
+
+D-2. `projects add <path>` resolves the path against the invoking shell's
+working directory before it travels. The registry stores absolute paths
+(025's `normalizeRepoDir` refuses anything else), and the daemon's own
+working directory is not the operator's, so a relative path resolved
+server-side would silently name a different repository than the one the
+operator typed it in front of.
+
+D-3. `journal verify` answers an unresolvable `--project` the way 023 D-5
+answers a broken chain: `{ok: true, data: {verified: false, resolveError,
+chains: []}}` with exit 1, and the reason on stderr in human mode. The
+envelope gains `project` (which registry entry the root came from, null
+for `--dir` and for the self-hosted default) and `resolveError`. The API's
+error kinds are its vocabulary for what a request did, and no request was
+made; the registry fold is a file read that either found the project or
+did not.
+
+D-4. Without `--project`, the verbs B-2 scopes keep resolving the sole
+registered project, and refuse by name (a `conflict`, exit 1) when the
+daemon holds several. The flag is how an operator says which project they
+mean; guessing one out of several would journal an irreversible control
+against a repository nobody named. Zero registered projects is a
+`not-found` for the same reason.
+
+D-5. A flag that is known but meaningless to the verb at hand is a usage
+error, the same as an unknown one: `--project` on `daemon status`, or
+`--name` on `projects arm`, exits 3 rather than being silently swallowed.
+023 D-6 refuses `--jsonn` because silent flag-swallowing in a control
+plane whose verbs journal irreversible facts is worse than an annoyance,
+and a flag that parses but addresses nothing is the same defect wearing a
+different hat. An unknown command is still reported as an unknown command
+first, so a typo does not come back as a complaint about its flags.

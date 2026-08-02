@@ -42,10 +42,16 @@ automation and tests.
   `daemon start|stop|status` talks to the API through the generated typed
   client (spec 022 FR-002). No command re-derives state locally while a
   daemon is running.
-- **B-2 (verbs).** `observatory orchestrator status | dag | next | start |
+- **B-2 (verbs).** `observatory orchestrator projects [add <path> |
+  arm|disarm|requalify|remove <name>] | status | dag | next | start |
   pause | resume | history | decisions <query> | spec <id>
   skip|retry|reverify|force-gate|approve | journal verify | daemon
-  start|stop|status`.
+  start|stop|status`. Amended to v2 by spec 028's build session under the
+  authority 028 §2 grants: `status` through `spec` each take
+  `--project <name>` to scope them to one registered project (028 B-2),
+  `journal verify` takes `--project <name>` or `--dir <path>` to choose
+  the state root it walks (028 B-3), and `projects add` takes `--name
+  <slug>` and `--disarmed`.
 - **B-3 (output).** Human-readable by default, `--json` for the raw
   envelope; exit codes: 0 ok, 1 operational failure, 2 unreachable daemon,
   3 usage. Human output states estimates as estimates (quota).
@@ -72,15 +78,21 @@ Interactive TUI, shell completions, and configuration profiles.
 
 ## 7. Resolved decisions
 
-D-1. `status` is the one composite read: it fetches `/api/run` and
-`/api/quota` and renders them together, and `--json` prints
-`{ok: true, data: {run, quota}}` composed from the two served envelopes,
-whose payloads are the `RunView` and `QuotaView` types verbatim from spec
-022's `types.ts`. Every other API-backed command maps to exactly one route
-and prints that route's envelope unchanged. B-3 requires human output to
-call an estimated quota horizon an estimate, and a run view alone cannot do
-that (a parked run reads as idle); composing two already-shared shapes adds
-no third declaration of the contract.
+D-1. `status` is the composite read, and v2 makes it two of them (amended
+by spec 028's build session under the authority 028 §2 grants). Without
+`--project` it fetches `/api/meta`, `/api/quota`, and `/api/projects` and
+renders the daemon's own state (standby, driving, parked), the account's
+one quota pool, and one row per project; `--json` prints
+`{ok: true, data: {meta, quota, projects}}` composed from the three served
+envelopes, whose payloads are the `ApiMeta`, `QuotaView`, and
+`ProjectsView` types verbatim from `types.ts`. With `--project <name>` it
+fetches that project's `/api/projects/<name>/run` plus the global
+`/api/quota` and prints `{ok: true, data: {run, quota}}`, the original
+composition against v2's shapes. Every other API-backed command maps to
+exactly one route and prints that route's envelope unchanged. B-3 requires
+human output to call an estimated quota horizon an estimate, and a run view
+alone cannot do that (a parked run reads as idle); composing already-shared
+shapes adds no further declaration of the contract.
 
 D-2. The group gains a fourth daemon verb, `daemon run`: the foreground
 process that composes `createProductionDaemonDeps`, `Daemon.start()` (spec
