@@ -96,3 +96,11 @@ ship stage, journaled by spec 021) or "adopted" (a bootstrap-era spec whose
 implementation is complete or n-a, pinned at first observation).
 `adoptedShipped(registrySnapshot, pinOf)` computes the adopted half of that
 map so the daemon can journal the adoption itself.
+
+D-2 (2026-08-02, operator-directed fix wave). dag.ts gains the process
+seam `createProcessSpecFileAtShaReader` (021 D-16's `git show` read,
+memoized per repoDir/sha/specId; only successful reads cached) beside
+`createProcessDagReader`, so every consumer of merge-sha pin resolution
+(the daemon factory, the API server) shares one implementation. The pure
+readiness functions are untouched; this module simply becomes the home of
+both governed process reads.

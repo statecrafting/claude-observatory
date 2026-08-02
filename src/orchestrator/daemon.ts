@@ -44,7 +44,16 @@ import type { Classification } from "./classify-termination";
 import type { LastParkInfo, ParkPlan } from "./quota";
 import { foldQuotaState, isResumeDue, journalPark, journalResume, planPark, resumeJitterMs } from "./quota";
 import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap, ShippedSource } from "./dag";
-import { adoptedShipped, createProcessDagReader, loadRegistrySnapshot, makePinLookup, nextReady, pinOfBytes, ready } from "./dag";
+import {
+  adoptedShipped,
+  createProcessDagReader,
+  createProcessSpecFileAtShaReader,
+  loadRegistrySnapshot,
+  makePinLookup,
+  nextReady,
+  pinOfBytes,
+  ready,
+} from "./dag";
 import { killLiveSession, runSession } from "./session";
 import type {
   BuildResult,
@@ -292,11 +301,7 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
         return null;
       }
     },
-    readSpecFileAtSha: (sha: string, specId: string) => {
-      const result = Bun.spawnSync(["git", "-C", repoDir, "show", `${sha}:specs/${specId}/spec.md`]);
-      if (result.exitCode !== 0) return null;
-      return Buffer.from(result.stdout);
-    },
+    readSpecFileAtSha: createProcessSpecFileAtShaReader(repoDir),
     readHeadSha: () => {
       try {
         return runner.headSha();
