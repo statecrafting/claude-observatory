@@ -442,6 +442,13 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
   // already bounded and returned on SessionResult); only their counts are,
   // so this record stays small regardless of how noisy stdout got.
   if (opts.journal) {
+    // The result event's own text rides along (bounded) so a classification
+    // that fell through to "crashed" leaves the exact unmatched haystack in
+    // the durable record: the classifier's rule table grows from real
+    // failures, not recollections (D-9).
+    const resultText = [state.resultEvent?.subtype, state.resultEvent?.result]
+      .filter((s): s is string => typeof s === "string")
+      .join("\n");
     const resultPayload: Record<string, JsonValue> = {
       classification: classification.kind,
       resetAtMs: classification.resetAtMs,
@@ -456,6 +463,7 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
       overflowLineCount: overflowLines.length,
       overflowTruncatedCount: overflowTruncated,
       stderrTail,
+      resultTextTail: resultText.length > 0 ? tailBytes(resultText, STDERR_TAIL_BYTES) : null,
     };
     opts.journal.append("session.result", resultPayload);
   }
