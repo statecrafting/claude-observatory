@@ -17,6 +17,7 @@ export type TerminationKind =
   | "transient"
   | "timeout"
   | "killed"
+  | "max-turns"
   | "crashed";
 
 // The subset of a stream-json `result` event this module reads. session.ts
@@ -156,13 +157,15 @@ export function extractResetAtMs(text: string, nowMs: number = Date.now()): numb
 
 // --- classification (B-4) ---------------------------------------------------
 
-// Order: completed, killed (driver flag), timeout (driver flag), auth,
-// quota, hook-blocked, transient, crashed (fallback). completed and the two
-// driver flags are checked ahead of the regex table: a result event that
-// actually reports success wins even if the driver raced it with a kill,
-// and a driver-confirmed kill or timeout with no result never gets
-// second-guessed by stderr text. killed outranks timeout so a shutdown
-// that lands after the deadline fired still records the operator's intent.
+// Order: completed, killed (driver flag), timeout (driver flag), max-turns
+// (result subtype), auth, quota, hook-blocked, transient, crashed
+// (fallback). completed and the two driver flags are checked ahead of the
+// regex table: a result event that actually reports success wins even if
+// the driver raced it with a kill, and a driver-confirmed kill or timeout
+// with no result never gets second-guessed by stderr text. killed outranks
+// timeout so a shutdown that lands after the deadline fired still records
+// the operator's intent; max-turns outranks the regex table because the
+// subtype is the CLI's own verdict, not prose to be pattern-matched.
 export function classifyTermination(input: ClassifyTerminationInput): Classification {
   const { exitCode, resultEvent, stderrTail, timedOut, shutdownKilled } = input;
 
@@ -183,6 +186,17 @@ export function classifyTermination(input: ClassifyTerminationInput): Classifica
       kind: "timeout",
       resetAtMs: null,
       detail: "driver killed the process after it exceeded its configured deadline",
+    };
+  }
+
+  // D-8: the CLI names this outcome in the result event's own subtype, so it
+  // is checked before the regex table: a max-turns result whose prose
+  // happens to say "limit reached" must not read as quota and park the run.
+  if (resultEvent?.subtype === "error_max_turns") {
+    return {
+      kind: "max-turns",
+      resetAtMs: null,
+      detail: "result event reported subtype error_max_turns (the session hit its turn cap)",
     };
   }
 

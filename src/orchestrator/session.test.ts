@@ -70,6 +70,46 @@ test("runSession: an auth failure with no result event classifies auth (B-4)", a
   expect(result.transcriptPath).toBeNull();
 });
 
+test("runSession: an error_max_turns result classifies max-turns, not crashed or quota (D-8)", async () => {
+  const dir = freshDir();
+  const script = writeFakeClaude(
+    dir,
+    [
+      'echo \'{"type":"result","subtype":"error_max_turns","is_error":true,"result":"max turns limit reached","session_id":"sess-turns"}\'',
+      "exit 1",
+    ].join("\n")
+  );
+
+  const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script });
+  expect(result.classification.kind).toBe("max-turns");
+});
+
+test("runSession: an unmatched termination journals its result text verbatim (D-9)", async () => {
+  const dir = freshDir();
+  const script = writeFakeClaude(
+    dir,
+    [
+      'echo \'{"type":"result","subtype":"error_during_execution","is_error":true,"result":"a novel failure shape no rule matches yet","session_id":"sess-novel"}\'',
+      "exit 1",
+    ].join("\n")
+  );
+
+  const journal = openJournal(join(dir, "journal"));
+  try {
+    const result = await runSession({ repo: dir, prompt: "hi", claudeBin: script, journal });
+    expect(result.classification.kind).toBe("crashed");
+
+    const records = journal.fold().records.filter((r) => r.kind === "session.result");
+    expect(records.length).toBe(1);
+    const payload = records[0]!.payload as Record<string, unknown>;
+    // The exact haystack the classifier failed on, preserved at the moment
+    // it failed to match: this is how the rule table grows.
+    expect(payload.resultTextTail).toContain("a novel failure shape no rule matches yet");
+  } finally {
+    journal.close();
+  }
+});
+
 test("runSession: a quota message with an ISO reset hint classifies quota with resetAtMs (FR-002)", async () => {
   const dir = freshDir();
   const script = writeFakeClaude(

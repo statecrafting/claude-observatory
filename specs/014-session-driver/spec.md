@@ -18,7 +18,8 @@ summary: >
   events to subscribers, journals session start/end with cost and result,
   and classifies terminations: completed, auth-failure (hard stop),
   quota-exhausted (park, spec 015), hook-blocked, transient (bounded
-  retry), timeout, killed (daemon shutdown, spec 021 B-6), crashed.
+  retry), timeout, killed (daemon shutdown, spec 021 B-6), max-turns
+  (the CLI's own turn-cap verdict), crashed.
 establishes:
   - "src/orchestrator/session.ts"
   - "src/orchestrator/session.test.ts"
@@ -65,8 +66,10 @@ and their tests.
   SIGTERM-then-SIGKILL), `killed` (the daemon's shutdown path severed the
   child through `killLiveSession()`, spec 021 B-6/D-19; same
   SIGTERM-then-SIGKILL shape, distinct kind because operator intent is not
-  a deadline), `crashed` (anything else). The rule table is data,
-  exported, and unit-tested against captured fixtures.
+  a deadline), `max-turns` (the result event's own `error_max_turns`
+  subtype, checked before the regex table because the CLI's verdict is not
+  prose to pattern-match, D-8), `crashed` (anything else). The rule table
+  is data, exported, and unit-tested against captured fixtures.
 - **B-5 (bounds).** Every session carries a wall-clock deadline and a
   max-turns cap; both configurable per stage with safe defaults. The
   SIGTERM-to-SIGKILL grace at the deadline is likewise configurable
@@ -76,9 +79,11 @@ and their tests.
   shutdown) with partial cost if a result never arrived.
 - **B-6 (evidence).** Session end journals: classification, exit code,
   duration, num_turns, total_cost_usd and usage when reported, session id,
-  and the transcript path under `~/.claude/projects/` when derivable (via
+  the transcript path under `~/.claude/projects/` when derivable (via
   the observatory's own knowledge of the layout), as observational
-  references only.
+  references only, and the result event's own text, tail-bounded
+  (`resultTextTail`, D-9), so an unmatched termination leaves the exact
+  haystack the classifier failed on in the durable record.
 
 ## 4. Functional requirements
 
@@ -181,3 +186,22 @@ await, so a shutdown landing in the spawn's own tick still finds the
 child; a prompt-delivery failure on a pipe the kill already closed is
 tolerated (the result path classifies and journals `killed` normally),
 while any other stdin failure still throws.
+
+D-8 (2026-08-02, operator-directed fix wave). B-4 gains the `max-turns`
+kind. A session that hits its turn cap ends with a result event whose
+subtype is `error_max_turns`; before this entry that fell through the rule
+table to `crashed` (observed live), and worse, its prose could in
+principle match the quota patterns and park the run for hours on a
+mis-read. The subtype is the CLI's own verdict, so it is checked ahead of
+the regex table, after the driver flags: a turn-capped session is neither
+a crash nor a quota event, and the right response upstream (a remediation
+session) is exactly what the stages already do with a failed attempt.
+
+D-9 (2026-08-02, operator-directed fix wave). `session.result` journals
+`resultTextTail`: the result event's subtype and text, tail-bounded to the
+same cap as `stderrTail`, null when no result event arrived. The
+classifier's rule table (B-4) is regex over observed text, and it is
+load-bearing: a false negative burns a run, a false positive parks it for
+hours. Growth of that table has to come from real unmatched haystacks
+preserved at the moment they failed to match, not from recollections;
+`stderrTail` was already journaled, and this closes the other half.

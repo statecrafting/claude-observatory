@@ -15,7 +15,14 @@ function completedResult(text?: string): ResultEventLike {
   return { is_error: false, subtype: "success", result: text };
 }
 
+// The realistic subtype for an in-flight failure; error_max_turns is its
+// own kind (D-8) and gets its own helper below so the rule-table fixtures
+// stop wearing a subtype the CLI would never give them.
 function errorResult(text: string): ResultEventLike {
+  return { is_error: true, subtype: "error_during_execution", result: text };
+}
+
+function maxTurnsResult(text?: string): ResultEventLike {
   return { is_error: true, subtype: "error_max_turns", result: text };
 }
 
@@ -38,6 +45,28 @@ test("classifyTermination: a driver-flagged timeout with no result event classif
   const c = classifyTermination(input({ exitCode: null, resultEvent: null, timedOut: true }));
   expect(c.kind).toBe("timeout");
   expect(c.resetAtMs).toBeNull();
+});
+
+// --- max-turns (D-8) --------------------------------------------------------
+
+test("classifyTermination: an error_max_turns result classifies max-turns", () => {
+  const c = classifyTermination(input({ resultEvent: maxTurnsResult("Reached the maximum number of turns") }));
+  expect(c.kind).toBe("max-turns");
+  expect(c.resetAtMs).toBeNull();
+});
+
+test("classifyTermination: max-turns wins over quota-looking prose in the same result", () => {
+  // The subtype is the CLI's own verdict; prose that happens to say "limit
+  // reached" must not park the run as quota.
+  const c = classifyTermination(input({ resultEvent: maxTurnsResult("max turns limit reached") }));
+  expect(c.kind).toBe("max-turns");
+});
+
+test("classifyTermination: a driver-flagged kill still outranks the max-turns subtype", () => {
+  const c = classifyTermination(
+    input({ resultEvent: maxTurnsResult("Reached the maximum number of turns"), shutdownKilled: true })
+  );
+  expect(c.kind).toBe("killed");
 });
 
 // --- auth ------------------------------------------------------------------
