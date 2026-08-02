@@ -1,0 +1,62 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-02",
+    "dependsOn": [
+      "011-work-journal",
+      "020-decision-ledger",
+      "028-cli-projects"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/export.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/export.test.ts"
+      }
+    ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      }
+    ],
+    "id": "031-journal-export",
+    "implementation": "pending",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "medium",
+    "sectionHeadings": [
+      "031: Journal export",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/031-journal-export/spec.md",
+    "status": "approved",
+    "summary": "The evidence that the orchestrator built and self-corrected this repository lives gitignored in data/: hash-linked, offline-verifiable, and visible to exactly one machine. Anyone else evaluating the claim has specs and commits, which is circumstantial. This spec adds `journal export`: a bundle that preserves both chains' link hashes verbatim, includes record payloads only under a default-deny redaction policy (kind allowlist plus per-field stripping), and verifies offline with no daemon and no access to the original: chain integrity for every record, payload-hash equality for every included payload, and an explicit annotation for every withheld one. The bundle is committable: it converts \"it built itself\" from a story into something a skeptic can check in a minute.\n",
+    "title": "Journal export: a redacted, offline-verifiable evidence bundle"
+  },
+  "shardHash": "d2e0b7d97e5a2e04803fc31360b17e122f653803c7762d0c273880acfb3f8207",
+  "specVersion": "1.1.0"
+}

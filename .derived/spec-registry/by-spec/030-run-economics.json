@@ -1,0 +1,80 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-02",
+    "dependsOn": [
+      "011-work-journal",
+      "013-run-state-machine",
+      "014-session-driver",
+      "027-api-projects",
+      "028-cli-projects"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/economics.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/economics.test.ts"
+      }
+    ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/server.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/state.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      }
+    ],
+    "id": "030-run-economics",
+    "implementation": "pending",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "medium",
+    "sectionHeadings": [
+      "030: Run economics",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/030-run-economics/spec.md",
+    "status": "approved",
+    "summary": "Every session's cost, termination class, and attempt number is already journaled; nothing aggregates them, so \"what did last night cost\" and \"how much rework did that spec need\" are answerable only by folding the journal by hand. This spec adds the rollup as a pure function over journal records, per spec and per run: sessions consumed (by termination kind), remediation rounds, hook blocks, quota parks, cost in micro-USD, and wall-clock duration; served project-scoped by the API and rendered by the CLI. Absent facts stay null, never zero: a session whose CLI reported no cost is \"cost unknown\", not free.\n",
+    "title": "Run economics: cost and autonomy-yield rollups from the journal"
+  },
+  "shardHash": "8282a8465d56e766768c3e4e6407ee8d13ca59b05e6e4b128827b40ea5e2b05b",
+  "specVersion": "1.1.0"
+}
