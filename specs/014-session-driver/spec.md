@@ -18,7 +18,7 @@ summary: >
   events to subscribers, journals session start/end with cost and result,
   and classifies terminations: completed, auth-failure (hard stop),
   quota-exhausted (park, spec 015), hook-blocked, transient (bounded
-  retry), timeout, crashed.
+  retry), timeout, killed (daemon shutdown, spec 021 B-6), crashed.
 establishes:
   - "src/orchestrator/session.ts"
   - "src/orchestrator/session.test.ts"
@@ -62,14 +62,18 @@ and their tests.
   including reset-time hints, extracted when present), `hook-blocked`
   (result carrying a blocking-hook refusal), `transient` (5xx, overloaded,
   network), `timeout` (driver-enforced deadline, child killed
-  SIGTERM-then-SIGKILL), `crashed` (anything else). The rule table is data,
+  SIGTERM-then-SIGKILL), `killed` (the daemon's shutdown path severed the
+  child through `killLiveSession()`, spec 021 B-6/D-19; same
+  SIGTERM-then-SIGKILL shape, distinct kind because operator intent is not
+  a deadline), `crashed` (anything else). The rule table is data,
   exported, and unit-tested against captured fixtures.
 - **B-5 (bounds).** Every session carries a wall-clock deadline and a
   max-turns cap; both configurable per stage with safe defaults. The
   SIGTERM-to-SIGKILL grace at the deadline is likewise configurable
   (default 5000 ms), and the escalation decision keys on whether the child
-  actually exited, never on whether a signal was merely sent. A killed
-  session journals `timeout` with partial cost if a result never arrived.
+  actually exited, never on whether a signal was merely sent. A severed
+  session journals its kind (`timeout` at the deadline, `killed` at daemon
+  shutdown) with partial cost if a result never arrived.
 - **B-6 (evidence).** Session end journals: classification, exit code,
   duration, num_turns, total_cost_usd and usage when reported, session id,
   and the transcript path under `~/.claude/projects/` when derivable (via
@@ -162,3 +166,18 @@ descriptors and can hold them open indefinitely (Linux showed this; macOS
 timing masked it). Process exit is now the authoritative boundary; streams
 are captured incrementally and drained for at most a bounded grace
 (PIPE_DRAIN_GRACE_MS) after exit.
+
+D-7 (2026-08-02, operator-directed fix wave). B-4 gains the `killed` kind:
+true only when the daemon's shutdown path severed the live child through
+the driver's exported `killLiveSession()` (spec 021 B-6/D-19). Like
+`timedOut`, it is a driver-set flag, never inferred from text, and it is
+checked after `completed` (a result that raced the kill and reported
+success still wins) but before `timeout` (a shutdown landing after the
+deadline fired still records the operator's intent). The kill closure is
+module-global and registered per session, which the serial invariant
+(FR-003) makes safe: only one child can ever be live in the process. It
+registers synchronously with the spawn, before the prompt write's first
+await, so a shutdown landing in the spawn's own tick still finds the
+child; a prompt-delivery failure on a pipe the kill already closed is
+tolerated (the result path classifies and journals `killed` normally),
+while any other stdin failure still throws.

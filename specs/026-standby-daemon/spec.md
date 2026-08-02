@@ -87,7 +87,10 @@ coherence guard's "agent with explicit authority" clause.
   project's journals still take spec 011's own per-chain writer lock in
   that project's state root.
 - **B-7 (shutdown).** SIGTERM in standby exits promptly (nothing to
-  sever); SIGTERM mid-run inherits 021 B-6 and D-2 exactly.
+  sever); SIGTERM mid-run inherits 021 B-6 exactly: the scheduler severs
+  the live session child (021 D-19) and awaits the in-flight drive(),
+  whose severed stage outcome (classification "killed") journals
+  normally before the loop unwinds.
 
 ## 4. Functional requirements
 
@@ -147,3 +150,15 @@ rest was the one control that could never reach it. The scheduler gains
 recovery run), park it in the live map, and let B-3's priority half,
 extended from `hasQueuedResume` to also cover a queued reverify, drive it
 on the next cycle. Every other verb still answers `unavailable` honestly.
+
+D-6 (2026-08-02, operator-directed fix wave). B-7's mid-run SIGTERM
+previously cited 021 D-2's run-to-completion wait, which is what left a
+mid-build stop hanging on the child's own 30-minute deadline (021 D-19
+records the incident). The scheduler's `shutdown()` now severs the live
+session child through an injectable `killLiveSession` seam (production:
+spec 014's module-global kill, wired in `cmdDaemonRun`; absent in fixture
+deps is a no-op), called unconditionally after flagging the slot-holding
+daemon: with no live child it reports false and costs nothing. The
+supervised daemon's own `requestShutdown()` stays flag-only; the
+scheduler performing the kill itself is what closes the gap where a
+supervisor that only flags waits out an in-flight stage.

@@ -108,6 +108,26 @@ export class SessionsSerialError extends Error {
 
 let sessionInFlight = false;
 
+// --- live-child kill (spec 021 B-6, D-19) ------------------------------------
+
+// The one live child's kill closure, registered by runSessionOnce right
+// after spawn and cleared in runSession's finally (the serial invariant
+// above guarantees the pairing). Module-global on purpose: only one session
+// may be live per process, so the daemon's shutdown path can sever it
+// without holding a handle through the stage call stack.
+let liveSessionKill: ((graceMs?: number) => void) | null = null;
+
+// Severs the live session child: SIGTERM, then SIGKILL after the grace
+// period if it has not exited. Returns true when a live child was signaled,
+// false when nothing was in flight. The severed session still unwinds
+// through runSession's normal result path, so its termination is journaled
+// (classification "killed") exactly like any other outcome.
+export function killLiveSession(graceMs?: number): boolean {
+  if (liveSessionKill === null) return false;
+  liveSessionKill(graceMs);
+  return true;
+}
+
 // --- transcript path (observational only, B-6) ------------------------------
 
 // Claude Code's own CLI writes session transcripts under
@@ -180,6 +200,7 @@ export async function runSession(opts: RunSessionOptions): Promise<SessionResult
     return await runSessionOnce(opts);
   } finally {
     sessionInFlight = false;
+    liveSessionKill = null;
   }
 }
 
@@ -191,21 +212,6 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
   const args = [claudeBin, "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
   if (opts.model !== undefined) args.push("--model", opts.model);
   if (opts.maxTurns !== undefined) args.push("--max-turns", String(opts.maxTurns));
-
-  const proc = Bun.spawn(args, {
-    cwd: absRepo,
-    env: buildChildEnv(),
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  // B-1: the prompt reaches the child only via stdin, then stdin is closed;
-  // it never touches argv or a shell.
-  proc.stdin.write(opts.prompt);
-  await proc.stdin.end();
-
-  const startedAtMs = Date.now();
 
   // Mutable session state lives on one object rather than as separate `let`
   // bindings: TypeScript's control-flow narrowing gets confused about a
@@ -219,9 +225,11 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     overflowLines: string[];
     overflowTruncated: number;
     killedForTimeout: boolean;
+    killedForShutdown: boolean;
     exited: boolean;
     deadlineTimer: ReturnType<typeof setTimeout> | null;
     graceTimer: ReturnType<typeof setTimeout> | null;
+    shutdownGraceTimer: ReturnType<typeof setTimeout> | null;
   } = {
     sessionId: null,
     resultEvent: null,
@@ -229,9 +237,11 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     overflowLines: [],
     overflowTruncated: 0,
     killedForTimeout: false,
+    killedForShutdown: false,
     exited: false,
     deadlineTimer: null,
     graceTimer: null,
+    shutdownGraceTimer: null,
   };
 
   function clearTimers(): void {
@@ -243,13 +253,54 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
       clearTimeout(state.graceTimer);
       state.graceTimer = null;
     }
+    if (state.shutdownGraceTimer !== null) {
+      clearTimeout(state.shutdownGraceTimer);
+      state.shutdownGraceTimer = null;
+    }
   }
+
+  const killGraceMs = opts.killGraceMs ?? KILL_GRACE_MS;
+
+  const proc = Bun.spawn(args, {
+    cwd: absRepo,
+    env: buildChildEnv(),
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  // B-6 (spec 021, D-19): register the kill closure the daemon's shutdown
+  // path reaches through killLiveSession(). Registered before anything
+  // awaits so a shutdown arriving in the spawn's own tick still finds the
+  // child. Same SIGTERM-grace-SIGKILL shape as the deadline below, guarded
+  // on the exited flag for the same reason.
+  liveSessionKill = (graceMs = killGraceMs) => {
+    if (state.exited || state.killedForShutdown) return;
+    state.killedForShutdown = true;
+    proc.kill("SIGTERM");
+    state.shutdownGraceTimer = setTimeout(() => {
+      if (!state.exited) proc.kill("SIGKILL");
+    }, graceMs);
+  };
+
+  // B-1: the prompt reaches the child only via stdin, then stdin is closed;
+  // it never touches argv or a shell.
+  try {
+    proc.stdin.write(opts.prompt);
+    await proc.stdin.end();
+  } catch (err) {
+    // A child severed by killLiveSession between spawn and prompt delivery
+    // can close the pipe first; the normal result path below still
+    // classifies and journals "killed". Anything else is a real failure.
+    if (!state.killedForShutdown) throw err;
+  }
+
+  const startedAtMs = Date.now();
 
   // B-5: wall-clock deadline, SIGTERM then a grace period then SIGKILL. The
   // escalation guards on our own exited flag, not proc.killed: killed only
   // says a signal was sent (our SIGTERM sets it), which would skip the
   // escalation exactly when the child ignored the SIGTERM.
-  const killGraceMs = opts.killGraceMs ?? KILL_GRACE_MS;
   state.deadlineTimer = setTimeout(() => {
     state.killedForTimeout = true;
     proc.kill("SIGTERM");
@@ -360,6 +411,7 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
     resultEvent,
     stderrTail,
     timedOut: state.killedForTimeout,
+    shutdownKilled: state.killedForShutdown,
   });
 
   const costMicroUsd = toCostMicroUsd(resultEvent?.total_cost_usd);
@@ -384,9 +436,9 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
   };
 
   // B-6: session end journals the evidence bundle. A killed session still
-  // journals here (classification "timeout") even when no result event ever
-  // arrived (B-5); only the fields a result event would have carried stay
-  // null. Raw overflow lines are not duplicated into the journal (they are
+  // journals here (classification "timeout" at the deadline, "killed" at
+  // daemon shutdown) even when no result event ever arrived (B-5); only the
+  // fields a result event would have carried stay null. Raw overflow lines are not duplicated into the journal (they are
   // already bounded and returned on SessionResult); only their counts are,
   // so this record stays small regardless of how noisy stdout got.
   if (opts.journal) {

@@ -142,6 +142,10 @@ export interface StandbyDeps {
   // true (B-6); the scheduler refuses deps that say otherwise rather than
   // letting a second identity lock appear inside a target.
   readonly makeProjectDeps: (project: Project) => DaemonDeps;
+  // 021 B-6, D-19: scheduler shutdown severs the live session child through
+  // this seam (production: session.ts killLiveSession; process-wide because
+  // only one session is ever live per process). Absent is a no-op.
+  readonly killLiveSession?: (graceMs?: number) => boolean;
   readonly processInspector: ProcessInspector;
   // `clock.now()` must advance as `sleep()` resolves: the standby wait is a
   // deadline read off this clock, chunked so shutdown is honored promptly.
@@ -333,11 +337,13 @@ export class StandbyDaemon {
 
   // B-7: in standby there is nothing to sever, so the current wait chunk is
   // the whole latency. Mid-run this sets 021 B-6's own flag on the daemon
-  // holding the slot and awaits that drive(), so D-2's "an in-flight stage
-  // runs to completion first" is inherited exactly.
+  // holding the slot, severs the live session child (021 D-19; the awaited
+  // drive() then returns promptly with the stage's "killed" outcome
+  // journaled normally), and awaits that drive().
   async shutdown(): Promise<void> {
     this.shutdownRequested = true;
     this.activeDaemonValue?.requestShutdown();
+    this.deps.killLiveSession?.();
     if (this.loopPromise) await this.loopPromise;
     await this.closeResources();
   }

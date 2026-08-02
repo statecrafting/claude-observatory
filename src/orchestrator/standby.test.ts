@@ -375,6 +375,37 @@ test("a project whose deps take an identity lock of their own is refused (B-6)",
   expect(fs.existsSync(join(repo.stateRoot, "daemon.lock"))).toBe(false);
 });
 
+// --- B-7: shutdown severs the live session child (021 B-6, D-19) -------------
+
+test("shutdown(): the scheduler severs the live session child through the killLiveSession seam", async () => {
+  const home = freshDir("shutdown-kill-home");
+  seedRegistry(home, []);
+
+  let killCalls = 0;
+  const standby = new StandbyDaemon({
+    daemonHomeDir: home,
+    makeProjectDeps: () => {
+      throw new Error("no projects registered; must not be called");
+    },
+    killLiveSession: () => {
+      killCalls++;
+      return false;
+    },
+    processInspector: createProcessInspector(),
+    clock: { now: () => Date.now() },
+    sleep: (ms: number) => Bun.sleep(ms),
+    scanIntervalMs: 20,
+    sleepChunkMs: 5,
+  });
+
+  await standby.start();
+  await standby.shutdown();
+  // Called unconditionally: with no live child it reports false and costs
+  // nothing; with one it is the only thing standing between a SIGTERM and
+  // a stop that waits out the child's own 30-minute deadline.
+  expect(killCalls).toBe(1);
+});
+
 // --- FR-001 / AC-1 -----------------------------------------------------------
 
 test(

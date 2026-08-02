@@ -242,6 +242,7 @@ interface MakeDepsParams {
   readonly readSpecFileAtSha?: (sha: string, specId: string) => Buffer | null;
   readonly normalizeCheckoutForScheduling?: () => void;
   readonly readHeadSha?: () => string | null;
+  readonly killLiveSession?: (graceMs?: number) => boolean;
 }
 
 // Real clock and real (small-chunk) sleep by default: most tests exercise
@@ -276,6 +277,7 @@ function makeDeps(p: MakeDepsParams): DaemonDeps {
     readSpecFileAtSha: p.readSpecFileAtSha,
     normalizeCheckoutForScheduling: p.normalizeCheckoutForScheduling,
     readHeadSha: p.readHeadSha,
+    killLiveSession: p.killLiveSession,
   };
 }
 
@@ -801,6 +803,63 @@ test("shutdown(): mid-stage shutdown lets the in-flight stage's own outcome fini
   } finally {
     journal.close();
   }
+});
+
+test("shutdown(): severs the live session child through the killLiveSession seam (B-6, D-19)", async () => {
+  const dataDir = freshDir("shutdown-kill-data");
+  const repoDir = freshDir("shutdown-kill-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+
+  let buildStarted!: () => void;
+  const buildStartedPromise = new Promise<void>((resolve) => {
+    buildStarted = resolve;
+  });
+  // Stands in for the live claude child: the build stage only returns once
+  // the daemon's shutdown path severs it through the seam.
+  let severChild!: () => void;
+  const childSevered = new Promise<void>((resolve) => {
+    severChild = resolve;
+  });
+
+  let killCalls = 0;
+  const stageFns: DaemonStageFns = {
+    build: async (options) => {
+      buildStarted();
+      await childSevered;
+      return buildResult(options.specId, "passed");
+    },
+    ship: async () => {
+      throw new Error("must not reach ship: shutdown unwinds before the next stage");
+    },
+    shepherd: async () => {
+      throw new Error("must not reach shepherd");
+    },
+    verify: async () => {
+      throw new Error("must not reach verify");
+    },
+  };
+
+  const deps = makeDeps({
+    dataDir,
+    repoDir,
+    dagReader,
+    stageFns,
+    killLiveSession: () => {
+      killCalls++;
+      severChild();
+      return true;
+    },
+  });
+  const daemon = new Daemon(deps);
+  await daemon.start();
+  await buildStartedPromise;
+
+  // Resolves with no manual release: the shutdown-side kill is what frees
+  // the in-flight stage. Before D-19 this await would hang on the child's
+  // own deadline.
+  await daemon.shutdown();
+  expect(killCalls).toBe(1);
+  expect(fs.existsSync(join(dataDir, "daemon.lock"))).toBe(false);
 });
 
 test("shutdown(): interrupts a parked wait before its target instead of running it to completion", async () => {

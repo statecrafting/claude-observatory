@@ -47,6 +47,7 @@ import {
 } from "../orchestrator/api/server";
 import { createProcessInspector, createProductionDaemonDeps, type ProcessInspector } from "../orchestrator/daemon";
 import { StandbyDaemon } from "../orchestrator/standby";
+import { killLiveSession } from "../orchestrator/session";
 import { createProcessDagReader } from "../orchestrator/dag";
 import {
   PROJECTS_CHAIN_BASENAME,
@@ -1289,6 +1290,9 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
         repoDir: project.repoDir,
         supervised: true,
       }),
+    // 021 B-6, D-19: SIGTERM severs the live session child; without this a
+    // mid-build stop waits out the child's own 30-minute deadline.
+    killLiveSession,
     processInspector: deps.inspector,
     clock: { now: deps.now },
     sleep: deps.sleep,

@@ -42,6 +42,6 @@
     "summary": "The long-lived process that composes everything: recover state from the journal, reconcile any intent-without-outcome, then loop serially: pick the next ready spec (012), walk its stages (016-019) through the state machine (013), park and resume on quota (015), stop honestly on needsHuman. Identity-checked single instance (pid plus process start time), consumes no model quota itself, and hosts the HTTP API (022) in the same process.\n",
     "title": "Orchestrator daemon: the serial run loop"
   },
-  "shardHash": "f45666d3315ce3d129d21e9af3cd7b387b059d9d2d4b476ecc2faf78b5f7daa8",
+  "shardHash": "d854899cf622d065a4a2d280f79b389bd18b65fc9b3801f2eaf64ec090e8847d",
   "specVersion": "1.1.0"
 }

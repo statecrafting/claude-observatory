@@ -5,6 +5,7 @@ import { join, resolve } from "path";
 import { openJournal } from "./journal";
 import {
   runSession,
+  killLiveSession,
   claudeVersion,
   deriveTranscriptPath,
   SessionsSerialError,
@@ -256,6 +257,46 @@ test(
   },
   15_000
 );
+
+// --- shutdown kill (spec 021 B-6/D-19, D-7 here) --------------------------------
+
+test(
+  "killLiveSession: severs the live child, classifies killed, journals it",
+  async () => {
+    const dir = freshDir();
+    const script = writeFakeClaude(dir, ["sleep 30", "exit 0"].join("\n"));
+    const journal = openJournal(join(dir, "journal"));
+
+    try {
+      const start = Date.now();
+      const pending = runSession({ repo: dir, prompt: "hi", claudeBin: script, timeoutMs: 20_000, journal });
+      // Give the spawn a beat to register the live-child closure.
+      await Bun.sleep(50);
+      expect(killLiveSession(300)).toBe(true);
+      const result = await pending;
+      const elapsed = Date.now() - start;
+
+      expect(result.classification.kind).toBe("killed");
+      expect(result.exitCode).not.toBe(0);
+      // Dies at roughly the grace, not the 30s sleep or the 20s deadline.
+      expect(elapsed).toBeLessThan(10_000);
+      // The registration cleared with the session: nothing left to sever.
+      expect(killLiveSession()).toBe(false);
+
+      const records = journal.fold().records;
+      expect(records.map((r) => r.kind)).toEqual(["session.result"]);
+      const payload = records[0]!.payload as Record<string, unknown>;
+      expect(payload.classification).toBe("killed");
+    } finally {
+      journal.close();
+    }
+  },
+  15_000
+);
+
+test("killLiveSession: reports false when no session is in flight", () => {
+  expect(killLiveSession()).toBe(false);
+});
 
 // --- serial invariant (FR-003) ------------------------------------------------
 
