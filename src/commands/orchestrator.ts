@@ -64,6 +64,9 @@ import {
   type ProjectSource,
   type RecordedQualification,
 } from "../orchestrator/projects";
+import { API_VERSION, API_VERSION_HEADER, projectRoute } from "../orchestrator/api/types";
+import { ECONOMICS_ROUTE, type RunEconomics, type SpecEconomics } from "../orchestrator/economics";
+import type { ServedEconomicsView } from "../orchestrator/api/state";
 import type {
   ApiErrorKind,
   ApiMeta,
@@ -112,6 +115,7 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   next                         the next ready spec, or why there is none
   start | pause | resume       run controls
   history                      spec executions with their evidence trail
+  economics                    per-spec cost and rework rollups, run totals
   decisions <query>            search the sealed decision ledger
   spec <id> <verb>             skip | retry | reverify | force-gate | approve
   journal verify               verify both chains offline (no daemon needed)
@@ -304,6 +308,7 @@ const EXTRA_FLAGS: Readonly<Record<string, readonly string[] | undefined>> = {
   pause: ["--project"],
   resume: ["--project"],
   history: ["--project"],
+  economics: ["--project"],
   decisions: ["--project"],
   spec: ["--project"],
   projects: [],
@@ -601,6 +606,114 @@ function renderDecisions(view: DecisionsView): string[] {
   }
   lines.pop();
   return lines;
+}
+
+// --- economics rendering (spec 030 B-4) --------------------------------------
+
+// Micro-USD to dollars at four decimals: the journal's own unit is exact
+// integers, and $0.0001 resolution keeps a cheap session from rendering as a
+// bare $0.00.
+function fmtMicroUsd(micro: number): string {
+  return `$${(micro / 1e6).toFixed(4)}`;
+}
+
+// FR-003's honesty clause: an unreported cost is named unknown, never
+// printed as a zero. A reported sum and an unknown count can coexist (some
+// sessions reported, some did not) and both are said.
+function costCell(costMicroUsd: number | null, costUnknownSessions: number): string {
+  const parts: string[] = [];
+  if (costMicroUsd !== null) parts.push(fmtMicroUsd(costMicroUsd));
+  if (costUnknownSessions > 0) parts.push(`cost unknown x${costUnknownSessions}`);
+  return parts.length === 0 ? "no cost journaled" : parts.join(" + ");
+}
+
+function terminationCell(byTermination: Readonly<Record<string, number>>): string {
+  const parts = Object.entries(byTermination)
+    .filter(([, count]) => count > 0)
+    .map(([kind, count]) => `${kind} ${count}`);
+  return parts.length === 0 ? "" : ` (${parts.join(", ")})`;
+}
+
+function parkCell(run: RunEconomics): string {
+  if (run.quotaParks === 0) return "quota parks 0";
+  const parked =
+    run.parkedMs === null ? "parked duration unknown (a park never resumed)" : `parked ${fmtDuration(run.parkedMs)}`;
+  return `quota parks ${run.quotaParks} (${parked})`;
+}
+
+function wallCell(wallClockMs: number | null): string {
+  return wallClockMs === null ? "duration unknown" : fmtDuration(wallClockMs);
+}
+
+function renderSpecEconomics(spec: SpecEconomics, width: number): string {
+  return (
+    `${spec.specId.padEnd(width)}  sessions ${spec.sessions}${terminationCell(spec.sessionsByTermination)}  ` +
+    `remediations ${spec.remediationRounds}  hook blocks ${spec.hookBlockedStages}  ` +
+    `${costCell(spec.costMicroUsd, spec.costUnknownSessions)}  ${wallCell(spec.wallClockMs)}`
+  );
+}
+
+function renderEconomics(view: ServedEconomicsView): string[] {
+  // B-2 as rendered: an empty journal has nothing to total, and saying so
+  // beats a page of fabricated zeros.
+  if (view.totals === null) return [`project ${view.project}: the journal is empty; nothing to roll up`];
+
+  const lines: string[] = [];
+  if (view.specs.length === 0) lines.push("no spec executions journaled yet");
+  const width = view.specs.reduce((max, spec) => Math.max(max, spec.specId.length), 0);
+  for (const spec of view.specs) lines.push(renderSpecEconomics(spec, width));
+
+  for (const run of view.runs) {
+    lines.push("");
+    lines.push(`run ${run.runId}  ${run.status}  ${wallCell(run.wallClockMs)}`);
+    lines.push(
+      `  sessions ${run.sessions}${terminationCell(run.sessionsByTermination)}  ` +
+        `remediations ${run.remediationRounds}  hook blocks ${run.hookBlockedStages}`
+    );
+    lines.push(`  cost ${costCell(run.costMicroUsd, run.costUnknownSessions)}  ${parkCell(run)}`);
+  }
+
+  const totals = view.totals;
+  lines.push("");
+  lines.push(
+    `totals: sessions ${totals.sessions}${terminationCell(totals.sessionsByTermination)}  ` +
+      `remediations ${totals.remediationRounds}  hook blocks ${totals.hookBlockedStages}`
+  );
+  const parked =
+    totals.quotaParks === 0
+      ? "quota parks 0"
+      : totals.parkedMs === null
+        ? `quota parks ${totals.quotaParks} (parked duration unknown, a park never resumed)`
+        : `quota parks ${totals.quotaParks} (parked ${fmtDuration(totals.parkedMs)})`;
+  lines.push(`  cost ${costCell(totals.costMicroUsd, totals.costUnknownSessions)}  ${parked}`);
+  return lines;
+}
+
+// Spec 030 B-4: the one economics read. The typed client (api-client.ts)
+// belongs to specs 022/027 and is outside 030's declared territory, so this
+// verb fetches its single route directly, under the same discipline the
+// client applies everywhere else: the path comes from the shared constants
+// (never hand-built twice), transport failure answers in the envelope as
+// `unreachable`, and an answer that is not an envelope is
+// `malformed-response`, never coerced into a plausible shape.
+async function fetchEconomics(baseUrl: string, project: string): Promise<ApiResponse<ServedEconomicsView>> {
+  const path = projectRoute(project, ECONOMICS_ROUTE);
+  let text: string;
+  try {
+    const response = await fetch(`${baseUrl}${path}`, { headers: { [API_VERSION_HEADER]: String(API_VERSION) } });
+    text = await response.text();
+  } catch (err) {
+    return { ok: false, error: { kind: "unreachable", message: `${baseUrl}${path}: ${(err as Error).message}` } };
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === "object" && parsed !== null && typeof (parsed as { ok?: unknown }).ok === "boolean") {
+      return parsed as ApiResponse<ServedEconomicsView>;
+    }
+  } catch {
+    // not JSON; reported below
+  }
+  return { ok: false, error: { kind: "malformed-response", message: "response body is not an {ok, ...} envelope" } };
 }
 
 function renderControl(result: ControlResult): string[] {
@@ -1486,6 +1599,12 @@ async function dispatch(
       const target = await project();
       if (!target.ok) return respond(scoped, args.json, target, () => []);
       return respond(scoped, args.json, await target.data.history(), renderHistory);
+    }
+    case "economics": {
+      if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after economics`);
+      const target = await project();
+      if (!target.ok) return respond(scoped, args.json, target, () => []);
+      return respond(scoped, args.json, await fetchEconomics(url, target.data.name), renderEconomics);
     }
     case "start":
     case "pause":

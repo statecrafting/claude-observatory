@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '030-run-economics' file unit 'src/orchestrator/economics.ts' does not exist",
-        "path": "src/orchestrator/economics.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '030-run-economics' file unit 'src/orchestrator/economics.test.ts' does not exist",
-        "path": "src/orchestrator/economics.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "011-work-journal",
@@ -38,11 +23,23 @@
       {
         "path": "src/orchestrator/api/state.ts",
         "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/economics.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/economics.ts",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/economics.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -51,7 +48,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/economics.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -116,5 +117,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "fa87172cb69b5fe94dbed64ccfa2811276eac198617f457236c4aa9c4512b9d4"
+  "shardHash": "86c7a8c081313e3181f4324a03155b641b7dad05a6faae251ba1d4187ed2db8b"
 }

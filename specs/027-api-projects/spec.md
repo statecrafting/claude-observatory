@@ -148,3 +148,13 @@ spec's node leads its reasons with "status <s> is not approved" so the UI
 never renders a draft as merely dependency-blocked, and nextReady's own
 blocker (computed by dag.ts) surfaces the same wording. No shape change;
 reasons only.
+
+D-8 (2026-08-02, spec 030's build, per its granted authority). Spec 030
+adds one scoped read route additively: `GET
+/api/projects/<name>/economics`, served by state.ts's
+servedEconomicsView (030's pure fold plus `generatedAt` from the
+daemon's clock), recomputed per request like every other read (B-6) and
+listed in the meta route table with GET-only enforcement. The suffix
+constant and the view shapes live in spec 030's own unit
+(`src/orchestrator/economics.ts`) rather than PROJECT_ROUTES, so this
+spec's contract files (types.ts, api-client.ts) are unchanged.
