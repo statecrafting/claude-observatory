@@ -141,3 +141,12 @@ rule carry over). It fetches its single route directly, building the
 path from the shared constants and mapping transport failure into the
 envelope exactly as api-client.ts does, because that client is outside
 030's declared territory.
+
+D-7 (2026-08-02, recorded by the operator completing 031's build after
+its session crashed mid-flight; authority granted in 031 §2). The
+journal group gains `journal export --out <path> [--project <name>]`
+and `journal verify --bundle <path>`. Export resolves its state root
+exactly as B-3's offline verify does (registry fold, `--dir` bypass,
+self-hosted default) and takes its own flag set as `projects add` does;
+`--bundle` belongs to verify alone and is refused elsewhere. Exit codes
+and flag discipline carry over unchanged.
