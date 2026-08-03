@@ -189,10 +189,10 @@ test("an unknown daemon subcommand is a usage error", async () => {
   expect(result.err).toContain(`unknown daemon subcommand "restart"`);
 });
 
-test("journal without verify is a usage error", async () => {
+test("journal without a subcommand is a usage error", async () => {
   const result = await run(["journal"]);
   expect(result.code).toBe(EXIT_USAGE);
-  expect(result.err).toContain(`journal needs the "verify" subcommand`);
+  expect(result.err).toContain(`journal needs the "verify" or "export" subcommand`);
 });
 
 test("a trailing argument is a usage error rather than being swallowed", async () => {

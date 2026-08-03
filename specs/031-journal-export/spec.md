@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-02"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: in-progress
+implementation: complete
 risk: medium
 depends_on:
   - "011-work-journal"
@@ -126,4 +126,22 @@ and any change to 011's chain format.
 
 ## 7. Resolved decisions
 
-(none yet)
+D-1 (2026-08-02, session choice, recorded by the operator completing the
+build after the session crashed mid-flight; the Mac slept through the
+build window). B-4's "directory or single file" resolves to one JSON
+file: `writeBundle` serializes the whole bundle deterministically
+(sorted keys via the journal's own stableStringify) into a single
+`--out` path, creating parent directories. One file is one artifact to
+commit, hash, or attach; nothing about the shape needs a directory.
+
+D-2 (2026-08-02, same provenance). Spec 011's recordHash covers the
+entire canonical payload, so a payload with even one field stripped can
+never be re-bound to the chain offline. The bundle is honest about that
+three ways rather than pretending otherwise: a payload included
+verbatim re-hashes into the chain and reports "verified"; an
+allowlisted payload that needed field stripping rides along for the
+reader but reports "redacted", never "verified"; a withheld kind is an
+annotation plus hashes. Every record also carries `payloadHash`
+(sha256 over the canonical original) as a commitment checkable by
+anyone holding the original journal, which is inclusion-proof only for
+verbatim payloads and is reported exactly that way.

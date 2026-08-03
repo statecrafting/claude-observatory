@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [
-      {
-        "code": "I-004",
-        "message": "spec '031-journal-export' file unit 'src/orchestrator/export.ts' does not exist",
-        "path": "src/orchestrator/export.ts"
-      },
-      {
-        "code": "I-004",
-        "message": "spec '031-journal-export' file unit 'src/orchestrator/export.test.ts' does not exist",
-        "path": "src/orchestrator/export.test.ts"
-      }
-    ],
-    "warnings": []
-  },
   "mapping": {
     "dependsOn": [
       "011-work-journal",
@@ -28,11 +13,23 @@
       {
         "path": "src/commands/orchestrator.ts",
         "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/export.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/export.ts",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/export.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -41,7 +38,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/export.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -80,5 +81,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "02646203806dc700ff569cbb5002ec828b4393baef1d062b39417e687c0f5ada"
+  "shardHash": "f8b3abec99e351c4aede80589f4f551434e3a45fd8b8a4c310fc5cbf16d33dc3"
 }

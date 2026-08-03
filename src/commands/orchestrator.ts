@@ -36,6 +36,14 @@ import * as fs from "fs";
 import { join, resolve } from "path";
 import { DATA_DIR, PROJECT_DIR } from "../paths";
 import { verifyChain, type JournalHandle, type JournalRecord } from "../orchestrator/journal";
+import {
+  exportBundleFromRoot,
+  parseBundle,
+  verifyBundle,
+  writeBundle,
+  type ChainVerification,
+  type JournalBundle,
+} from "../orchestrator/export";
 import { createApiClient, type ApiClient, type ProjectClient } from "../orchestrator/api/api-client";
 import {
   DEFAULT_API_HOST,
@@ -119,6 +127,7 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   decisions <query>            search the sealed decision ledger
   spec <id> <verb>             skip | retry | reverify | force-gate | approve
   journal verify               verify both chains offline (no daemon needed)
+  journal export               write a redacted, offline-verifiable evidence bundle
   daemon start|stop|status     daemon process lifecycle (identity-checked lock)
   daemon run                   run the daemon in the foreground (what start spawns)
 
@@ -127,6 +136,8 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   --url <base>                 daemon base url (default http://${DEFAULT_API_HOST}:${DEFAULT_API_PORT})
   --data-dir <dir>             the daemon home (lock, log, projects chain)
   --dir <dir>                  state root for journal verify, bypassing the registry
+  --bundle <path>              an exported bundle for journal verify to check offline
+  --out <path>                 where journal export writes its bundle file
   --name <slug>                project name for projects add
   --disarmed                   register disarmed (projects add)
   --repo <dir>                 target repository (daemon run|start only)
@@ -224,6 +235,9 @@ interface ParsedArgs {
   readonly dir: string | null;
   readonly name: string | null;
   readonly disarmed: boolean;
+  // 031 B-4's journal flags: where export writes, and which bundle verify reads.
+  readonly out: string | null;
+  readonly bundle: string | null;
   readonly rest: readonly string[];
 }
 
@@ -242,6 +256,8 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let project: string | null = null;
   let dir: string | null = null;
   let name: string | null = null;
+  let out: string | null = null;
+  let bundle: string | null = null;
   const rest: string[] = [];
 
   const valued: Readonly<Record<string, (value: string) => void>> = {
@@ -262,6 +278,12 @@ function parseArgs(argv: readonly string[]): ParseResult {
     },
     "--name": (v) => {
       name = v;
+    },
+    "--out": (v) => {
+      out = v;
+    },
+    "--bundle": (v) => {
+      bundle = v;
     },
   };
 
@@ -292,7 +314,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
     rest.push(arg);
   }
 
-  return { ok: true, args: { json, url, dataDir, repoDir, project, dir, name, disarmed, rest } };
+  return { ok: true, args: { json, url, dataDir, repoDir, project, dir, name, disarmed, out, bundle, rest } };
 }
 
 // The extra flags each command accepts. 023 D-6 refuses an unknown flag
@@ -312,11 +334,14 @@ const EXTRA_FLAGS: Readonly<Record<string, readonly string[] | undefined>> = {
   decisions: ["--project"],
   spec: ["--project"],
   projects: [],
-  journal: ["--project", "--dir"],
+  journal: ["--project", "--dir", "--bundle"],
   daemon: [],
 };
 
 const PROJECTS_ADD_FLAGS: readonly string[] = ["--name", "--disarmed"];
+// 031 B-4: `journal export` takes its own flag set, exactly as `projects add`
+// does; `--dir` and `--bundle` belong to verify alone and are refused here.
+const JOURNAL_EXPORT_FLAGS: readonly string[] = ["--project", "--out"];
 
 function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null {
   const present = [
@@ -324,6 +349,8 @@ function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null
     args.dir !== null ? "--dir" : null,
     args.name !== null ? "--name" : null,
     args.disarmed ? "--disarmed" : null,
+    args.out !== null ? "--out" : null,
+    args.bundle !== null ? "--bundle" : null,
   ].filter((flag): flag is string => flag !== null);
   return present.find((flag) => !accepted.includes(flag)) ?? null;
 }
@@ -1038,6 +1065,159 @@ function cmdJournalVerify(deps: OrchestratorCliDeps, json: boolean, project: str
   return data.verified ? EXIT_OK : EXIT_FAILURE;
 }
 
+// --- journal export and bundle verify (spec 031 B-4) -------------------------
+
+// What one exported chain amounts to, for the operator: how many records
+// travelled, and of those, how many carry a payload (with how many of them
+// field-redacted) versus hash-only. Nothing is silently dropped (031 B-1),
+// so the three buckets always sum to the record count.
+interface ChainExportSummary {
+  readonly chain: string;
+  readonly records: number;
+  readonly payloadsIncluded: number;
+  readonly payloadsRedacted: number;
+  readonly payloadsWithheld: number;
+}
+
+function summarizeBundle(bundle: JournalBundle): ChainExportSummary[] {
+  return bundle.chains.map((chain) => ({
+    chain: chain.chain,
+    records: chain.records.length,
+    payloadsIncluded: chain.records.filter((r) => !r.withheldPayload).length,
+    payloadsRedacted: chain.records.filter((r) => r.withheldFields.length > 0).length,
+    payloadsWithheld: chain.records.filter((r) => r.withheldPayload).length,
+  }));
+}
+
+interface JournalExportData {
+  readonly out: string;
+  readonly dir: string;
+  readonly project: string | null;
+  readonly resolveError: string | null;
+  readonly exportError: string | null;
+  readonly exported: boolean;
+  readonly policyVersion: number | null;
+  readonly chains: readonly ChainExportSummary[];
+}
+
+// 031 B-4: assemble and write the bundle, offline and read-only with respect
+// to both chains. The state root resolves exactly as `journal verify` does
+// (self-hosted by default, or through the registry for `--project`), so what
+// gets exported is always the same thing verify would have walked.
+function cmdJournalExport(deps: OrchestratorCliDeps, json: boolean, project: string | null, out: string): number {
+  const root = verifyRoot(deps, project, null);
+  const outPath = resolve(out);
+  const result = root.dir === null ? null : exportBundleFromRoot(root.dir, project);
+  const bundle = result?.ok === true ? result.bundle : null;
+  if (bundle !== null) writeBundle(bundle, outPath);
+
+  const data: JournalExportData = {
+    out: outPath,
+    dir: root.dir ?? "",
+    project,
+    resolveError: root.error,
+    exportError: result !== null && !result.ok ? result.reason : null,
+    exported: bundle !== null,
+    policyVersion: bundle?.policyVersion ?? null,
+    chains: bundle === null ? [] : summarizeBundle(bundle),
+  };
+
+  if (json) {
+    printJson(deps, { ok: true, data } satisfies ApiResponse<JournalExportData>);
+    return data.exported ? EXIT_OK : EXIT_FAILURE;
+  }
+  if (data.resolveError !== null) {
+    deps.err(`journal export: ${data.resolveError}`);
+    return EXIT_FAILURE;
+  }
+  if (data.exportError !== null) {
+    deps.err(`journal export: ${data.exportError}`);
+    return EXIT_FAILURE;
+  }
+  deps.out(`bundle written to ${outPath} (policy v${data.policyVersion}${project === null ? "" : `, project ${project}`})`);
+  deps.out(`source chains under ${data.dir}`);
+  for (const chain of data.chains) {
+    const redacted = chain.payloadsRedacted > 0 ? ` (${chain.payloadsRedacted} with fields withheld)` : "";
+    deps.out(
+      `  ${chain.chain.padEnd(9)} ${chain.records} record${chain.records === 1 ? "" : "s"}: ` +
+        `${chain.payloadsIncluded} payload${chain.payloadsIncluded === 1 ? "" : "s"} included${redacted}, ${chain.payloadsWithheld} withheld`
+    );
+  }
+  return EXIT_OK;
+}
+
+interface BundleVerifyData {
+  readonly bundle: string;
+  readonly readError: string | null;
+  readonly verified: boolean;
+  readonly policyVersion: number | null;
+  readonly project: string | null;
+  readonly failure: { readonly chain: string; readonly seq: number | null; readonly reason: string } | null;
+  readonly chains: readonly ChainVerification[];
+}
+
+// 031 B-3 behind B-4's verb: check a bundle with no daemon, no original
+// journal, and no network, and map the verdict onto 023's exit codes (0 the
+// chains are intact, 1 anything else, and never 2, because nothing here can
+// be unreachable).
+function cmdBundleVerify(deps: OrchestratorCliDeps, json: boolean, bundleArg: string): number {
+  const bundlePath = resolve(bundleArg);
+  let data: BundleVerifyData;
+
+  let text: string | null = null;
+  let readError: string | null = null;
+  try {
+    text = fs.readFileSync(bundlePath, "utf8");
+  } catch (err) {
+    readError = `the bundle at ${bundlePath} could not be read: ${(err as Error).message}`;
+  }
+
+  if (text === null) {
+    data = { bundle: bundlePath, readError, verified: false, policyVersion: null, project: null, failure: null, chains: [] };
+  } else {
+    const parsed = parseBundle(text);
+    if (!parsed.ok) {
+      data = { bundle: bundlePath, readError: parsed.reason, verified: false, policyVersion: null, project: null, failure: null, chains: [] };
+    } else {
+      const verdict = verifyBundle(parsed.bundle);
+      data = {
+        bundle: bundlePath,
+        readError: null,
+        verified: verdict.ok,
+        policyVersion: parsed.bundle.policyVersion,
+        project: parsed.bundle.project,
+        failure: verdict.ok ? null : { chain: verdict.chain, seq: verdict.seq, reason: verdict.reason },
+        chains: verdict.ok ? verdict.chains : [],
+      };
+    }
+  }
+
+  if (json) {
+    printJson(deps, { ok: true, data } satisfies ApiResponse<BundleVerifyData>);
+    return data.verified ? EXIT_OK : EXIT_FAILURE;
+  }
+  if (data.readError !== null) {
+    deps.err(`journal verify: ${data.readError}`);
+    return EXIT_FAILURE;
+  }
+  if (data.failure !== null) {
+    const at = data.failure.seq === null ? "" : ` at seq ${data.failure.seq}`;
+    deps.err(`bundle ${bundlePath}: ${data.failure.chain} chain broken${at}: ${data.failure.reason}`);
+    return EXIT_FAILURE;
+  }
+  deps.out(
+    `bundle ${bundlePath} (policy v${data.policyVersion}${data.project === null ? "" : `, project ${data.project}`}): chains intact`
+  );
+  for (const chain of data.chains) {
+    deps.out(
+      `  ${chain.chain.padEnd(9)} ${chain.records} record${chain.records === 1 ? "" : "s"}: ` +
+        `${chain.payloadsVerified} payload${chain.payloadsVerified === 1 ? "" : "s"} verified, ` +
+        `${chain.payloadsRedacted} redacted, ${chain.payloadsWithheld} withheld`
+    );
+  }
+  return EXIT_OK;
+}
+
 // --- daemon lifecycle (B-2) -------------------------------------------------
 
 interface DaemonLockFile {
@@ -1549,9 +1729,11 @@ async function dispatch(
   const accepted =
     command === "projects" && rest[0] === "add"
       ? PROJECTS_ADD_FLAGS
-      : Object.hasOwn(EXTRA_FLAGS, command)
-        ? EXTRA_FLAGS[command]
-        : undefined;
+      : command === "journal" && rest[0] === "export"
+        ? JOURNAL_EXPORT_FLAGS
+        : Object.hasOwn(EXTRA_FLAGS, command)
+          ? EXTRA_FLAGS[command]
+          : undefined;
   if (accepted !== undefined) {
     const stray = strayFlag(args, accepted);
     if (stray !== null) return usage(scoped, `${stray} is not a flag of "${command}"`);
@@ -1560,12 +1742,28 @@ async function dispatch(
   // The two offline commands (B-4 and the daemon lifecycle) are dispatched
   // before a client is ever created: they must work with nothing listening.
   if (command === "journal") {
-    if (rest[0] !== "verify") return usage(scoped, `journal needs the "verify" subcommand`);
-    if (rest.length > 1) return usage(scoped, `unexpected argument "${rest[1]}" after journal verify`);
-    if (args.project !== null && args.dir !== null) {
-      return usage(scoped, "journal verify takes --project or --dir, not both");
+    const sub = rest[0];
+    if (sub === "verify") {
+      if (rest.length > 1) return usage(scoped, `unexpected argument "${rest[1]}" after journal verify`);
+      // 031 B-4: a bundle check reads the bundle and nothing else, so the
+      // root-addressing flags mean nothing to it and are refused (028 D-5).
+      if (args.bundle !== null) {
+        if (args.project !== null || args.dir !== null) {
+          return usage(scoped, "journal verify --bundle takes neither --project nor --dir");
+        }
+        return cmdBundleVerify(scoped, args.json, args.bundle);
+      }
+      if (args.project !== null && args.dir !== null) {
+        return usage(scoped, "journal verify takes --project or --dir, not both");
+      }
+      return cmdJournalVerify(scoped, args.json, args.project, args.dir);
     }
-    return cmdJournalVerify(scoped, args.json, args.project, args.dir);
+    if (sub === "export") {
+      if (rest.length > 1) return usage(scoped, `unexpected argument "${rest[1]}" after journal export`);
+      if (args.out === null) return usage(scoped, "journal export needs --out <path>");
+      return cmdJournalExport(scoped, args.json, args.project, args.out);
+    }
+    return usage(scoped, `journal needs the "verify" or "export" subcommand`);
   }
   if (command === "daemon") return cmdDaemon(scoped, url, args.json, rest);
 
