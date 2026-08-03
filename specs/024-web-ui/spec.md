@@ -106,8 +106,29 @@ Authentication and remote access (spec 022 B-1 governs), historical
 analytics/charts beyond the history list, and any spec-editing capability
 (specs are authored in the repo, reviewed as code).
 
+## 7. Resolved decisions
+
+D-1 (2026-08-03, operator). The Verification section gains the browser
+half it was always meant to carry, deferred until standby (spec 026)
+made the daemon reachable outside a live run: two `verify:browser`
+assertions against the served dashboard, exercising spec 019 B-3's
+Claude-in-Chrome path for real instead of only through its fake. This
+amendment deliberately drifts this spec's pin; the requalification it
+forces (021 D-18) is the demonstration: re-verification now includes
+the browser assertions, so "the dashboard renders honestly" is checked
+by a browser, not asserted by prose. The assertions name only stable
+surfaces (the project list and the switcher), not counts or specific
+project names beyond the self-hosted one, so they hold in any
+deployment with at least the bootstrap registration.
+
 ## Verification
 
 ```verify:cli
 bun install --frozen-lockfile && bun run web:build
+```
+
+```verify:browser
+url: http://127.0.0.1:4519
+The page shows a standby or run view for a project named claude-observatory, with a chip or label indicating whether it is armed or disarmed.
+The header carries a project switcher control that lists at least one project name, and the daemon state (such as standby or driving) is visible somewhere on the page.
 ```
