@@ -1,7 +1,9 @@
 // The one place that spawns Claude Code (spec 014). A fresh `claude -p
 // --output-format stream-json --verbose --dangerously-skip-permissions`
-// process per attempt: the prompt is written to stdin and stdin is closed,
-// never placed on argv or interpolated through a shell (B-1). The child's
+// process per attempt (plus `--mcp-config <path> --strict-mcp-config` when
+// the caller declares an MCP server set, D-10): the prompt is written to
+// stdin and stdin is closed, never placed on argv or interpolated through a
+// shell (B-1). The child's
 // env is the parent's env with ANTHROPIC_API_KEY deleted (an empty or unset
 // key must not shadow OAuth) and NO_COLOR=1 (B-2). stdout is parsed as
 // newline-delimited stream-json and forwarded to an injected sink; only the
@@ -56,6 +58,11 @@ export interface RunSessionOptions {
   readonly model?: string;
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
+  // When present, appended as `--mcp-config <path> --strict-mcp-config`
+  // (B-1, D-10): the session sees exactly the MCP server set the caller
+  // declared, never host-level user or project MCP configuration. Absent,
+  // the argv is unchanged.
+  readonly mcpConfigPath?: string;
   // SIGTERM-to-SIGKILL grace at the deadline (B-5). Configurable so tests can
   // exercise the escalation deterministically; defaults to KILL_GRACE_MS.
   readonly killGraceMs?: number;
@@ -212,6 +219,7 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
   const args = [claudeBin, "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
   if (opts.model !== undefined) args.push("--model", opts.model);
   if (opts.maxTurns !== undefined) args.push("--max-turns", String(opts.maxTurns));
+  if (opts.mcpConfigPath !== undefined) args.push("--mcp-config", opts.mcpConfigPath, "--strict-mcp-config");
 
   // Mutable session state lives on one object rather than as separate `let`
   // bindings: TypeScript's control-flow narrowing gets confused about a

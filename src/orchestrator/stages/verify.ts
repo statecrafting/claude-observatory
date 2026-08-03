@@ -14,10 +14,11 @@
 // sha, never the caller's own working tree (which may be dirty, mid-flight,
 // or simply on a different branch). The worktree is created before anything
 // else runs and removed again once the stage is done, pass or fail. Browser
-// assertions (B-3) run behind a BrowserVerifier seam; the production
-// implementation drives a fresh claude session per assertion, instructed to
-// use the Claude in Chrome MCP tools (spec 014's own runSession) and reply
-// in a strict JSON schema, and is never constructed by this file's own
+// assertions (B-3, D-10) run behind a BrowserVerifier seam; the production
+// implementation drives a fresh claude session per assertion, handing it a
+// headless browser MCP server it declares itself (Playwright MCP via bunx,
+// strict `--mcp-config`, spec 014 D-10) and requiring a strict JSON reply,
+// and is never constructed by this file's own
 // tests (FR-002: unit tests use a fake BrowserVerifier only, mirroring
 // spec 014's and spec 017's own "never spawn the real claude/gh in tests"
 // convention; the live path is excluded from CI the same way spec 014's own
@@ -295,7 +296,7 @@ export class BrowserVerifierQuotaError extends Error {
   }
 }
 
-export const BROWSER_PROMPT_VERSION = 1;
+export const BROWSER_PROMPT_VERSION = 2;
 
 export interface BrowserVerifyPromptParams {
   readonly url: string;
@@ -305,13 +306,14 @@ export interface BrowserVerifyPromptParams {
 export function buildBrowserVerifyPrompt(params: BrowserVerifyPromptParams): string {
   const { url, assertion } = params;
   return `You are verifying one observable behavior of a running web application
-through the Claude in Chrome MCP tools, in this one session. Verify browser
-prompt template version: ${BROWSER_PROMPT_VERSION}.
+through the browser MCP tools available in this session (their names start
+with browser_), in this one session. Verify browser prompt template
+version: ${BROWSER_PROMPT_VERSION}.
 
 ## What to do
 
-Use the Claude in Chrome MCP tools to navigate to the URL below and check
-exactly one assertion against what you actually observe there. Do not check
+Use the browser MCP tools to navigate to the URL below and check exactly
+one assertion against what you actually observe there. Do not check
 anything else and do not modify the page's state beyond what observing it
 requires.
 
@@ -319,8 +321,10 @@ URL: ${url}
 
 Assertion to check: ${assertion}
 
-Take a screenshot as part of your check when the tools allow it. If you
-cannot produce one, say so plainly rather than claiming one exists.
+Take one screenshot with the browser screenshot tool as part of your check;
+it is saved to disk automatically. Never paste image data into your reply.
+If the screenshot tool fails, say so plainly rather than claiming a capture
+exists.
 
 ## How to answer
 
@@ -375,7 +379,13 @@ function extractResultText(event: unknown): string | null {
 export const DEFAULT_BROWSER_TIMEOUT_MS = 10 * 60_000;
 export const DEFAULT_BROWSER_MAX_TURNS = 40;
 
-export interface CreateClaudeChromeBrowserVerifierParams {
+// Pinned browser MCP server (D-10). Bumping this version is an authoring
+// change to this spec's territory, never an incidental drift; bunx spawns
+// it as a tool, so it stays out of package.json (the zero-runtime-dependency
+// convention holds).
+export const BROWSER_MCP_PACKAGE = "@playwright/mcp@0.0.78";
+
+export interface CreateBrowserMcpVerifierParams {
   readonly repo: string;
   readonly claudeBin?: string;
   readonly model?: string;
@@ -383,56 +393,108 @@ export interface CreateClaudeChromeBrowserVerifierParams {
   readonly timeoutMs?: number;
 }
 
-// The production BrowserVerifier (B-3): a fresh claude session per
+// The server saves captures under its own --output-dir with names the model
+// chooses; the newest PNG there becomes the assertion's screenshot. Returns
+// undefined when nothing was captured (the verdict then simply carries no
+// screenshot, which the evidence writer already tolerates). PNG only: the
+// evidence writer names screenshot files `.png`, so a stray capture in
+// another format must not be smuggled in under that extension.
+function readNewestScreenshot(outputDir: string): string | undefined {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(outputDir);
+  } catch {
+    return undefined;
+  }
+  let newest: { path: string; mtimeMs: number } | null = null;
+  for (const name of entries) {
+    if (!/\.png$/i.test(name)) continue;
+    const path = join(outputDir, name);
+    const stat = fs.statSync(path);
+    if (newest === null || stat.mtimeMs > newest.mtimeMs) newest = { path, mtimeMs: stat.mtimeMs };
+  }
+  if (newest === null) return undefined;
+  return fs.readFileSync(newest.path).toString("base64");
+}
+
+// The production BrowserVerifier (B-3, D-10): a fresh claude session per
 // assertion, driven exactly like every other session in this codebase
-// (spec 014's own runSession), instructed to use the Claude in Chrome MCP
-// tools and reply in buildBrowserVerifyPrompt's strict JSON schema. Kept
+// (spec 014's own runSession), handed a headless Playwright MCP server
+// through a per-assertion strict `--mcp-config` (spec 014 D-10) and
+// instructed to reply in buildBrowserVerifyPrompt's strict JSON schema. The
+// server's --output-dir is a per-assertion temp dir: the model captures a
+// screenshot with the browser tool (never inline), and the newest PNG found
+// there afterwards is attached as the assertion's screenshot evidence. Kept
 // thin on purpose and never constructed by verify.test.ts's scenarios
 // (FR-002): those drive runVerifyStage against a hand-written fake
 // BrowserVerifier instead, the same "never spawn the real claude in tests"
 // convention spec 014's own session.test.ts documents. A live smoke check
 // of this function against a real browser session is run manually, not
 // checked into the suite (mirroring spec 014's own AC-2 live smoke).
-export function createClaudeChromeBrowserVerifier(params: CreateClaudeChromeBrowserVerifierParams): BrowserVerifier {
+export function createBrowserMcpVerifier(params: CreateBrowserMcpVerifierParams): BrowserVerifier {
   const claudeBin = params.claudeBin ?? "claude";
 
   return {
     async assert(url: string, assertion: string): Promise<BrowserAssertResult> {
-      let resultText: string | null = null;
+      const workDir = fs.mkdtempSync(join(tmpdir(), "verify-browser-"));
+      try {
+        const outputDir = join(workDir, "output");
+        fs.mkdirSync(outputDir);
+        const mcpConfigPath = join(workDir, "mcp-config.json");
+        fs.writeFileSync(
+          mcpConfigPath,
+          JSON.stringify({
+            mcpServers: {
+              browser: {
+                command: "bunx",
+                args: [BROWSER_MCP_PACKAGE, "--headless", "--isolated", "--output-dir", outputDir],
+              },
+            },
+          })
+        );
 
-      const session = await driveClaudeSession({
-        repo: params.repo,
-        claudeBin,
-        model: params.model,
-        maxTurns: params.maxTurns ?? DEFAULT_BROWSER_MAX_TURNS,
-        timeoutMs: params.timeoutMs ?? DEFAULT_BROWSER_TIMEOUT_MS,
-        prompt: buildBrowserVerifyPrompt({ url, assertion }),
-        sink: (event) => {
-          const text = extractResultText(event);
-          if (text !== null) resultText = text;
-        },
-      });
+        let resultText: string | null = null;
+        const session = await driveClaudeSession({
+          repo: params.repo,
+          claudeBin,
+          model: params.model,
+          maxTurns: params.maxTurns ?? DEFAULT_BROWSER_MAX_TURNS,
+          timeoutMs: params.timeoutMs ?? DEFAULT_BROWSER_TIMEOUT_MS,
+          mcpConfigPath,
+          prompt: buildBrowserVerifyPrompt({ url, assertion }),
+          sink: (event) => {
+            const text = extractResultText(event);
+            if (text !== null) resultText = text;
+          },
+        });
 
-      if (session.classification.kind === "quota") {
-        throw new BrowserVerifierQuotaError(session.classification.detail, session.classification.resetAtMs);
+        if (session.classification.kind === "quota") {
+          throw new BrowserVerifierQuotaError(session.classification.detail, session.classification.resetAtMs);
+        }
+        if (session.classification.kind !== "completed") {
+          return {
+            pass: false,
+            detail: `browser verification session did not complete (${session.classification.kind}): ${session.classification.detail}`,
+          };
+        }
+        if (resultText === null) {
+          return { pass: false, detail: "browser verification session completed with no result text to parse" };
+        }
+        const parsed = parseBrowserVerdict(resultText);
+        if (!parsed) {
+          return {
+            pass: false,
+            detail: `browser verification session's result text did not match the expected JSON schema: ${(resultText as string).slice(0, 500)}`,
+          };
+        }
+        if (parsed.screenshotPngBase64 === undefined) {
+          const screenshot = readNewestScreenshot(outputDir);
+          if (screenshot !== undefined) return { ...parsed, screenshotPngBase64: screenshot };
+        }
+        return parsed;
+      } finally {
+        fs.rmSync(workDir, { recursive: true, force: true });
       }
-      if (session.classification.kind !== "completed") {
-        return {
-          pass: false,
-          detail: `browser verification session did not complete (${session.classification.kind}): ${session.classification.detail}`,
-        };
-      }
-      if (resultText === null) {
-        return { pass: false, detail: "browser verification session completed with no result text to parse" };
-      }
-      const parsed = parseBrowserVerdict(resultText);
-      if (!parsed) {
-        return {
-          pass: false,
-          detail: `browser verification session's result text did not match the expected JSON schema: ${(resultText as string).slice(0, 500)}`,
-        };
-      }
-      return parsed;
     },
   };
 }

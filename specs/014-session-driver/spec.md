@@ -43,9 +43,11 @@ and their tests.
 ## 3. Behavior
 
 - **B-1 (spawn).** `runSession({repo, prompt, model?, maxTurns?,
-  timeoutMs?})` spawns `claude -p --output-format stream-json --verbose
-  --dangerously-skip-permissions` with cwd = repo, prompt written to stdin
-  then closed. No prompt content ever reaches argv or a shell.
+  timeoutMs?, mcpConfigPath?})` spawns `claude -p --output-format
+  stream-json --verbose --dangerously-skip-permissions` (plus
+  `--mcp-config <path> --strict-mcp-config` when `mcpConfigPath` is given,
+  D-10) with cwd = repo, prompt written to stdin then closed. No prompt
+  content ever reaches argv or a shell.
 - **B-2 (env hygiene).** Child env = parent env minus `ANTHROPIC_API_KEY`
   (an empty or unset API key must not shadow OAuth); `NO_COLOR=1`. The
   `claude` binary path and `--version` output are journaled once per run.
@@ -205,3 +207,13 @@ load-bearing: a false negative burns a run, a false positive parks it for
 hours. Growth of that table has to come from real unmatched haystacks
 preserved at the moment they failed to match, not from recollections;
 `stderrTail` was already journaled, and this closes the other half.
+
+D-10 (2026-08-03, operator). B-1 gains an optional `mcpConfigPath`: when
+present, the spawn appends `--mcp-config <path> --strict-mcp-config` to
+the argv. The strict flag is the point: a daemon-driven session sees
+exactly the MCP server set its caller declared, never whatever user- or
+project-level MCP configuration happens to exist on the host. Absent, the
+argv is unchanged, so build, ship, and shepherd sessions are untouched.
+The first consumer is spec 019's browser verifier (its D-10): headless
+`claude -p` sessions have no Claude-in-Chrome pairing, so browser
+verification needs a server the driver can declare explicitly.

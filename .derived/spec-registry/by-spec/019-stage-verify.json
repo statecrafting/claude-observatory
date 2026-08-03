@@ -33,9 +33,9 @@
     ],
     "specPath": "specs/019-stage-verify/spec.md",
     "status": "approved",
-    "summary": "The stage that makes shipped mean something: after merge, drive a verification pass against the running artifact and assert the spec's declared observable behavior, recording pass/fail with evidence. Specs declare verifiability in a Verification section (CLI assertions the orchestrator runs directly; browser assertions driven through Claude in Chrome for UI territory); a spec with no such section records verify: not-declared, visibly, instead of a hollow pass. Verify is also the re-qualification path for invalidated specs (012 B-4).\n",
+    "summary": "The stage that makes shipped mean something: after merge, drive a verification pass against the running artifact and assert the spec's declared observable behavior, recording pass/fail with evidence. Specs declare verifiability in a Verification section (CLI assertions the orchestrator runs directly; browser assertions driven through a headless browser MCP session for UI territory); a spec with no such section records verify: not-declared, visibly, instead of a hollow pass. Verify is also the re-qualification path for invalidated specs (012 B-4).\n",
     "title": "Verify stage: assert observable behavior, record evidence"
   },
-  "shardHash": "74def0793dc22eb21401ed97404bf1db78e0366c04d34a5e93cfc86bc68722cc",
+  "shardHash": "6ca7a752a9058b6e4ffed3a53291b38c6bca0c3b9f117abf40716dc571f1ceb3",
   "specVersion": "1.1.0"
 }

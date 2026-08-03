@@ -68,7 +68,7 @@ import { createProcessGitHubClient, runShipStage } from "./stages/ship";
 import type { RunShepherdStageOptions, ShepherdResult } from "./stages/shepherd";
 import { runShepherdStage } from "./stages/shepherd";
 import type { BrowserVerifier, RunVerifyStageOptions, VerifyResult, VerifyRunner } from "./stages/verify";
-import { createClaudeChromeBrowserVerifier, createProcessVerifyRunner, runVerifyStage } from "./stages/verify";
+import { createBrowserMcpVerifier, createProcessVerifyRunner, runVerifyStage } from "./stages/verify";
 
 // --- process inspector (B-1) -----------------------------------------------
 //
@@ -328,7 +328,7 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
     },
     gh: createProcessGitHubClient({ repoDir, ghBin }),
     verifyRunner: createProcessVerifyRunner({ repoDir }),
-    browserVerifier: createClaudeChromeBrowserVerifier({ repo: repoDir, claudeBin }),
+    browserVerifier: createBrowserMcpVerifier({ repo: repoDir, claudeBin }),
     runSession,
     killLiveSession,
     processInspector: createProcessInspector(),

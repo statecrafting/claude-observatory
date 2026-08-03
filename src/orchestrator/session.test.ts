@@ -260,6 +260,25 @@ test("runSession: the prompt is delivered via stdin only, never argv or a shell"
   expect(readFileSync(dumpPath, "utf8")).toBe(dangerousPrompt);
 });
 
+test("runSession: mcpConfigPath appends --mcp-config and --strict-mcp-config; absent leaves the argv unchanged (D-10)", async () => {
+  const dir = freshDir();
+  const argvDump = join(dir, "argv-dump.txt");
+  const script = writeFakeClaude(
+    dir,
+    [
+      `echo "$@" > "${argvDump}"`,
+      'echo \'{"type":"result","subtype":"success","is_error":false,"result":"DONE"}\'',
+      "exit 0",
+    ].join("\n")
+  );
+
+  await runSession({ repo: dir, prompt: "hi", claudeBin: script, mcpConfigPath: "/somewhere/mcp-config.json" });
+  expect(readFileSync(argvDump, "utf8")).toContain("--mcp-config /somewhere/mcp-config.json --strict-mcp-config");
+
+  await runSession({ repo: dir, prompt: "hi", claudeBin: script });
+  expect(readFileSync(argvDump, "utf8")).not.toContain("--mcp-config");
+});
+
 // --- deadline enforcement (B-5) ------------------------------------------------
 
 test(
