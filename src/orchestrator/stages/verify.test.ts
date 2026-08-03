@@ -252,6 +252,17 @@ test("buildBrowserVerifyPrompt embeds the url, the assertion, the JSON schema, a
   expect(prompt.indexOf(String.fromCharCode(0x2014))).toBe(-1);
 });
 
+test("buildBrowserVerifyPrompt names the generic browser MCP tools, never Claude in Chrome (D-10)", () => {
+  const prompt = buildBrowserVerifyPrompt({ url: "https://example.com", assertion: "The header says Welcome" });
+  expect(prompt).toContain("browser MCP tools");
+  expect(prompt).toContain("browser_");
+  expect(prompt).not.toContain("Claude in Chrome");
+  // The screenshot lands on disk through the server's own output dir; the
+  // model must never be asked to inline image data into its JSON reply.
+  expect(prompt).toContain("Never paste image data");
+  expect(BROWSER_PROMPT_VERSION).toBe(2);
+});
+
 test("parseBrowserVerdict: parses a bare JSON object", () => {
   const result = parseBrowserVerdict('{"pass": true, "detail": "the header reads Welcome"}');
   expect(result).toEqual({ pass: true, detail: "the header reads Welcome" });

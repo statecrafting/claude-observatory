@@ -14,8 +14,8 @@ summary: >
   verification pass against the running artifact and assert the spec's
   declared observable behavior, recording pass/fail with evidence. Specs
   declare verifiability in a Verification section (CLI assertions the
-  orchestrator runs directly; browser assertions driven through Claude in
-  Chrome for UI territory); a spec with no such section records
+  orchestrator runs directly; browser assertions driven through a headless
+  browser MCP session for UI territory); a spec with no such section records
   verify: not-declared, visibly, instead of a hollow pass. Verify is also
   the re-qualification path for invalidated specs (012 B-4).
 establishes:
@@ -41,14 +41,17 @@ convention below becomes part of this corpus's authoring conventions.
 - **B-1 (declaration).** A spec MAY carry a `## Verification` section with
   fenced assertion blocks: `verify:cli` blocks (commands run in the target
   repo whose exit 0 asserts the behavior) and `verify:browser` blocks
-  (natural-language assertions against a URL, driven through Claude in
-  Chrome). Specs without the section verify as `not-declared`.
+  (natural-language assertions against a URL, driven through a claude
+  session given a browser MCP server, D-10). Specs without the section
+  verify as `not-declared`.
 - **B-2 (cli assertions).** Run serially with a per-block timeout in a clean
   checkout of the merged sha; each block journals command, exit code, and
   bounded output. Any nonzero exit fails the stage.
-- **B-3 (browser assertions).** Driven through a Claude in Chrome session
-  scoped to the declared URL, one assertion per instruction, answering
-  pass/fail with a screenshot per assertion stored under
+- **B-3 (browser assertions).** Driven through a fresh claude session per
+  assertion that is handed a headless browser MCP server it declares
+  itself (strict `--mcp-config`, spec 014 D-10; see D-10 here), scoped to
+  the declared URL, one assertion per instruction, answering pass/fail
+  with a screenshot per assertion stored under
   `data/orchestrator/runs/<specExec>/evidence/`. Browser verification
   consumes quota and therefore obeys the quota scheduler.
 - **B-4 (verdict).** `passed` only when every declared assertion passed;
@@ -156,3 +159,24 @@ in the local repo until fetched, and the worktree add for cli assertions
 failed with an invalid reference. The production VerifyRunner now verifies
 the sha locally first and runs one git fetch origin when it is unknown,
 before creating the worktree.
+
+D-10 (2026-08-03, operator). Found live by 024 D-1's demonstration: the
+daemon-spawned headless `claude -p` session has no Claude-in-Chrome MCP
+tools (extension pairing is interactive-only), so B-3 as originally worded
+could never pass unattended; the verifier refused to claim what it could
+not see and recorded exactly that as evidence. B-3 now hands each
+per-assertion session a browser MCP server it declares itself: Playwright
+MCP, pinned as the named constant `BROWSER_MCP_PACKAGE`
+(`@playwright/mcp@0.0.78`), spawned via bunx with `--headless --isolated`
+and an `--output-dir` unique to the assertion, wired through spec 014
+D-10's `mcpConfigPath` with strict config so the session sees exactly one
+MCP server and nothing from host-level configuration. The factory is
+renamed `createBrowserMcpVerifier` to say what it now does. Screenshots
+become real rather than aspirational: the prompt (template version 2)
+tells the model to capture one with the browser screenshot tool and never
+to inline image data, and the verifier sweeps the output dir afterwards,
+attaching the newest PNG to the assertion's evidence. Bumping the pinned
+version is an authoring change to this spec's territory, not an
+incidental drift; bunx keeps the package out of package.json, so the
+zero-runtime-dependency convention holds (the server is a spawned tool,
+not a library).
