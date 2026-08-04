@@ -488,8 +488,19 @@ export class StandbyDaemon {
         continue;
       }
       if (queued === 0) {
-        await this.retire(project, daemon, true);
-        continue;
+        // D-9: the probe's run concludes before its journals close. The open
+        // created (or resumed) a run in "running", and retiring around it
+        // stranded a run that read as live forever (found live: tenant-emit).
+        // A refusal means the resumed run still carries a pause, a park, or
+        // unfinished spec work, all of which only the loop can reconcile:
+        // drive it under the normal flight slot instead of abandoning it.
+        if (daemon.concludeIdle()) {
+          await this.retire(project, daemon, true);
+          continue;
+        }
+        this.live.set(project.name, daemon);
+        await this.driveProject(project, daemon);
+        return true;
       }
       this.logLine(`standby: "${project.name}" corpus amended; ${queued} reverify(ies) queued`);
       this.live.set(project.name, daemon);

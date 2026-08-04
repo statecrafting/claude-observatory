@@ -1526,3 +1526,53 @@ test("a stage fn that throws is a failed attempt with journaled evidence, then a
     journal.close();
   }
 });
+
+// --- D-23: concludeIdle() -----------------------------------------------------
+
+test("concludeIdle(): a supervised open with nothing in flight concludes completed; a terminal run refuses (D-23)", async () => {
+  const dataDir = freshDir("conclude-idle-data");
+  const repoDir = freshDir("conclude-idle-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": { implementation: "complete" } });
+
+  const daemon = new Daemon({ ...makeDeps({ dataDir, repoDir, dagReader, stageFns: neverCalledStageFns() }), supervised: true });
+  await daemon.start();
+  expect(daemon.runStatus).toBe("running");
+  expect(daemon.concludeIdle()).toBe(true);
+  expect(daemon.runStatus).toBe("completed");
+  // Terminal is terminal: the second call refuses instead of re-journaling.
+  expect(daemon.concludeIdle()).toBe(false);
+  await daemon.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const results = (journal.fold().byKind["run.result"] ?? []).map((r) => r.payload as Record<string, JsonValue>);
+    expect(results.length).toBe(1);
+    expect(results[0]?.status).toBe("completed");
+    expect(verifyChain(dataDir).ok).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+test("concludeIdle(): a resumed run still holding a live specExec refuses; the loop owns its reconciliation (D-23)", async () => {
+  const dataDir = freshDir("conclude-live-data");
+  const repoDir = freshDir("conclude-live-repo");
+
+  const seedJournal = openJournal(dataDir);
+  try {
+    const run = createRun(seedJournal, repoDir);
+    const running = transition(seedJournal, run, "running");
+    const specExec = createSpecExec(seedJournal, running.id, "900-fixture", "pin-900");
+    transition(seedJournal, specExec, "building");
+  } finally {
+    seedJournal.close();
+  }
+
+  const dagReader = fixtureDagReader({ "900-fixture": { implementation: "complete" } });
+  const daemon = new Daemon({ ...makeDeps({ dataDir, repoDir, dagReader, stageFns: neverCalledStageFns() }), supervised: true });
+  await daemon.start();
+  expect(daemon.runStatus).toBe("running");
+  expect(daemon.concludeIdle()).toBe(false);
+  expect(daemon.runStatus).toBe("running");
+  await daemon.shutdown();
+});
