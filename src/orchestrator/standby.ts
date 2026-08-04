@@ -44,7 +44,7 @@ import {
   forceReleaseDaemonLock,
   releaseDaemonLock,
 } from "./daemon";
-import { loadRegistrySnapshot } from "./dag";
+import { loadRegistrySnapshot, makePinLookup } from "./dag";
 import type { Project, ProjectProbe, ProjectsSnapshot } from "./projects";
 import { foldProjects, openProjectsChain, qualifyProject, registerProject } from "./projects";
 import type { RunStatus } from "./state";
@@ -113,12 +113,23 @@ export interface ProjectStandbyView {
 
 export type StandbyState = "starting" | "scheduling" | "standby" | "stopped";
 
+// D-7: the daemon process loaded its code once, at start; when the checkout
+// it was loaded from has moved on, driving with the old code is exactly the
+// failure that verification exists to prevent (found live: a merged verifier
+// fix that the running daemon did not have). Null means fresh, or that the
+// sha is unknowable, which is never reported as stale.
+export interface CodeStaleness {
+  readonly startedSha: string;
+  readonly currentSha: string;
+}
+
 export interface StandbySnapshot {
   readonly state: StandbyState;
   readonly daemonHomeDir: string;
   readonly activeProject: string | null;
   readonly scanIntervalMs: number;
   readonly lastScanMs: number | null;
+  readonly codeStale: CodeStaleness | null;
   readonly projects: readonly ProjectStandbyView[];
 }
 
@@ -156,6 +167,10 @@ export interface StandbyDeps {
   readonly scanIntervalMs?: number;
   readonly sleepChunkMs?: number;
   readonly bootstrap?: StandbyBootstrap | null;
+  // D-7: reads the sha of the checkout this process's code was loaded from
+  // (production: git rev-parse HEAD there); null when unreadable. Absent, or
+  // null at start, disables the staleness gate: unknown is not stale.
+  readonly readCodeSha?: () => string | null;
 }
 
 // --- internals --------------------------------------------------------------
@@ -200,6 +215,8 @@ export class StandbyDaemon {
   private activeName: string | null = null;
   private activeDaemonValue: Daemon | null = null;
   private lastScanMs: number | null = null;
+  private codeShaAtStart: string | null = null;
+  private codeStaleValue: CodeStaleness | null = null;
 
   private loopPromise: Promise<void> | null = null;
   private loopError: unknown = null;
@@ -279,6 +296,7 @@ export class StandbyDaemon {
       activeProject: this.activeName,
       scanIntervalMs: this.scanIntervalMs,
       lastScanMs: this.lastScanMs,
+      codeStale: this.codeStaleValue,
       projects: [...this.registry.keys()].map((name) => this.views.get(name)).filter((v): v is ProjectStandbyView => Boolean(v)),
     };
   }
@@ -291,6 +309,7 @@ export class StandbyDaemon {
 
     const lock = acquireDaemonLock(this.deps.daemonHomeDir, this.deps.processInspector, this.deps.pid ?? process.pid);
     this.lockPath = lock.lockPath;
+    this.codeShaAtStart = this.deps.readCodeSha?.() ?? null;
 
     // Reclaim proved the previous standby daemon dead by pid plus process
     // start time, a stronger test than any per-chain lock file's existence.
@@ -423,7 +442,14 @@ export class StandbyDaemon {
 
   private async runCycle(): Promise<boolean> {
     await this.refreshRegistry();
+    this.refreshCodeStaleness();
     const scans = this.observeProjects();
+
+    // D-7: stale code drives nothing. The scan above still ran, so every
+    // view stays fresh and says why; an operator restart is the only remedy
+    // (the process cannot reload its own modules), and until then a paused
+    // run stays paused and no new or reverify run starts.
+    if (this.codeStaleValue !== null) return false;
 
     // B-3, priority half: an approval or retry resumes a paused run before
     // any new run starts, wherever that project sits in registration order.
@@ -438,6 +464,39 @@ export class StandbyDaemon {
       }
     }
 
+    // D-8, amendment half: a corpus whose signature moved with nothing
+    // pending is an amendment, not new build work. A daemon is opened to
+    // queue reverifies for drifted pipeline roots (021 D-22); zero queued
+    // means the open itself already re-adopted any amended adopted specs,
+    // and the signature settles without a drive. A run driven here that
+    // fails settles too, so a reverify that needs a human is reported once,
+    // never retried on a loop; the next authoring edit changes the
+    // signature and earns the next attempt.
+    for (const project of this.schedulable()) {
+      if (this.live.has(project.name)) continue;
+      const scan = scans.get(project.name) ?? UNREADABLE_SCAN;
+      if (!scan.ok || scan.pendingSpecIds.length > 0) continue;
+      if (this.settled.get(project.name) === scan.signature) continue;
+      const daemon = await this.openProjectDaemon(project);
+      if (daemon === null) continue;
+      let queued = 0;
+      try {
+        queued = daemon.queueAutoReverifies("standby-auto");
+      } catch (err) {
+        this.reportFailure(project, `auto-reverify scan failed: ${(err as Error).message}`);
+        await this.retire(project, daemon, false);
+        continue;
+      }
+      if (queued === 0) {
+        await this.retire(project, daemon, true);
+        continue;
+      }
+      this.logLine(`standby: "${project.name}" corpus amended; ${queued} reverify(ies) queued`);
+      this.live.set(project.name, daemon);
+      await this.driveProject(project, daemon);
+      return true;
+    }
+
     // B-2, new-run half: registration order, first armed and qualified
     // project whose registry read shows work its last conclusion did not
     // already see, driven by the existing per-run loop against its own state
@@ -448,11 +507,41 @@ export class StandbyDaemon {
       if (!this.shouldWake(project, scan)) continue;
       const daemon = await this.openProjectDaemon(project);
       if (daemon === null) continue;
+      // D-8's mixed case: pending work whose corpus also carries drifted
+      // pipeline roots would dead-end on invalidated-dependency blockers;
+      // queueing the reverifies first lets the same run heal, then build
+      // (the loop drains its reverify queue before every scheduling pass).
+      try {
+        daemon.queueAutoReverifies("standby-auto");
+      } catch {
+        // the run's own scheduling pass reports the blockers honestly
+      }
       await this.driveProject(project, daemon);
       return true;
     }
 
     return false;
+  }
+
+  // D-7: freshness is re-read every cycle rather than latched, so a checkout
+  // moved back to the started sha (an operator un-doing an accidental pull)
+  // resumes driving without a restart. Only a readable, different sha is
+  // stale: an unreadable one is unknown, and unknown is not stale.
+  private refreshCodeStaleness(): void {
+    if (this.codeShaAtStart === null || !this.deps.readCodeSha) return;
+    const current = this.deps.readCodeSha();
+    if (current === null || current === this.codeShaAtStart) {
+      if (this.codeStaleValue !== null) {
+        this.codeStaleValue = null;
+        this.logLine("standby: daemon code matches its checkout again; driving resumes");
+      }
+      return;
+    }
+    if (this.codeStaleValue?.currentSha === current) return;
+    this.codeStaleValue = { startedSha: this.codeShaAtStart, currentSha: current };
+    this.logLine(
+      `standby: code-stale: this process started from ${this.codeShaAtStart.slice(0, 7)} but its checkout is now at ${current.slice(0, 7)}; driving is deferred until the daemon restarts`
+    );
   }
 
   private schedulable(): Project[] {
@@ -548,7 +637,13 @@ export class StandbyDaemon {
           : this.shouldWake(project, scan)
             ? `${scan.pendingSpecIds.length} pending spec(s) ready to wake a run`
             : `${scan.pendingSpecIds.length} pending spec(s), unchanged since the last run concluded`;
-      this.views.set(name, this.viewOf(project, "idle", detail, scan));
+      // D-7: the staleness that stops this project being driven is said on
+      // the project's own line, the surface operators already watch.
+      const staleNote =
+        this.codeStaleValue === null
+          ? ""
+          : `daemon code-stale (started ${this.codeStaleValue.startedSha.slice(0, 7)}, checkout ${this.codeStaleValue.currentSha.slice(0, 7)}), restart to drive; `;
+      this.views.set(name, this.viewOf(project, "idle", `${staleNote}${detail}`, scan));
     }
 
     for (const name of [...this.views.keys()]) {
@@ -585,11 +680,16 @@ export class StandbyDaemon {
     try {
       const snapshot = loadRegistrySnapshot(reader, project.repoDir);
       const entries = [...snapshot.entries()];
+      // D-8: the signature carries each spec's content pin, not only its
+      // implementation field. An amendment flips no lifecycle field, and a
+      // signature blind to content would sleep through the exact corpus
+      // change whose invalidation cascade the amendment half exists to heal.
+      const pinOf = makePinLookup(reader, project.repoDir);
       return {
         ok: true,
         pendingSpecIds: entries.filter(([, e]) => e.implementation === "pending").map(([id]) => id).sort(),
         signature: entries
-          .map(([id, e]) => `${id}=${e.implementation ?? "?"}`)
+          .map(([id, e]) => `${id}=${e.implementation ?? "?"}@${pinOf(id)}`)
           .sort()
           .join(","),
         reason: null,

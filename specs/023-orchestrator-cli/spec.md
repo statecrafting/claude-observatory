@@ -198,3 +198,9 @@ stale cascade). The render now labels it "blocked (journaled at run stop;
 `dag` shows the live view):" rather than recomputing it, because the run
 view reports the run, and the dag view, whose fold 027 D-6 brought to
 scheduler parity, is the live surface.
+
+D-10 (2026-08-04, operator). `cmdDaemonRun` wires 026 D-7's `readCodeSha`
+with a process-local git HEAD read rooted at the code checkout this
+module was loaded from (two levels above the commands directory), never
+at `--repo`: the two coincide for the self-hosted daemon, but only the
+former names the running modules.

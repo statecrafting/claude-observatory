@@ -329,3 +329,16 @@ a registry entry as adoptable: an unapproved spec never enters the
 shipped set through adoption, no matter what its implementation field
 claims. Companion to 012 D-3; the deferral and journaling semantics of
 D-15 are unchanged.
+
+D-22 (2026-08-04, operator). `queueAutoReverifies(source)` queues the
+reverify half of 026 D-8's amendment healing: every invalidated spec
+whose own pipeline pin has drifted, dependencies before dependents, each
+through the existing `reverify()` control so the journal carries
+`control.reverify` records whose source names the automatic caller.
+Adopted drift is deliberately not queued: computeShippedMap's refresh
+(D-11) re-adopts amended bootstrap-era specs on a trusted checkout as a
+side effect of the same call, and transitive invalidation evaporates once
+the drifted roots requalify. Found live: a 16-spec cascade from one
+kernel amendment sat idle for a day because nothing scheduled its
+reverifies; the two operator verbs it took to drain it are exactly what
+this method automates.

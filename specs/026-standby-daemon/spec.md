@@ -162,3 +162,39 @@ daemon: with no live child it reports false and costs nothing. The
 supervised daemon's own `requestShutdown()` stays flag-only; the
 scheduler performing the kill itself is what closes the gap where a
 supervisor that only flags waits out an in-flight stage.
+
+D-7 (2026-08-04, operator). The code-staleness gate. Found live: PR #44
+merged a verifier fix while the daemon kept running the code it had
+loaded half a day earlier, and its reverify of the very spec that fix
+existed for failed against tools the running process did not have. The
+scheduler now captures the sha of the checkout its code was loaded from
+at start (`readCodeSha` in deps; production reads git HEAD at the code
+root, a proxy that knowingly misses dirty-tree edits) and re-reads it
+every cycle: a readable, different sha freezes all driving (new runs,
+amendment healing, and paused-run resumes alike), announces itself in
+the log and on every armed project's detail line, and exposes
+`codeStale` on the snapshot. Freshness is re-read rather than latched,
+so a checkout moved back resumes driving without a restart; an
+unreadable sha is unknown, and unknown is never stale. The remedy is an
+operator restart: a process cannot reload its own modules, and driving
+with code that no longer matches the corpus is exactly the failure
+verification exists to prevent.
+
+D-8 (2026-08-04, operator). The amendment half of the scheduler. A
+project whose registry signature moved while nothing is pending is an
+amendment cascade, not new build work, and it previously waited for
+operator reverify verbs (found live: a day of silence, twice nudged).
+The scan signature now carries each spec's content pin alongside its
+implementation field, so an amendment wakes the scheduler at all; a
+short-lived daemon is then opened to `queueAutoReverifies` (021 D-22).
+Zero queued settles the signature without a drive (the open itself
+re-adopted any amended adopted specs); a positive queue drives the run
+under the normal flight slot, and the run heals roots first, dependents
+by evaporation. The new-run half queues the same reverifies before
+driving mixed corpora (pending work plus drift), so one run heals then
+builds instead of dead-ending on invalidated-dependency blockers. A
+driven run that fails settles its signature too: a reverify that needs a
+human is reported once, never retried on a loop, and the next authoring
+edit earns the next attempt. Arm/disarm stays the consent boundary and
+quota parking applies unchanged; a disarmed project's drift is observed
+and reported, never healed behind the operator's back.

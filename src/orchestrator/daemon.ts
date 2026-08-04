@@ -48,6 +48,7 @@ import {
   adoptedShipped,
   createProcessDagReader,
   createProcessSpecFileAtShaReader,
+  invalidatedSet,
   loadRegistrySnapshot,
   makePinLookup,
   nextReady,
@@ -778,6 +779,65 @@ export class Daemon {
     if (specId.length === 0) throw new Error("daemon: reverify() requires a non-empty specId");
     this.workJournal.append("control.reverify", { specId, source });
     this.pendingControls.push({ verb: "reverify", specId, source });
+  }
+
+  // 026's amendment-cascade healing (D-22): queue a reverify for every
+  // invalidated spec whose own pipeline pin has drifted, dependencies before
+  // dependents. Adopted drift needs no queue entry: computeShippedMap's own
+  // refresh re-adopts amended bootstrap-era specs on a trusted checkout
+  // (D-11), and transitive invalidation evaporates once the drifted roots
+  // requalify. The journaled control.reverify records carry the caller's
+  // source, so an automatic queue stays auditable against an operator's.
+  queueAutoReverifies(source: string): number {
+    this.deps.normalizeCheckoutForScheduling?.();
+    const snapshot = loadRegistrySnapshot(this.deps.dagReader, this.deps.repoDir);
+    const pinOf = makePinLookup(this.deps.dagReader, this.deps.repoDir);
+    const shipped = this.computeShippedMap(snapshot, pinOf);
+    const invalid = invalidatedSet(snapshot, shipped, pinOf);
+    const rootSet = new Set(
+      [...invalid].filter((id) => {
+        const entry = shipped.get(id);
+        return entry !== undefined && entry.source === "pipeline" && entry.pin !== pinOf(id);
+      })
+    );
+    if (rootSet.size === 0) return 0;
+
+    // A root re-verifies against its dependencies, so a root reachable from
+    // another root through depends_on must requalify after it.
+    const depsOf = (id: string): readonly string[] => snapshot.get(id)?.dependsOn ?? [];
+    const rootDepsOf = (id: string): Set<string> => {
+      const found = new Set<string>();
+      const visited = new Set<string>();
+      const stack = [...depsOf(id)];
+      while (stack.length > 0) {
+        const dep = stack.pop()!;
+        if (visited.has(dep)) continue;
+        visited.add(dep);
+        if (rootSet.has(dep)) found.add(dep);
+        stack.push(...depsOf(dep));
+      }
+      return found;
+    };
+    const remaining = new Map([...rootSet].map((id) => [id, rootDepsOf(id)] as const));
+    const ordered: string[] = [];
+    while (remaining.size > 0) {
+      const emittable = [...remaining.entries()]
+        .filter(([, deps]) => [...deps].every((d) => ordered.includes(d)))
+        .map(([id]) => id)
+        .sort();
+      if (emittable.length === 0) {
+        // A depends_on cycle among roots; emit the rest in name order rather
+        // than spin (findCycle reports the cycle itself elsewhere).
+        ordered.push(...[...remaining.keys()].sort());
+        break;
+      }
+      for (const id of emittable) {
+        ordered.push(id);
+        remaining.delete(id);
+      }
+    }
+    for (const id of ordered) this.reverify(id, source);
+    return ordered.length;
   }
 
   forceHumanGate(specId: string, source: string): void {

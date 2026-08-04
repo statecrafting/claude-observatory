@@ -31,6 +31,8 @@ function freshDir(prefix: string): string {
 interface FixtureSpec {
   readonly dependsOn?: readonly string[];
   readonly implementation?: string;
+  // D-8: amending a fixture spec's content is what drifts its pin.
+  readonly content?: string;
 }
 
 // One fixture target: a temp directory standing in for a governed repo, its
@@ -63,7 +65,8 @@ class FixtureRepo {
         if (!spec) throw new Error(`fixture: unknown spec ${specId}`);
         return JSON.stringify({ id: specId, implementation: spec.implementation ?? "pending", dependsOn: spec.dependsOn ?? [] });
       },
-      readSpecFile: (_repoDir: string, specId: string) => Buffer.from(`fixture content for ${specId}\n`, "utf8"),
+      readSpecFile: (_repoDir: string, specId: string) =>
+        Buffer.from(this.specs[specId]?.content ?? `fixture content for ${specId}\n`, "utf8"),
     };
   }
 }
@@ -280,6 +283,9 @@ function makeProjectDepsFactory(
       repoDir: repo.repoDir,
       supervised: true,
       dagReader: repo.dagReader,
+      // 021 D-18's prior-shipped requalification refuses without a readable
+      // head sha; fixtures name one so D-8's healing can reach the verify fn.
+      readHeadSha: () => "fixture-head-sha",
       runner: throwingRunner(),
       gh: throwingGh(),
       verifyRunner: throwingVerifyRunner(),
@@ -785,4 +791,109 @@ test("a virgin registry chain adopts the checkout the daemon was pointed at as i
   const registeredCount = (chain.fold().byKind["project.registered"] ?? []).length;
   chain.close();
   expect(registeredCount).toBe(1);
+});
+
+// --- D-7: the code-staleness gate --------------------------------------------
+
+test("a moved code checkout freezes driving until it matches again (D-7)", async () => {
+  const home = freshDir("code-stale-home");
+  const repo = new FixtureRepo("code-stale", { "900-a": { implementation: "pending" } });
+  seedRegistry(home, [["a", repo]]);
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const factory = makeProjectDepsFactory({ a: repo }, (name, r) => passingStageFns(name, r, order), counter);
+  const codeSha = { value: "sha-started-from" };
+
+  const logs: string[] = [];
+  const standby = new StandbyDaemon({
+    daemonHomeDir: home,
+    makeProjectDeps: factory,
+    processInspector: createProcessInspector(),
+    clock: { now: () => Date.now() },
+    sleep: (ms: number) => Bun.sleep(ms),
+    log: (line) => logs.push(line),
+    scanIntervalMs: 20,
+    sleepChunkMs: 5,
+    readCodeSha: () => codeSha.value,
+  });
+
+  await standby.start();
+  await waitFor("the first backlog to ship while the code is fresh", () => repo.stageCalls.length === 4);
+
+  // The checkout moves under the running process; new pending work appears.
+  codeSha.value = "sha-moved-away00";
+  repo.specs = { ...repo.specs, "901-a": { implementation: "pending" } };
+  await waitFor("the staleness announcement", () => logs.some((l) => l.includes("code-stale")));
+  await Bun.sleep(100);
+  expect(repo.stageCalls.length).toBe(4);
+  expect(standby.snapshot.codeStale).toEqual({ startedSha: "sha-started-from", currentSha: "sha-moved-away00" });
+  const view = standby.snapshot.projects.find((p) => p.name === "a");
+  expect(view?.detail).toContain("code-stale");
+  expect(view?.detail).toContain("restart to drive");
+
+  // Freshness is re-read, not latched: the checkout moved back resumes
+  // driving without a restart.
+  codeSha.value = "sha-started-from";
+  await waitFor("driving to resume once the code matches again", () => repo.stageCalls.length === 8);
+  expect(logs.some((l) => l.includes("matches its checkout again"))).toBe(true);
+  expect(standby.snapshot.codeStale).toBeNull();
+
+  await standby.shutdown();
+});
+
+// --- D-8: amendment cascades heal without an operator verb -------------------
+
+test("an amended pipeline-shipped spec is reverified automatically and re-pinned (D-8, 021 D-22)", async () => {
+  const home = freshDir("auto-reverify-home");
+  const repo = new FixtureRepo("auto-reverify", { "900-a": { implementation: "pending" } });
+  seedRegistry(home, [["a", repo]]);
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const factory = makeProjectDepsFactory({ a: repo }, (name, r) => passingStageFns(name, r, order), counter);
+
+  const logs: string[] = [];
+  const standby = new StandbyDaemon({
+    daemonHomeDir: home,
+    makeProjectDeps: factory,
+    processInspector: createProcessInspector(),
+    clock: { now: () => Date.now() },
+    sleep: (ms: number) => Bun.sleep(ms),
+    log: (line) => logs.push(line),
+    scanIntervalMs: 20,
+    sleepChunkMs: 5,
+  });
+
+  await standby.start();
+  await waitFor("the spec to ship through the pipeline", () => repo.stageCalls.length === 4);
+  await waitFor("the daemon to settle into standby", () => standby.state === "standby");
+
+  // The amendment: implementation flips complete (nothing pending) and the
+  // content drifts the pin. No operator verb follows.
+  repo.specs = { "900-a": { implementation: "complete", content: "amended spec content\n" } };
+  await waitFor(
+    "the amendment to be reverified without an operator verb",
+    () => repo.stageCalls.filter((s) => s === "verify").length === 2
+  );
+  await waitFor("the healing run to conclude", () => standby.state === "standby");
+
+  // Heal only: no second build or ship, and the journal carries the
+  // automatic control plus the re-pin at the amended content.
+  expect(repo.stageCalls).toEqual(["build", "ship", "shepherd", "verify", "verify"]);
+  const journal = openJournal(repo.stateRoot);
+  try {
+    const byKind = journal.fold().byKind;
+    const controls = (byKind["control.reverify"] ?? []).map((r) => r.payload as Record<string, JsonValue>);
+    expect(controls.some((p) => p.specId === "900-a" && p.source === "standby-auto")).toBe(true);
+    const requalified = (byKind["spec.requalified"] ?? []).map((r) => r.payload as Record<string, JsonValue>);
+    expect(requalified.length).toBe(1);
+    expect(requalified[0]?.specId).toBe("900-a");
+    expect(typeof requalified[0]?.pin).toBe("string");
+  } finally {
+    journal.close();
+  }
+  expect(logs.some((l) => l.includes('"a" corpus amended; 1 reverify(ies) queued'))).toBe(true);
+
+  await standby.shutdown();
 });
