@@ -1562,6 +1562,26 @@ function standbyProjects(standby: StandbyDaemon, probe: ProjectProbe): ProjectsT
   };
 }
 
+// 026 D-7's staleness proxy: the sha of the checkout this process's code was
+// loaded from, read at the code root itself (two levels above this file),
+// never from --repo: the two coincide for the self-hosted daemon but only
+// the former names the running modules. HEAD is a proxy: a dirty working
+// tree changes code without moving it, which the gate knowingly misses.
+function readCodeHeadSha(): string | null {
+  try {
+    const proc = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+      cwd: join(import.meta.dir, "..", ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) return null;
+    const sha = proc.stdout.toString().trim();
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
 // Spec 021 B-2 fixes the boot order (lock, journals, recovery, then the loop
 // and the API); spec 026 puts a scheduler above that per-run loop, so what
 // this function composes is the standby daemon (identity lock, project
@@ -1597,6 +1617,9 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
     // this daemon was pointed at, so `--repo` keeps meaning what it meant
     // before there was a registry to point at instead.
     bootstrap: { repoDir: deps.repoDir, probe },
+    // 026 D-7: a merge under a running daemon must freeze driving, not let
+    // stale in-memory code verify specs it does not implement.
+    readCodeSha: readCodeHeadSha,
   });
 
   try {
