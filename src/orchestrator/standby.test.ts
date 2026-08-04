@@ -12,6 +12,7 @@ import type { VerifyRunner, BrowserVerifier, VerifyResult } from "./stages/verif
 import type { SessionResult } from "./session";
 import { runSession as realRunSession } from "./session";
 import { createProcessInspector, type DaemonDeps, type DaemonStageFns } from "./daemon";
+import { createRun, transition } from "./state";
 import {
   openProjectsChain,
   projectStateRoot,
@@ -894,6 +895,139 @@ test("an amended pipeline-shipped spec is reverified automatically and re-pinned
     journal.close();
   }
   expect(logs.some((l) => l.includes('"a" corpus amended; 1 reverify(ies) queued'))).toBe(true);
+
+  await standby.shutdown();
+});
+
+// --- D-9: the amendment probe's run concludes instead of stranding -----------
+
+function makeQuietStandby(home: string, repos: Record<string, FixtureRepo>, order: string[], counter: { calls: number }, logs: string[]): StandbyDaemon {
+  return new StandbyDaemon({
+    daemonHomeDir: home,
+    makeProjectDeps: makeProjectDepsFactory(repos, (name, r) => passingStageFns(name, r, order), counter),
+    processInspector: createProcessInspector(),
+    clock: { now: () => Date.now() },
+    sleep: (ms: number) => Bun.sleep(ms),
+    log: (line) => logs.push(line),
+    scanIntervalMs: 20,
+    sleepChunkMs: 5,
+  });
+}
+
+test("a zero-queued probe of a fully complete corpus concludes its run as completed (D-9, 021 D-23)", async () => {
+  const home = freshDir("probe-conclude-home");
+  const repo = new FixtureRepo("probe-conclude", { "910-a": { implementation: "complete" } });
+  seedRegistry(home, [["a", repo]]);
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const logs: string[] = [];
+  const standby = makeQuietStandby(home, { a: repo }, order, counter, logs);
+
+  await standby.start();
+  await waitFor("the probe cycle to settle into standby", () => standby.state === "standby");
+  await standby.shutdown();
+
+  // The probe cost no session and drove nothing.
+  expect(repo.stageCalls).toEqual([]);
+  expect(counter.calls).toBe(0);
+  expect(logs.some((l) => l.includes('driving "a"'))).toBe(false);
+
+  // The run its open journaled is terminal, not stranded reading as live.
+  const journal = openJournal(repo.stateRoot);
+  try {
+    const byKind = journal.fold().byKind;
+    expect((byKind["run.created"] ?? []).length).toBe(1);
+    const results = (byKind["run.result"] ?? []).map((r) => r.payload as Record<string, JsonValue>);
+    expect(results.length).toBe(1);
+    expect(results[0]?.status).toBe("completed");
+    const runOutcomes = (byKind["state.transition.outcome"] ?? [])
+      .map((r) => r.payload as Record<string, JsonValue>)
+      .filter((p) => p.entity === "run");
+    expect(runOutcomes.at(-1)?.to).toBe("completed");
+    expect(verifyChain(repo.stateRoot).ok).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a run stranded in running by a pre-D-9 probe heals at the next open (D-9)", async () => {
+  const home = freshDir("probe-heal-home");
+  const repo = new FixtureRepo("probe-heal", { "911-a": { implementation: "complete" } });
+  seedRegistry(home, [["a", repo]]);
+
+  // The pre-fix wound: a run journaled into "running" whose journals were
+  // closed around it, exactly what the zero-queued retire used to leave.
+  const seeded = openJournal(repo.stateRoot);
+  try {
+    const run = createRun(seeded, repo.repoDir);
+    transition(seeded, run, "running");
+  } finally {
+    seeded.close();
+  }
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const logs: string[] = [];
+  const standby = makeQuietStandby(home, { a: repo }, order, counter, logs);
+
+  await standby.start();
+  await waitFor("the stranded run to heal", () => standby.state === "standby");
+  await standby.shutdown();
+
+  const journal = openJournal(repo.stateRoot);
+  try {
+    const byKind = journal.fold().byKind;
+    // Resumed, not replaced: recovery adopted the stranded run and the
+    // probe concluded it, so no second run was ever created.
+    expect((byKind["run.created"] ?? []).length).toBe(1);
+    const runOutcomes = (byKind["state.transition.outcome"] ?? [])
+      .map((r) => r.payload as Record<string, JsonValue>)
+      .filter((p) => p.entity === "run");
+    expect(runOutcomes.at(-1)?.to).toBe("completed");
+  } finally {
+    journal.close();
+  }
+  expect(counter.calls).toBe(0);
+  expect(repo.stageCalls).toEqual([]);
+});
+
+test("a probe that resumed a paused run drives it back to a live pause instead of abandoning it (D-9)", async () => {
+  const home = freshDir("probe-paused-home");
+  const repo = new FixtureRepo("probe-paused", { "912-a": { implementation: "complete" } });
+  seedRegistry(home, [["a", repo]]);
+
+  // A run paused on a human decision when its daemon died: non-terminal, so
+  // the probe's recovery resumes it, and concludeIdle() must refuse it.
+  const seeded = openJournal(repo.stateRoot);
+  try {
+    const run = createRun(seeded, repo.repoDir);
+    const running = transition(seeded, run, "running");
+    transition(seeded, running, "paused");
+  } finally {
+    seeded.close();
+  }
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const logs: string[] = [];
+  const standby = makeQuietStandby(home, { a: repo }, order, counter, logs);
+
+  await standby.start();
+  await waitFor(
+    "the paused run to come back live under the scheduler",
+    () => logs.some((l) => l.includes("paused; flight slot released"))
+  );
+  await waitFor(
+    "the view to report the pause",
+    () => standby.snapshot.projects.find((p) => p.name === "a")?.disposition === "paused"
+  );
+
+  // Driven to its honest resting state, not concluded and not abandoned:
+  // the pause waits for a human, and no session was ever spawned for it.
+  expect(counter.calls).toBe(0);
+  expect(repo.stageCalls).toEqual([]);
+  expect(logs.some((l) => l.includes('driving "a"'))).toBe(true);
 
   await standby.shutdown();
 });

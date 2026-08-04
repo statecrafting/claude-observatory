@@ -342,3 +342,17 @@ the drifted roots requalify. Found live: a 16-spec cascade from one
 kernel amendment sat idle for a day because nothing scheduled its
 reverifies; the two operator verbs it took to drain it are exactly what
 this method automates.
+
+D-23 (2026-08-04, operator). `concludeIdle()`: the supervisor-facing
+conclusion for a run that was opened but never driven. `start()` always
+leaves a run in "running" (B-2's recovery either resumes a non-terminal
+run or creates a fresh one), which is right for a daemon about to loop
+and a lie for 026 D-8's amendment probe, whose zero-queued path closes
+the journals without ever driving. `concludeIdle()` transitions the run
+to "completed" through the same `run.result` record and journaled
+transition the loop's nothing-ready branch writes, and refuses (returns
+false, journals nothing) unless the run is "running" with no live or
+failed specExec of its own: paused and parked runs, and runs still
+holding unfinished or retryable spec work, are the loop's to reconcile,
+never a supervisor's to declare done. 026 D-9 records the scheduler
+half, including the drive-on-refusal it implies.

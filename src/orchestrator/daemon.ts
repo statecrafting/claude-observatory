@@ -620,6 +620,25 @@ export class Daemon {
     return this.reverifyQueue.length > 0 || this.pendingControls.some((cmd) => cmd.verb === "reverify");
   }
 
+  // D-23: start() always leaves a run in "running", and a supervisor that
+  // opened this daemon only to probe (026 D-8's zero-queued path) closes the
+  // journals without ever driving, which would strand that run reading as
+  // live forever. Concluding here is the loop's own idle verdict, the same
+  // record and transition its nothing-ready branch writes. Refusal means the
+  // resumed run holds something only the loop can reconcile: a pause, a
+  // park, or live/retryable spec work; the supervisor drives it instead.
+  concludeIdle(): boolean {
+    if (this.run.status !== "running") return false;
+    const folded = foldOrchestratorState(this.workJournal.fold().records);
+    const unfinished = [...folded.specExecs.values()].some(
+      (se) => se.runId === this.run.id && (isLive(se) || se.status === "failed")
+    );
+    if (unfinished) return false;
+    this.workJournal.append("run.result", { runId: this.run.id, status: "completed" });
+    this.run = { ...transition(this.workJournal, this.run, "completed"), needsReconcile: false };
+    return true;
+  }
+
   // Resolves once the loop actually exits (run completed/failed, or shutdown
   // honored); rethrows whatever the loop itself threw (an unhandled error
   // inside a stage call, simulating a crash).

@@ -198,3 +198,21 @@ human is reported once, never retried on a loop, and the next authoring
 edit earns the next attempt. Arm/disarm stays the consent boundary and
 quota parking applies unchanged; a disarmed project's drift is observed
 and reported, never healed behind the operator's back.
+
+D-9 (2026-08-04, operator). The probe run concludes. D-8's zero-queued
+open necessarily created (or resumed) a run and journaled it into
+"running" before `queueAutoReverifies` ever ran, and retiring around
+that run closed the journals with it still live: the target's latest run
+then read as "running" forever on a project nothing was driving (found
+live: tenant-emit, the first fully-adopted corpus the amendment half
+scanned; its status line claimed a run in flight with no heartbeat ever
+journaled). The scheduler now calls the daemon's `concludeIdle()` (021
+D-23) before a zero-queued retire: the probe's run ends "completed"
+through the loop's own idle verdict, the same `run.result` record and
+journaled transition. A refusal (the resumed run is paused, parked, or
+still holds live or retryable spec work) means the run carries something
+only the loop can reconcile, so the probe drives it under the normal
+flight slot instead of abandoning it. A run stranded by a pre-D-9 probe
+heals the same way: the next open resumes it, finds nothing in flight,
+and concludes it. Zero-queued settling is otherwise unchanged, and a
+healthy probe still costs no session and no quota.
