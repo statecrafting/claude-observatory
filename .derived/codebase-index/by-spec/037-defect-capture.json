@@ -1,0 +1,65 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '037-defect-capture' file unit 'src/orchestrator/adopt/defects.ts' does not exist",
+        "path": "src/orchestrator/adopt/defects.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '037-defect-capture' file unit 'src/orchestrator/adopt/defects.test.ts' does not exist",
+        "path": "src/orchestrator/adopt/defects.test.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "035-corpus-synthesis"
+    ],
+    "implementingPaths": [
+      {
+        "path": "docs/design/00-ecosystem-analysis.md",
+        "source": "spec-edge"
+      }
+    ],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/adopt/defects.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/adopt/defects.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "docs/design/00-ecosystem-analysis.md"
+          }
+        ],
+        "ownership": false,
+        "sourceField": "references",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "specId": "037-defect-capture",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "0bfe2985ee979fb899daa3512f9b9f7be60b22fc5b80ba334ab7f432176f6e11"
+}

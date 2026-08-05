@@ -48,6 +48,18 @@ constrains:
       standby multi-project daemon, then the three surfaces. 028 and 029
       may land in either order once 027 is shipped. The daemon builds this
       wave the same way it built 022-024.
+  - kind: sequencing-plan
+    target_specs:
+      - "034-adoption-preflight"
+      - "035-corpus-synthesis"
+      - "036-holdback-validation"
+      - "037-defect-capture"
+    note: >
+      The adoption wave (amendment A-2): read-only cartography first. 036
+      may land before 035 (its replay validates any candidate corpus, and
+      it gates ratification); nothing in the wave writes a target's
+      authored files except 035's synthesis sessions, whose specs are
+      born draft.
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -102,9 +114,11 @@ sessions, honest state, and evidence for every claim.
 
 ## 4. Out of scope
 
-Reverse-engineering an existing system into a spec corpus (separate
-product), parallel execution, hosted or multi-user deployment, and driving
-non-Claude agents.
+Parallel execution, hosted or multi-user deployment, and driving
+non-Claude agents. Reverse-engineering an existing system into a spec
+corpus was originally excluded here as a separate product; amendment A-2
+brings staged corpus adoption in scope (specs 034-037) and records the
+boundary's retirement.
 
 ## 5. Resolved decisions
 
@@ -143,3 +157,37 @@ carried set:
   Genuinely global facts (daemon meta, account quota, the event stream)
   stay global; forcing them under a project would misstate their scope.
   B-5's serial invariant is restated as one live stage session globally.
+
+A-2 (2026-08-05, authored with the operator). The registry's first
+external targets exposed the gap from the other side: the builder can
+drive any governed repository, and almost no repository is governed. §4
+originally excluded reverse-engineering a system into a corpus as a
+separate product; that boundary retires. The mission extends: the
+builder can adopt an ungoverned repository into governance through a
+staged, evidence-scored path (specs 034-037), with this repo's own
+retroactive adoption of 2026-07-29 (spec 000, D12) as the worked
+example. Four decisions extend the carried set:
+
+- **D16 (staged adoption).** Adoption is a capability of the builder,
+  strictly staged: read-only cartography producing a proposal (034),
+  synthesis of draft specs by driven sessions (035), replay scoring
+  (036), and defect capture (037). Territory is change-level, never
+  whole-system: the corpus covers the subsystems the evidence says are
+  alive, and the ungoverned remainder is explicit. Partial coverage
+  that holds beats total coverage that does not.
+- **D17 (measured partitions).** A candidate corpus's quality is
+  computed, not asserted: replaying the target's own merge history
+  against the corpus's declared ownership is the acceptance instrument.
+  Coverage, orphans, and dispersion are reported with their
+  denominators, and the score gates ratification.
+- **D18 (ratification).** A synthesized corpus is a proposal about what
+  the system is for. Synthesized specs are born `status: draft`, and
+  drafts are never schedulable (012 D-3), so no build session can run
+  against specs no human read. Ratification is the operator's own
+  approval flip in the target plus a journaled ratification record
+  citing the replay verdict it was made against.
+- **D19 (defects recorded, never blessed).** Reverse-engineered specs
+  record behavior as found: known-wrong behavior is a recorded defect,
+  never contract (D12's posture, generalized beyond self-adoption).
+  Adoption sessions never modify a target's source; a synthesis diff
+  reaching beyond the corpus fails mechanically.

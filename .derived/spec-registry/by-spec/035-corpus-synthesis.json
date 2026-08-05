@@ -1,0 +1,63 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-05",
+    "dependsOn": [
+      "014-session-driver",
+      "032-execution-profiles",
+      "033-cost-ceiling",
+      "034-adoption-preflight"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/adopt/synthesis.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/adopt/synthesis.test.ts"
+      }
+    ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      }
+    ],
+    "id": "035-corpus-synthesis",
+    "implementation": "pending",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "high",
+    "sectionHeadings": [
+      "035: Corpus synthesis",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/035-corpus-synthesis/spec.md",
+    "status": "approved",
+    "summary": "The writing stage of adoption (010 A-2): given a preflight proposal the operator chose to synthesize, driven sessions author a spec-spine corpus for the target on a feature branch: the corpus scaffolding and one spec per proposed territory, every spec carrying origin.retroactive true, real establishes edges over its territory's files, defect capture per 037, and status draft. Drafts are never schedulable (012 D-3), so synthesis can never hand the builder work a human has not ratified. The reference implementation is this repo's own retroactive adoption of 2026-07-29 (spec 000, D12): specs record the code as found; synthesis blesses nothing and fixes nothing. A synthesis session's diff is mechanically confined to the corpus: touching target source or tests fails the stage.\n",
+    "title": "Corpus synthesis: driven sessions author a draft corpus for a target"
+  },
+  "shardHash": "ae545f481de1ad78ef0d417db230102d7efd3c9f3aef993b6a6a367628ddb502",
+  "specVersion": "1.1.0"
+}

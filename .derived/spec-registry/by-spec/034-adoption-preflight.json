@@ -1,0 +1,68 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-05",
+    "dependsOn": [
+      "025-project-registry"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/adopt/preflight.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/adopt/preflight.test.ts"
+      }
+    ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "025-project-registry",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/projects.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      }
+    ],
+    "id": "034-adoption-preflight",
+    "implementation": "pending",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "medium",
+    "sectionHeadings": [
+      "034: Adoption preflight",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/034-adoption-preflight/spec.md",
+    "status": "approved",
+    "summary": "The first stage of corpus adoption (010 A-2, D16) and the only one an operator can run against any repository with zero commitment: a read-only preflight that maps an ungoverned target and produces a written proposal, never a change. It detects language, build, and test surfaces; extracts a change-coupling map from the target's own merge history (files that change together, churn-weighted); and proposes candidate spec territories at change level, each with its file set and the evidence behind it, with the ungoverned remainder explicit. Registering an ungoverned repository stops being a bare qualification failure: the verdict gains an \"ungoverned, adoptable\" reading so such targets stay visible with reasons, never scheduled for build, and never silently dropped.\n",
+    "title": "Adoption preflight: read-only cartography of an ungoverned target"
+  },
+  "shardHash": "85d60e2b132940fef6012e8fdcc36658eab7a7b3c675f7e00695adbdc5c630b6",
+  "specVersion": "1.1.0"
+}
