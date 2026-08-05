@@ -1,0 +1,103 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-05",
+    "dependsOn": [
+      "013-run-state-machine",
+      "015-quota-scheduler",
+      "025-project-registry",
+      "030-run-economics"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/budget.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/budget.test.ts"
+      }
+    ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "025-project-registry",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/projects.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "013-run-state-machine",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/state.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "021-orchestrator-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/server.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/state.ts"
+        }
+      }
+    ],
+    "id": "033-cost-ceiling",
+    "implementation": "pending",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "medium",
+    "sectionHeadings": [
+      "033: Cost ceiling",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/033-cost-ceiling/spec.md",
+    "status": "approved",
+    "summary": "The quota scheduler protects a subscription window; nothing protects a balance. Economics (030) computes what a run cost and nothing reads it: an oscillating remediation loop on a genuinely broken spec has no financial floor. This spec adds per-project cost ceilings as registry state (a per-run limit, a per-UTC-day limit, or both), evaluated at session spawn boundaries from the journal's own cost records. A crossed per-day ceiling parks the run to the next UTC midnight with the same journaled-target, jittered-resume mechanics as a quota park; a crossed per-run ceiling pauses the run for an operator, since no clock makes a run cheaper. Enforcement sums only journaled costs: the known-cost floor, with the unknown-session count carried alongside it in every record and rendering, never an estimate.\n",
+    "title": "Cost ceiling: journaled spend limits that park the run"
+  },
+  "shardHash": "fe0a45aefa9b0c534f6eee54cf74a851b6af05a5503d75c3c31613b9b4463cfa",
+  "specVersion": "1.1.0"
+}
