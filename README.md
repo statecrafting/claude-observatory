@@ -18,6 +18,14 @@ One Bun + TypeScript repo, two layers and a governance substrate:
   owning spec to match code they just wrote. The orchestrator judges stage
   completion by re-running this gate, never by the session's own claim.
 
+The load-bearing property, across both layers: **done is not
+self-authored.** A session's claim that it finished is not an input
+anywhere in the system. Completion is adjudicated by an external,
+deterministic gate over a corpus the session is structurally forbidden to
+amend in its own favor; the adjudication is journaled in hash-linked,
+tamper-evident chains; and the chains export to a redacted bundle a
+skeptic can verify offline (see Evidence below).
+
 The observed `~/.claude` tree is treated as strictly read-only. Everything
 this project produces (SQLite db, logs, baselines, the orchestrator's
 journals) lives here under `data/`, which is gitignored because it describes
@@ -96,12 +104,43 @@ stream; the React dashboard (024, 029) is served by the same daemon and
 mirrors the CLI's honesty rules (never-loaded is null, an unreachable daemon
 is a named state, estimates say "estimate").
 
+The approved backlog (specs 032-037) extends the same discipline to
+driving repositories that are not this one: per-project execution
+profiles (032; sessions run under a journaled posture instead of a
+hardcoded permissions bypass), cost ceilings that park a run the way
+quota exhaustion does (033), and a staged adoption path for ungoverned
+repositories (034-037: read-only preflight cartography, draft-corpus
+synthesis, holdback replay scoring against the target's own merge
+history, and defect capture so adopted specs record behavior rather than
+bless it).
+
 ## Governance
 
 `spec-spine compile | index | lint | couple` must stay green. Derived
 artifacts under `.derived/` are read only through `spec-spine` subcommands.
 The session protocol and backlog discipline live in `AGENTS.md`; the standing
 rules, including the coherence guard, live under `.claude/rules/`.
+
+## Evidence
+
+"This repo was largely built by its own orchestrator" is not a story; it
+is an exported record. `docs/evidence/journal-bundle.json` is a spec 031
+bundle of the self-hosted project's two chains (work journal and decision
+ledger): every record in sequence with its link hashes verbatim, payloads
+included under a default-deny redaction policy, and an explicit
+annotation for every withheld record. Verify it offline, with no daemon
+and no access to the original journals:
+
+```
+bun src/index.ts orchestrator journal verify --bundle docs/evidence/journal-bundle.json
+```
+
+At export time it held 1038 work records (676 payloads verified verbatim,
+97 redacted, 265 withheld) and 52 decision records, both chains intact.
+"Redacted" and "withheld" are honesty classes, not verification: a
+payload with even one field stripped can never re-bind to the chain and
+is never reported as verified (031 D-2). The bundle is a point-in-time
+export; the live journals keep growing, and a fresh export supersedes it.
 
 ## Findings
 
