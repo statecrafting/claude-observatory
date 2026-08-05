@@ -167,3 +167,15 @@ act, stranding the checkout on the spec branch. The bracket now runs
 sets; either command failing fails the bracket (same honest path the
 compile failure already took), and the bracket journal record carries
 `indexExitCode` beside `compileExitCode`.
+
+D-9 (2026-08-05, operator). The turn budget doubles to 160. Found live
+twice in one afternoon: the 032 and 033 builds each ran their session
+and their remediation session into the 80-turn cap while one type error
+or one fixture line short of green, so every attempt cost two full
+max-turns sessions and still needed an operator completion (their D-8
+and D-7 provenance notes). The cap was set before spec-sized territory
+existed in the backlog. Wall clock stays bounded by the unchanged
+deadline, and spend is now bounded by spec 033's ceilings, which is the
+guard that was actually being asked of the turn cap; a turn budget
+whose main observed effect is doubling the cost of finishing is not a
+guard.

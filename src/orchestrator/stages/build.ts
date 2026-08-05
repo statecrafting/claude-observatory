@@ -532,7 +532,12 @@ function gateEvidenceToJson(g: GateEvidence): Record<string, JsonValue> {
 
 export const DEFAULT_BASE_BRANCH = "main";
 export const DEFAULT_BUILD_DEADLINE_MS = 45 * 60_000;
-export const DEFAULT_BUILD_MAX_TURNS = 80;
+// 160, not 80: two consecutive spec-sized builds (032, 033) each ran their
+// session and their remediation session into the 80-turn cap while sitting
+// one fix short of green (016 D-9). The deadline still bounds wall clock and
+// spec 033's ceilings bound spend, so the turn cap no longer has to do the
+// money's job badly.
+export const DEFAULT_BUILD_MAX_TURNS = 160;
 export const DECISION_BUDGET_CHARS = 20_000;
 
 // --- the stage (B-1 through B-6) --------------------------------------------
