@@ -33,9 +33,9 @@
 // process-exiting wrapper `cmdOrchestrator` is the only thing index.ts sees.
 import { spawn } from "child_process";
 import * as fs from "fs";
-import { join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { DATA_DIR, PROJECT_DIR } from "../paths";
-import { verifyChain, type JournalHandle, type JournalRecord } from "../orchestrator/journal";
+import { openJournal, verifyChain, type JournalHandle, type JournalRecord } from "../orchestrator/journal";
 import {
   exportBundleFromRoot,
   parseBundle,
@@ -69,11 +69,21 @@ import {
   setProjectArmed,
   setProjectCeiling,
   setProjectProfile,
+  slugifyProjectName,
   type Project,
   type ProjectProbe,
   type ProjectSource,
   type RecordedQualification,
 } from "../orchestrator/projects";
+import {
+  adoptableDagReader,
+  exclusionAdditionsFromFlag,
+  journalPreflight,
+  runPreflight,
+  unknownSurfaces,
+  type ExclusionRule,
+  type HistoryMode,
+} from "../orchestrator/adopt/preflight";
 import {
   ceilingOf,
   ceilingRefusal,
@@ -139,6 +149,8 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   projects ceiling <name>      spend limits: --per-run/--per-day <usd>, or "none"
   projects requalify <name>    re-run the preflight and journal the verdict
   projects remove <name>       drop it from the registry (a tombstone)
+  adopt preflight <path>       read-only cartography: propose spec territories for
+                               an ungoverned target [--out <path>] [--exclude <rules>]
   dag                          every spec with readiness, blockers, drift
   next                         the next ready spec, or why there is none
   start | pause | resume       run controls
@@ -157,7 +169,10 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   --data-dir <dir>             the daemon home (lock, log, projects chain)
   --dir <dir>                  state root for journal verify, bypassing the registry
   --bundle <path>              an exported bundle for journal verify to check offline
-  --out <path>                 where journal export writes its bundle file
+  --out <path>                 where journal export writes its bundle, or adopt
+                               preflight its proposal (default under the daemon home)
+  --exclude <rules>            extra exclusion rules for adopt preflight, comma-
+                               separated ("dir/" or exact basename); additions only
   --name <slug>                project name for projects add
   --disarmed                   register disarmed (projects add)
   --profile <mode>             posture for projects add: bypass | guarded
@@ -271,6 +286,8 @@ interface ParsedArgs {
   // 031 B-4's journal flags: where export writes, and which bundle verify reads.
   readonly out: string | null;
   readonly bundle: string | null;
+  // 034 D-2's additions flag: extra exclusion rules for adopt preflight.
+  readonly exclude: string | null;
   readonly rest: readonly string[];
 }
 
@@ -296,6 +313,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let perDay: string | null = null;
   let out: string | null = null;
   let bundle: string | null = null;
+  let exclude: string | null = null;
   const rest: string[] = [];
 
   const valued: Readonly<Record<string, (value: string) => void>> = {
@@ -338,6 +356,9 @@ function parseArgs(argv: readonly string[]): ParseResult {
     "--bundle": (v) => {
       bundle = v;
     },
+    "--exclude": (v) => {
+      exclude = v;
+    },
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -369,7 +390,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
 
   return {
     ok: true,
-    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, rest },
+    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, exclude, rest },
   };
 }
 
@@ -390,6 +411,7 @@ const EXTRA_FLAGS: Readonly<Record<string, readonly string[] | undefined>> = {
   decisions: ["--project"],
   spec: ["--project"],
   projects: [],
+  adopt: [],
   journal: ["--project", "--dir", "--bundle"],
   daemon: [],
 };
@@ -405,6 +427,10 @@ const PROJECTS_CEILING_FLAGS: readonly string[] = ["--per-run", "--per-day"];
 // 031 B-4: `journal export` takes its own flag set, exactly as `projects add`
 // does; `--dir` and `--bundle` belong to verify alone and are refused here.
 const JOURNAL_EXPORT_FLAGS: readonly string[] = ["--project", "--out"];
+// 034 B-1: where the proposal lands, and D-2's additions to the exclusion
+// floor. Nothing else: the preflight is offline and addresses its target by
+// path, so `--project` means nothing to it and is refused like any stray.
+const ADOPT_PREFLIGHT_FLAGS: readonly string[] = ["--out", "--exclude"];
 
 // The flags a command accepts, subcommand included: three of them carry flag
 // sets of their own, and everything else takes the group's.
@@ -413,6 +439,7 @@ function acceptedFlags(command: string, sub: string | undefined): readonly strin
   if (command === "projects" && sub === "profile") return PROJECTS_PROFILE_FLAGS;
   if (command === "projects" && sub === "ceiling") return PROJECTS_CEILING_FLAGS;
   if (command === "journal" && sub === "export") return JOURNAL_EXPORT_FLAGS;
+  if (command === "adopt" && sub === "preflight") return ADOPT_PREFLIGHT_FLAGS;
   return Object.hasOwn(EXTRA_FLAGS, command) ? EXTRA_FLAGS[command] : undefined;
 }
 
@@ -429,6 +456,7 @@ function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null
     args.perDay !== null ? "--per-day" : null,
     args.out !== null ? "--out" : null,
     args.bundle !== null ? "--bundle" : null,
+    args.exclude !== null ? "--exclude" : null,
   ].filter((flag): flag is string => flag !== null);
   return present.find((flag) => !accepted.includes(flag)) ?? null;
 }
@@ -558,11 +586,14 @@ function renderDaemon(meta: ApiMeta, nowMs: number): string[] {
 
 // 025 B-4: an unqualified project stays visible with why it was refused, so
 // the row names the checks that failed rather than reducing the verdict to a
-// word.
+// word. 034 B-5: an unqualified verdict whose recorded reading is adoptable
+// (sound repo, no corpus) says so instead, with the same failed-check
+// reasons attached; it is a fact about the target, not a softer failure.
 function qualificationCell(qualification: RecordedQualification): string {
   if (qualification.qualified) return "qualified";
   const failed = qualification.checks.filter((check) => !check.ok).map((check) => check.id);
-  return failed.length === 0 ? "unqualified" : `unqualified (${failed.join(", ")})`;
+  const word = qualification.adoptable === true ? "adoptable" : "unqualified";
+  return failed.length === 0 ? word : `${word} (${failed.join(", ")})`;
 }
 
 // What that project's run is doing, as its row's last column. A state root
@@ -1510,6 +1541,167 @@ function cmdBundleVerify(deps: OrchestratorCliDeps, json: boolean, bundleArg: st
   return EXIT_OK;
 }
 
+// --- adoption preflight (spec 034) ------------------------------------------
+
+interface AdoptPreflightData {
+  readonly target: string;
+  readonly targetError: string | null;
+  // The registered project this path resolves to, when it is one: the
+  // preflight runs against any path (B-1), and registration is only what
+  // makes the run journalable (B-6).
+  readonly project: string | null;
+  readonly out: string | null;
+  readonly contentHash: string | null;
+  readonly headSha: string | null;
+  readonly historyMode: HistoryMode | null;
+  readonly window: { readonly requested: number; readonly used: number } | null;
+  readonly shortfall: string | null;
+  readonly candidates: number;
+  readonly remainderPaths: number;
+  readonly unknownSurfaces: readonly string[];
+  readonly journaled: { readonly seq: number; readonly kind: string; readonly ts: string } | null;
+  readonly journalError: string | null;
+}
+
+// B-1: the proposal defaults under the daemon home, never inside the target.
+function defaultPreflightOut(dataDir: string, name: string): string {
+  return join(dataDir, "adoption", `${name}.preflight.md`);
+}
+
+// 034's one read verb, offline like `journal verify`: the preflight reads
+// the target directly and the registry as a file, because it must work
+// against a repository no daemon has ever heard of. Writes exactly two
+// things, neither inside the target: the proposal at `--out`, and, for a
+// registered target, the B-6 record in that project's own work journal (the
+// one permitted state-root growth, through the same single-writer handle
+// discipline every chain has).
+function cmdAdoptPreflight(
+  deps: OrchestratorCliDeps,
+  json: boolean,
+  path: string,
+  outFlag: string | null,
+  extras: readonly ExclusionRule[]
+): number {
+  const target = resolve(path);
+  let isDirectory = false;
+  try {
+    isDirectory = fs.statSync(target).isDirectory();
+  } catch {
+    // reported below: a missing target and a non-directory read the same
+  }
+
+  if (!isDirectory) {
+    const data: AdoptPreflightData = {
+      target,
+      targetError: `${target} is not a readable directory`,
+      project: null,
+      out: null,
+      contentHash: null,
+      headSha: null,
+      historyMode: null,
+      window: null,
+      shortfall: null,
+      candidates: 0,
+      remainderPaths: 0,
+      unknownSurfaces: [],
+      journaled: null,
+      journalError: null,
+    };
+    if (json) {
+      printJson(deps, { ok: true, data } satisfies ApiResponse<AdoptPreflightData>);
+      return EXIT_FAILURE;
+    }
+    deps.err(`adopt preflight: ${data.targetError}`);
+    return EXIT_FAILURE;
+  }
+
+  // Which registered project this path is, if any: a file-read fold of the
+  // daemon home's chain (028 B-3's stance), matched on the normalized path
+  // exactly as registration stored it. A home with no chain yet folds empty.
+  let project: Project | null = null;
+  try {
+    const registry = foldProjects(journalViewFromDir(deps.dataDir, PROJECTS_CHAIN_BASENAME).records());
+    project = [...registry.values()].find((candidate) => candidate.repoDir === target) ?? null;
+  } catch {
+    project = null;
+  }
+
+  const run = runPreflight({ repoDir: target, extraExclusions: extras });
+  const fallbackName = slugifyProjectName(basename(target));
+  const out =
+    outFlag !== null
+      ? resolve(outFlag)
+      : defaultPreflightOut(deps.dataDir, project?.name ?? (fallbackName.length > 0 ? fallbackName : "target"));
+  fs.mkdirSync(dirname(out), { recursive: true });
+  fs.writeFileSync(out, run.document);
+
+  // B-6: journaled only against a registered project, into that project's
+  // state root. The writer lock is held for one append; a target something
+  // else is writing (a live daemon driving it) refuses cleanly, and the
+  // refusal is reported as the operational failure it is, with the proposal
+  // itself already safely written.
+  let journaled: AdoptPreflightData["journaled"] = null;
+  let journalError: string | null = null;
+  if (project !== null) {
+    try {
+      const handle = openJournal(projectStateRoot(project.repoDir));
+      try {
+        const record = journalPreflight({ handle, project: project.name, source: CONTROL_SOURCE, run, out });
+        journaled = { seq: record.seq, kind: record.kind, ts: record.ts };
+      } finally {
+        handle.close();
+      }
+    } catch (err) {
+      journalError = `the preflight record could not be journaled: ${(err as Error).message}`;
+    }
+  }
+
+  const proposal = run.proposal;
+  const data: AdoptPreflightData = {
+    target,
+    targetError: null,
+    project: project?.name ?? null,
+    out,
+    contentHash: run.contentHash,
+    headSha: proposal.headSha,
+    historyMode: proposal.history.mode,
+    window: { requested: proposal.history.requested, used: proposal.history.used },
+    shortfall: proposal.history.shortfall,
+    candidates: proposal.territories.candidates.length,
+    remainderPaths: proposal.territories.remainder.length,
+    unknownSurfaces: unknownSurfaces(proposal.surfaces),
+    journaled,
+    journalError,
+  };
+
+  if (json) {
+    printJson(deps, { ok: true, data } satisfies ApiResponse<AdoptPreflightData>);
+    return journalError === null ? EXIT_OK : EXIT_FAILURE;
+  }
+
+  deps.out(`proposal written to ${out}`);
+  deps.out(`         sha256 ${run.contentHash}`);
+  deps.out(`target:  ${target} at ${data.headSha ?? "(no commits)"}`);
+  const modeCell =
+    data.historyMode === "empty"
+      ? "no readable commit history"
+      : `${data.window!.used} first-parent ${data.historyMode === "merges" ? "merge(s)" : "commit(s), no merges on the first-parent line"} (requested ${data.window!.requested})`;
+  deps.out(`history: ${modeCell}`);
+  if (data.shortfall !== null) deps.out(`         shortfall: ${data.shortfall}`);
+  deps.out(`candidates: ${data.candidates}`);
+  deps.out(`remainder:  ${data.remainderPaths} path(s)`);
+  deps.out(`unknowns:   ${data.unknownSurfaces.length === 0 ? "none" : data.unknownSurfaces.join(", ")}`);
+  if (journaled !== null) {
+    deps.out(`journaled: seq ${journaled.seq}  ${journaled.kind}  ${journaled.ts} (project ${data.project})`);
+  } else if (journalError !== null) {
+    deps.err(`adopt preflight: ${journalError}`);
+    return EXIT_FAILURE;
+  } else {
+    deps.out("journaled: nothing (the target is not a registered project; register it to make this run citable)");
+  }
+  return EXIT_OK;
+}
+
 // --- daemon lifecycle (B-2) -------------------------------------------------
 
 interface DaemonLockFile {
@@ -1822,7 +2014,11 @@ function standbyProjects(standby: StandbyDaemon, probe: ProjectProbe): ProjectsT
       return {
         journal: cached.journal,
         decisions: cached.decisions,
-        dagReader,
+        // 034 B-5: an adoptable project's structural reads refuse by name, so
+        // `dag` and `next` answer with why there is nothing to schedule
+        // rather than an empty corpus or a raw spec-spine failure (AC-3). A
+        // governed project keeps the shared process reader untouched.
+        dagReader: adoptableDagReader(project) ?? dagReader,
         repoDir: project.repoDir,
         evidenceDir: join(stateRoot, "verify-evidence"),
         controls: standby.daemonFor(project.name),
@@ -2095,6 +2291,19 @@ async function dispatch(
     return usage(scoped, `journal needs the "verify" or "export" subcommand`);
   }
   if (command === "daemon") return cmdDaemon(scoped, url, args.json, rest);
+
+  // 034's read verb is offline too: it must work against a repository no
+  // daemon has ever heard of, so no client is created for it.
+  if (command === "adopt") {
+    const sub = rest[0];
+    if (sub !== "preflight") return usage(scoped, `adopt needs the "preflight" subcommand`);
+    const path = rest[1];
+    if (path === undefined || path.trim().length === 0) return usage(scoped, "adopt preflight needs a repository path");
+    if (rest.length > 2) return usage(scoped, `unexpected argument "${rest[2]}" after adopt preflight`);
+    const extras = exclusionAdditionsFromFlag(args.exclude);
+    if (typeof extras === "string") return usage(scoped, extras);
+    return cmdAdoptPreflight(scoped, args.json, path, args.out, extras);
+  }
 
   const client = scoped.createClient(url);
   if (command === "projects") return cmdProjects(scoped, client, args, rest);

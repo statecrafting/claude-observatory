@@ -427,6 +427,63 @@ test("a governed repo with no specs is unqualified", () => {
   expect(checkOf(result, "specs-present")).toEqual({ ok: false, detail: "specs/ is missing or holds no spec.md" });
 });
 
+// --- the adoptable reading (spec 034 B-5, FR-004) ---------------------------
+
+test("an ungoverned-but-sound target records adoptable, with its reasons intact", () => {
+  const repoDir = governedRepo({ specs: false });
+  // A red compile is the expected consequence of an empty specs/ and does
+  // not block the reading.
+  const result = qualifyProject(probeWith(1, "no corpus to compile"), repoDir);
+
+  expect(result.qualified).toBe(false);
+  expect(result.adoptable).toBe(true);
+  expect(checkOf(result, "specs-present").ok).toBe(false);
+  expect(checkOf(result, "git-repo").ok).toBe(true);
+});
+
+test("a non-repo still fails plainly: adoptable needs a sound repository", () => {
+  const result = qualifyProject(probeWith(0), nonRepo());
+  expect(result.qualified).toBe(false);
+  expect(result.adoptable).toBe(false);
+});
+
+test("a governed repo is untouched by the adoptable vocabulary", () => {
+  expect(qualifyProject(probeWith(0), governedRepo()).adoptable).toBe(false);
+  // A corpus that compiles red needs fixing, not adopting: specs-present
+  // passing keeps the reading off however the other checks land.
+  expect(qualifyProject(probeWith(2, "boom"), governedRepo()).adoptable).toBe(false);
+});
+
+test("adoptable rides the recorded verdict through the chain, and a pre-034 record folds to false", () => {
+  const home = freshHome();
+  const repoDir = governedRepo({ specs: false });
+  const chain = openProjectsChain(home);
+  try {
+    const registered = registerProject({
+      chain,
+      repoDir,
+      name: "adoptee",
+      qualification: qualifyProject(probeWith(1, "no corpus"), repoDir),
+      source: "cli",
+    });
+    expect(registered.project?.qualification.adoptable).toBe(true);
+
+    // A registration recorded before spec 034 existed carries no adoptable
+    // field at all; it reads back false rather than being reinterpreted.
+    chain.append(PROJECT_KINDS.registered, {
+      name: "elder",
+      repoDir: "/targets/elder",
+      armed: true,
+      qualification: { qualified: false, checks: [], warnings: [] },
+      source: "cli",
+    });
+    const elder = projectsFromChain(chain.fold()).get("elder");
+    expect(elder?.qualification.adoptable).toBe(false);
+  } finally {
+    chain.close();
+  }
+});
+
 // --- qualify, then register (B-1, B-2, B-4) ---------------------------------
 
 test("an unqualified target registers with its reasons and requalifies in place once fixed", () => {

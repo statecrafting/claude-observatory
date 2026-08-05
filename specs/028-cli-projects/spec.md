@@ -150,3 +150,22 @@ exactly as B-3's offline verify does (registry fold, `--dir` bypass,
 self-hosted default) and takes its own flag set as `projects add` does;
 `--bundle` belongs to verify alone and is refused elsewhere. Exit codes
 and flag discipline carry over unchanged.
+
+D-8 (2026-08-05, spec 034's build, per its granted authority). The group
+gains one offline read verb, `adopt preflight <path> [--out <path>]
+[--exclude <rules>]`, dispatched before any client exists exactly like
+`journal verify`: a preflight must work against a repository no daemon has
+ever heard of, and 034 keeps API surfaces for a later spec. The target is
+addressed by path, resolved shell-side (D-2's reasoning); when the
+resolved path is a registered project's repoDir, the 034 B-6 record is
+appended to that project's own state root through a short-lived writer
+handle, and an append refused by a held lock is reported as the
+operational failure it is, with the proposal already safely written.
+`--out` defaults under the daemon home at `adoption/<name>.preflight.md`;
+`--exclude` belongs to this verb alone (D-5) and accepts additions only
+(034 D-2). Two rendering touches ride along: the qualification cell says
+`adoptable (<failed checks>)` for a verdict recorded with 034 B-5's
+reading, and `standbyProjects` swaps an adoptable project's DagReader for
+034's refusing reader, which is what makes `dag` and `next` answer the
+refusal by name (034 AC-3) while every other project's reader is
+untouched.

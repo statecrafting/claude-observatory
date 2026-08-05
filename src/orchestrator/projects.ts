@@ -59,6 +59,14 @@ export interface QualificationVerdict {
   readonly checks: readonly QualificationCheck[];
   // Observations that do not disqualify: recorded, never fixed (B-4).
   readonly warnings: readonly string[];
+  // Spec 034 B-5's reading of an unqualified verdict: the target failed
+  // qualification because it has no corpus, while being otherwise sound (git
+  // work tree root, origin remote, resolvable default branch). A recorded
+  // fact about the target, never a consent: an adoptable project is visible
+  // everywhere with its reasons and schedulable nowhere. Optional so that a
+  // hand-built verdict (fixtures, pre-034 records) reads as false rather
+  // than failing to construct; only qualifyProject() ever computes it true.
+  readonly adoptable?: boolean;
 }
 
 // A verdict as read back out of the chain. `checkedAt` is the recording
@@ -195,6 +203,10 @@ export function qualificationPayload(verdict: QualificationVerdict): Record<stri
     qualified: verdict.qualified,
     checks: verdict.checks.map((c) => ({ id: c.id, ok: c.ok, detail: c.detail })),
     warnings: [...verdict.warnings],
+    // 034 B-5: always written explicitly going forward, so a chain never has
+    // to distinguish "not adoptable" from "recorded before the reading
+    // existed" for records this code appends.
+    adoptable: verdict.adoptable ?? false,
   };
 }
 
@@ -224,6 +236,10 @@ function parseQualification(value: JsonValue | undefined, kind: string, checkedA
     qualified: asBoolean(o, "qualified", kind),
     checks,
     warnings: rawWarnings as string[],
+    // Read back as written; a verdict recorded before spec 034 carries no
+    // adoptable field and reads as false, which is honest: nothing ever
+    // claimed that target was adoptable. A requalify refreshes it.
+    adoptable: o.adoptable === true,
     checkedAt,
   };
 }
@@ -677,5 +693,14 @@ export function qualifyProject(probe: ProjectProbe, repoDir: string): Qualificat
     );
   }
 
-  return { qualified: checks.every((c) => c.ok), checks, warnings };
+  const qualified = checks.every((c) => c.ok);
+  // 034 B-5: an unqualified target is "adoptable" exactly when its failure is
+  // the absence of a corpus and nothing else structural: a sound repository
+  // (work tree root, origin remote, resolvable default branch) with no specs.
+  // A governed repo whose compile is red has a corpus that needs fixing, not
+  // adopting, so specs-present failing is the load-bearing condition; a red
+  // compile alongside an empty specs/ is the expected consequence of having
+  // nothing to compile and does not block the reading.
+  const adoptable = !qualified && isRepoRoot && origin !== null && branch !== null && specs === 0;
+  return { qualified, checks, warnings, adoptable };
 }

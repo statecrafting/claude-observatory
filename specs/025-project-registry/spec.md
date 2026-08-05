@@ -103,3 +103,18 @@ D-2. Remove is a tombstone: the chain is append-only, so removal appends a
 record and the fold drops the project. Re-registering the same name later
 resumes the same state root in the target; the project's journal history
 is the target's property and is never deleted by the orchestrator.
+
+D-7 (2026-08-05, spec 034's build, per its granted authority).
+QualificationVerdict gains an optional `adoptable` reading (034 B-5),
+computed only by qualifyProject(): true exactly when the verdict is
+unqualified, the three soundness checks (git-repo, origin-remote,
+default-branch) pass, and specs-present fails. A red compile beside an
+empty specs/ does not block the reading (it is the expected consequence of
+having nothing to compile); a corpus that is present but compiles red is
+never adoptable, because that target needs fixing, not adopting. The
+payload codec writes the field explicitly on every new record and reads an
+absent one as false, so pre-034 records fold unreinterpreted; the field is
+optional on the type so hand-built verdicts (fixtures, older callers) stay
+constructible and can never claim adoptability by accident. Scheduling is
+untouched: adoptable implies unqualified, which spec 026 already refuses
+to drive.
