@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-05"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: pending
+implementation: in-progress
 risk: medium
 depends_on:
   - "025-project-registry"

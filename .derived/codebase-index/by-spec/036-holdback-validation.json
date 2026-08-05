@@ -1,18 +1,18 @@
 {
   "diagnostics": {
-    "errors": [],
-    "warnings": [
+    "errors": [
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '036-holdback-validation' file unit 'src/orchestrator/adopt/holdback.ts' does not exist",
         "path": "src/orchestrator/adopt/holdback.ts"
       },
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '036-holdback-validation' file unit 'src/orchestrator/adopt/holdback.test.ts' does not exist",
         "path": "src/orchestrator/adopt/holdback.test.ts"
       }
-    ]
+    ],
+    "warnings": []
   },
   "mapping": {
     "dependsOn": [
@@ -96,5 +96,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "238da610b6ce65fe22a08deef5f309c1661d7a622d2d306583680f7ffad42aec"
+  "shardHash": "e1cd2f1b5cb79dc0fbdae6a7c436e6fa25384ca6656cb3bb3a678041a5dbce6f"
 }

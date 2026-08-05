@@ -37,7 +37,7 @@
       }
     ],
     "id": "036-holdback-validation",
-    "implementation": "pending",
+    "implementation": "in-progress",
     "kind": "feature",
     "references": [
       {
@@ -64,6 +64,6 @@
     "summary": "The acceptance instrument for adoption (010 A-2, D17): replay the target's own merge history against a candidate corpus's declared ownership and report whether the boundaries would have held. For each of the last N first-parent merges: which changed paths the corpus covers, which are orphans no spec owns, and how many specs the change would have had to touch (dispersion). The rollup: commit coverage percentage, orphan file list, dispersion histogram, and a per-commit detail naming the specs each failing commit would have needed. Every number carries its denominator. The verdict is written into a journaled ratification-input record pinning the corpus content it scored, so an operator's later approval flip can cite exactly what was measured. Works against any compiling corpus, synthesized (035) or hand-authored; it is useful standing alone as a boundary audit even if the builder never drives the target.\n",
     "title": "Holdback validation: score a candidate corpus against real history"
   },
-  "shardHash": "cd48989fc08c37029ce83321b48adea41858c042d0c3dea3ed3af591cc1a47e7",
+  "shardHash": "0cff3292499d447034a33eccbbef476453e5244fbfd9c4cce821a4a9318b8096",
   "specVersion": "1.1.0"
 }
