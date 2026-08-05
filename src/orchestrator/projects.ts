@@ -26,6 +26,8 @@ import * as fs from "fs";
 import { basename, isAbsolute, join, resolve } from "path";
 import type { FoldedState, JournalHandle, JournalRecord, JsonValue, VerifyResult } from "./journal";
 import { openJournal, verifyChain } from "./journal";
+import type { ExecutionProfile, RecordedProfile } from "./profile";
+import { DEFAULT_REGISTRATION_PROFILE, LEGACY_BYPASS_PROFILE, parseProfile, profilePayload } from "./profile";
 
 // --- model (B-1) ------------------------------------------------------------
 
@@ -69,6 +71,11 @@ export interface Project {
   readonly repoDir: string;
   readonly armed: boolean;
   readonly qualification: RecordedQualification;
+  // The posture every session driven against this project runs under (spec
+  // 032 B-2), folded from the chain exactly as `armed` is. Never absent: a
+  // chain with no profile record folds to bypass flagged legacy, which is
+  // today's behavior with today's silence removed.
+  readonly profile: RecordedProfile;
 }
 
 // Keyed by name, in registration order (a project re-registered after removal
@@ -80,14 +87,18 @@ export type ProjectsSnapshot = ReadonlyMap<string, Project>;
 
 export const PROJECTS_CHAIN_BASENAME = "projects";
 
-// The five record kinds this chain carries. Exported because the control
+// The record kinds this chain carries. Exported because the control
 // surfaces (027, 028) render the journaled record itself back to the caller.
+// `profileSet` is spec 032 B-2's addition: posture is registry state, so it
+// arrives here as a sixth appended kind rather than as a field an operator
+// edits somewhere.
 export const PROJECT_KINDS = {
   registered: "project.registered",
   armed: "project.armed",
   disarmed: "project.disarmed",
   requalified: "project.requalified",
   removed: "project.removed",
+  profileSet: "project.profile.set",
 } as const;
 
 // The projects chain lives in the daemon home: projects.jsonl plus its own
@@ -166,7 +177,10 @@ function asBoolean(o: Record<string, JsonValue>, field: string, kind: string): b
   return v;
 }
 
-function qualificationPayload(verdict: QualificationVerdict): Record<string, JsonValue> {
+// Exported for the API fixtures, whose legacy-chain path (032 B-2 tests)
+// appends a pre-032 registration record directly and must encode the verdict
+// exactly as registerProject does, or the fold under test reads fiction.
+export function qualificationPayload(verdict: QualificationVerdict): Record<string, JsonValue> {
   return {
     qualified: verdict.qualified,
     checks: verdict.checks.map((c) => ({ id: c.id, ok: c.ok, detail: c.detail })),
@@ -227,6 +241,10 @@ export function foldProjects(records: readonly JournalRecord[]): ProjectsSnapsho
           repoDir: asString(o, "repoDir", kind),
           armed: asBoolean(o, "armed", kind),
           qualification: parseQualification(o.qualification, kind, record.ts),
+          // Registration itself never carries the posture: the profile record
+          // appended beside it does (032 B-2), so a registration read on its
+          // own is legacy bypass and only a profile record moves it off that.
+          profile: LEGACY_BYPASS_PROFILE,
         });
         break;
       }
@@ -243,6 +261,15 @@ export function foldProjects(records: readonly JournalRecord[]): ProjectsSnapsho
         const current = projects.get(name);
         if (current) {
           projects.set(name, { ...current, qualification: parseQualification(o.qualification, kind, record.ts) });
+        }
+        break;
+      }
+      case PROJECT_KINDS.profileSet: {
+        const o = asObject(record.payload, kind);
+        const name = asString(o, "name", kind);
+        const current = projects.get(name);
+        if (current) {
+          projects.set(name, { ...current, profile: { ...parseProfile(o.profile, kind), legacy: false } });
         }
         break;
       }
@@ -283,12 +310,23 @@ export interface RegisterProjectParams {
   // Registration defaults to armed: pointing the orchestrator at a project is
   // the consent (010 D14).
   readonly armed?: boolean;
+  // The posture this registration consents to, defaulting to bypass (032
+  // D-1). Recorded as its own record beside the registration, so `legacy`
+  // can only ever describe a chain written before spec 032 existed (B-2).
+  readonly profile?: ExecutionProfile;
 }
 
 export interface SetProjectArmedParams {
   readonly chain: JournalHandle;
   readonly name: string;
   readonly armed: boolean;
+  readonly source: ProjectSource;
+}
+
+export interface SetProjectProfileParams {
+  readonly chain: JournalHandle;
+  readonly name: string;
+  readonly profile: ExecutionProfile;
   readonly source: ProjectSource;
 }
 
@@ -349,7 +387,32 @@ export function registerProject(params: RegisterProjectParams): ProjectMutation 
     qualification: qualificationPayload(params.qualification),
     source: params.source,
   });
+  // 032 B-2: the posture is appended beside the registration rather than
+  // folded into it, so one kind carries one consent and a profile change
+  // later reads exactly like the profile chosen here. Appended second: a
+  // mutation record only applies to a project that is already live (D-5).
+  params.chain.append(PROJECT_KINDS.profileSet, {
+    name,
+    profile: profilePayload(params.profile ?? DEFAULT_REGISTRATION_PROFILE),
+    source: params.source,
+  });
+  // The registration record is the mutation's answer; the posture it settled
+  // on travels on the returned project, which is what every surface renders.
   return mutationOf(params.chain, record, name);
+}
+
+// Sets the posture every session driven against this project runs under
+// (032 B-2). Appended even when the profile is unchanged, exactly as arm and
+// disarm are: the chain records what was asked and by whom, not only what
+// moved.
+export function setProjectProfile(params: SetProjectProfileParams): ProjectMutation {
+  requireLive(params.chain, params.name);
+  const record = params.chain.append(PROJECT_KINDS.profileSet, {
+    name: params.name,
+    profile: profilePayload(params.profile),
+    source: params.source,
+  });
+  return mutationOf(params.chain, record, params.name);
 }
 
 // Arm or disarm. Appended even when the project already holds that state: the

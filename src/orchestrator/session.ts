@@ -1,9 +1,12 @@
 // The one place that spawns Claude Code (spec 014). A fresh `claude -p
-// --output-format stream-json --verbose --dangerously-skip-permissions`
-// process per attempt (plus `--mcp-config <path> --strict-mcp-config` when
+// --output-format stream-json --verbose <permission argv>` process per
+// attempt (plus `--mcp-config <path> --strict-mcp-config` when
 // the caller declares an MCP server set, D-10): the prompt is written to
 // stdin and stdin is closed, never placed on argv or interpolated through a
-// shell (B-1). The child's
+// shell (B-1). The permission portion of that argv is no longer typed here:
+// spec 032 B-3 makes it the output of profile.ts's one pure derivation over
+// the owning project's execution profile, and this module consumes it.
+// The child's
 // env is the parent's env with ANTHROPIC_API_KEY deleted (an empty or unset
 // key must not shadow OAuth) and NO_COLOR=1 (B-2). stdout is parsed as
 // newline-delimited stream-json and forwarded to an injected sink; only the
@@ -16,6 +19,8 @@ import { resolve, join } from "path";
 import { homedir } from "os";
 import type { JournalHandle, JsonValue } from "./journal";
 import { classifyTermination, type Classification, type ResultEventLike } from "./classify-termination";
+import type { ExecutionProfile } from "./profile";
+import { DEFAULT_REGISTRATION_PROFILE, profilePayload, sessionArgsForProfile } from "./profile";
 
 // --- stream-json event shapes (the subset this module reads) --------------
 
@@ -63,6 +68,11 @@ export interface RunSessionOptions {
   // declared, never host-level user or project MCP configuration. Absent,
   // the argv is unchanged.
   readonly mcpConfigPath?: string;
+  // The owning project's execution profile (spec 032 B-4). Every spawn path
+  // the orchestrator drives passes one; absent derives spec 032 D-1's
+  // registration default (bypass), which is byte-identical to the argv this
+  // driver hardcoded before profiles existed.
+  readonly profile?: ExecutionProfile;
   // SIGTERM-to-SIGKILL grace at the deadline (B-5). Configurable so tests can
   // exercise the escalation deterministically; defaults to KILL_GRACE_MS.
   readonly killGraceMs?: number;
@@ -216,7 +226,10 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
   const absRepo = resolve(opts.repo);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const args = [claudeBin, "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
+  // B-3 (032): the permission portion comes from the one derivation, never
+  // from a flag composed here.
+  const profile = opts.profile ?? DEFAULT_REGISTRATION_PROFILE;
+  const args = [claudeBin, "-p", "--output-format", "stream-json", "--verbose", ...sessionArgsForProfile(profile)];
   if (opts.model !== undefined) args.push("--model", opts.model);
   if (opts.maxTurns !== undefined) args.push("--max-turns", String(opts.maxTurns));
   if (opts.mcpConfigPath !== undefined) args.push("--mcp-config", opts.mcpConfigPath, "--strict-mcp-config");
@@ -344,6 +357,10 @@ async function runSessionOnce(opts: RunSessionOptions): Promise<SessionResult> {
           maxTurns: opts.maxTurns ?? null,
           timeoutMs,
           sessionId: state.sessionId ?? null,
+          // 032 B-5: the posture this session was spawned under, mode and
+          // lists verbatim. What a session was allowed to do is thereafter a
+          // journal fact rather than an inference from registry history.
+          profile: profilePayload(profile),
         };
         opts.journal.append("session.init", initPayload);
       }

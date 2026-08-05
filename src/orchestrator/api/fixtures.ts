@@ -21,15 +21,19 @@ import { journalPark } from "../quota";
 import {
   foldProjects,
   openProjectsChain,
+  PROJECT_KINDS,
+  qualificationPayload,
   registerProject,
   removeProject,
   requalifyProject,
   setProjectArmed,
+  setProjectProfile,
   type Project,
   type ProjectSource,
   type ProjectsSnapshot,
   type QualificationVerdict,
 } from "../projects";
+import type { ExecutionProfile } from "../profile";
 import { journalViewFromHandle, type ApiDeps, type ControlTarget, type DaemonStatus, type ProjectApi, type ProjectsTarget } from "./server";
 
 export interface FixtureSpec {
@@ -291,6 +295,11 @@ export function fixtureQualification(qualified = true): QualificationVerdict {
 export interface FixtureProjectOptions {
   readonly armed?: boolean;
   readonly qualified?: boolean;
+  // 032 B-2: the posture this project registers with. `"legacy"` writes the
+  // registration record alone, exactly as the registry did before postures
+  // existed, so a surface can be tested against a chain that holds no
+  // profile record rather than against a simulation of one.
+  readonly profile?: ExecutionProfile | "legacy";
   // A project with no live run has no controls attached, which is what the
   // daemon reports for one sitting in the registry untouched.
   readonly controls?: boolean;
@@ -338,17 +347,21 @@ export function freshRegistry(prefix: string): FixtureRegistry {
         controls: entry.controls,
       };
     },
-    register(path: string, name: string | undefined, source: ProjectSource): void {
+    register(path: string, name: string | undefined, profile: ExecutionProfile | undefined, source: ProjectSource): void {
       registerProject({
         chain,
         repoDir: path,
         qualification: fixtureQualification(true),
         source,
         ...(name === undefined ? {} : { name }),
+        ...(profile === undefined ? {} : { profile }),
       });
     },
     setArmed(name: string, armed: boolean, source: ProjectSource): void {
       setProjectArmed({ chain, name, armed, source });
+    },
+    setProfile(name: string, profile: ExecutionProfile, source: ProjectSource): void {
+      setProjectProfile({ chain, name, profile, source });
     },
     requalify(name: string, source: ProjectSource): void {
       requalifyProject({ chain, name, qualification: fixtureQualification(true), source });
@@ -370,13 +383,30 @@ export function freshRegistry(prefix: string): FixtureRegistry {
     add(name: string, options: FixtureProjectOptions = {}): FixtureWorld {
       const world = registry.world(name, options.specs ?? FIXTURE_SPECS);
       if (options.controls === false) worlds.set(world.repoDir, { world, controls: null });
+      const armed = options.armed ?? true;
+      const qualification = fixtureQualification(options.qualified ?? true);
+      if (options.profile === "legacy") {
+        // The pre-032 registry's one record, appended straight to the chain:
+        // registerProject() cannot write this history any more, and a chain
+        // that has never heard of postures is exactly what B-2's legacy fold
+        // is about.
+        chain.append(PROJECT_KINDS.registered, {
+          name,
+          repoDir: world.repoDir,
+          armed,
+          qualification: qualificationPayload(qualification),
+          source: "cli",
+        });
+        return world;
+      }
       registerProject({
         chain,
         repoDir: world.repoDir,
         name,
-        armed: options.armed ?? true,
-        qualification: fixtureQualification(options.qualified ?? true),
+        armed,
+        qualification,
         source: "cli",
+        ...(options.profile === undefined ? {} : { profile: options.profile }),
       });
       return world;
     },

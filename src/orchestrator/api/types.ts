@@ -19,6 +19,7 @@ import type { RunStatus, SpecExecStatus, Stage, StageExecStatus } from "../state
 import type { ShippedSource } from "../dag";
 import type { DecisionRecord } from "../decisions";
 import type { RecordedQualification } from "../projects";
+import type { ExecutionProfile, RecordedProfile } from "../profile";
 
 // --- version (B-1) ----------------------------------------------------------
 
@@ -86,6 +87,7 @@ export const PROJECT_ROUTES = {
   disarm: "disarm",
   requalify: "requalify",
   remove: "remove",
+  profile: "profile",
   runStart: "run/start",
   runPause: "run/pause",
   runResume: "run/resume",
@@ -108,7 +110,7 @@ export type SpecControlVerb = (typeof SPEC_CONTROL_VERBS)[number];
 
 export type ControlVerbToken = "start" | "pause" | "resume" | SpecControlVerb;
 
-export const PROJECT_CONTROL_VERBS = ["register", "arm", "disarm", "requalify", "remove"] as const;
+export const PROJECT_CONTROL_VERBS = ["register", "arm", "disarm", "requalify", "remove", "profile"] as const;
 export type ProjectControlVerb = (typeof PROJECT_CONTROL_VERBS)[number];
 
 // --- /api/meta (B-4) --------------------------------------------------------
@@ -195,6 +197,10 @@ export interface ProjectView {
   // 025 B-4's recorded verdict, reasons included: an unqualified project stays
   // visible with why it was refused, never dropped from the list.
   readonly qualification: RecordedQualification;
+  // 032 B-6: the posture every session driven against this project runs
+  // under, never omitted. `legacy` distinguishes a bypass derived from a
+  // chain that has no profile record from one an operator chose.
+  readonly profile: RecordedProfile;
   // null when this project has no run yet, or when `readError` says its state
   // root could not be read. Never a fabricated idle run (022 B-6).
   readonly run: RunSummary | null;
@@ -212,6 +218,17 @@ export interface ProjectsView {
 export interface RegisterProjectRequest {
   readonly path: string;
   readonly name?: string;
+  // 032 B-2: the posture this registration consents to, recorded beside the
+  // registration. Omitted records D-1's default (bypass), which is what the
+  // registry did before profiles existed, now said out loud.
+  readonly profile?: ExecutionProfile;
+}
+
+// The body of the one write verb 032 B-2 puts on the registry (POST
+// /api/projects/<name>/profile): the whole profile, never a patch, because a
+// posture is one journaled decision rather than a set of fields to nudge.
+export interface SetProjectProfileRequest {
+  readonly profile: ExecutionProfile;
 }
 
 // The answer to a registry control (B-2): spec 022 D-2's pattern applied to

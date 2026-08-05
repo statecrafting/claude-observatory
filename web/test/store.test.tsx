@@ -44,6 +44,7 @@ function projectRow(name: string): ProjectView {
     repoDir: `/repo/${name}`,
     armed: true,
     qualification: { qualified: true, checks: [], warnings: [], checkedAt: "2026-08-01T00:00:00.000Z" },
+    profile: { mode: "bypass", legacy: false },
     run: null,
     spec: null,
     stage: null,
@@ -142,6 +143,7 @@ function gatedClient(): { client: ApiClient; release(name: string): void } {
     disarmProject: registryAnswer,
     requalifyProject: registryAnswer,
     removeProject: registryAnswer,
+    setProjectProfile: registryAnswer,
     project: scoped,
   };
 

@@ -603,9 +603,11 @@ test("projects lists the registry, one row per project", async () => {
 
     const human = await run(["projects", "--url", url], { dataDir });
     expect(human.code).toBe(EXIT_OK);
-    expect(human.out).toContain("alpha  armed     qualified    running  003-gamma/build");
+    // 032 B-6: the posture sits between the arm state and the qualification,
+    // on every row, because the two consents are read together or not at all.
+    expect(human.out).toContain("alpha  armed     bypass  qualified    running  003-gamma/build");
     // 025 B-4: an unqualified project stays listed, with what failed named.
-    expect(human.out).toContain("beta   disarmed  unqualified (origin-remote)  no run yet");
+    expect(human.out).toContain("beta   disarmed  bypass  unqualified (origin-remote)  no run yet");
 
     const asJson = await run(["projects", "--json", "--url", url], { dataDir });
     expect(asJson.code).toBe(EXIT_OK);
