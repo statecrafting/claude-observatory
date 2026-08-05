@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-05"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: in-progress
+implementation: complete
 risk: medium
 depends_on:
   - "025-project-registry"
@@ -31,6 +31,11 @@ extends:
   - { spec: "025-project-registry", unit: "src/orchestrator/projects.ts", nature: additive }
   # One read verb producing and rendering the proposal.
   - { spec: "028-cli-projects", unit: "src/commands/orchestrator.ts", nature: additive }
+  # The colocated tests of the extended units take the same additive edits
+  # (033's precedent): FR-004 lives in the registry tests, AC-2/AC-3 in the
+  # CLI tests.
+  - { spec: "025-project-registry", unit: "src/orchestrator/projects.test.ts", nature: additive }
+  - { spec: "028-cli-projects", unit: "src/commands/orchestrator.test.ts", nature: additive }
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -153,3 +158,43 @@ job is a defensible starting point an operator can read, and 036's
 replay, not the clustering objective, is the arbiter of whether the
 boundaries hold. A fancier partitioner may replace it later without
 changing this contract.
+
+D-4 (2026-08-05, the build session). A commit wider than the exported
+WIDE_COMMIT_PATH_LIMIT (100 paths) contributes churn but no coupling
+evidence: a repo-wide sweep pairs everything with everything and would
+weld the whole tree into one territory, and the pair count grows
+quadratically besides. Never silent: the proposal names how many
+commits this dropped from the affinity computation. Down-weighting wide
+commits instead of dropping them is a later refinement.
+
+D-5 (2026-08-05, the build session). The proposal document is
+deterministic markdown, and its content hash is sha256 over the
+document's exact bytes. Markdown because B-1's artifact is something an
+operator reads and argues with; deterministic because nothing in the
+renderer reads a clock, so AC-2's byte-identity falls out of the inputs
+alone. Later specs consume the exported AdoptionProposal shape from the
+module, not a parse of the document.
+
+D-6 (2026-08-05, the build session). B-4's "high internal co-change
+and a live churn signal" made concrete: affinity is Jaccard (commits
+together over commits touching either) with the exported threshold at
+0.5 (they ship together at least as often as apart), and a candidate
+territory needs at least MIN_TERRITORY_PATHS (2) files and
+MIN_TERRITORY_COMMITS (2) distinct commits. A pair that co-changed once
+has perfect affinity and no live signal; it stays in the remainder.
+
+D-7 (2026-08-05, the build session). The CLI verb is offline and
+path-addressed (no daemon, no API route), like `journal verify`: the
+whole point is running against a repository nothing governs yet. The
+B-6 record is appended only when the resolved path is a registered
+project's repoDir, into that project's state root, through a writer
+handle held for one append; an unregistered target says "nothing
+journaled" in the output rather than journaling somewhere uncitable.
+
+D-8 (2026-08-05, the build session). B-5's dag/next refusal is a
+refusing DagReader (adoptableDagReader) swapped in at the one place the
+CLI composes a project's resources: every structural read against an
+adoptable project throws the reason (name, failed checks, the preflight
+verb to run), which the served error envelope carries to the operator.
+The corpus vocabulary of dag.ts and the API's routes stay untouched,
+which is what keeps this spec's territory additive.

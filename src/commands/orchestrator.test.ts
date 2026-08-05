@@ -18,6 +18,7 @@ import { openJournal } from "../orchestrator/journal";
 import { openDecisionsChain } from "../orchestrator/decisions";
 import type { ProcessInspector } from "../orchestrator/daemon";
 import { openProjectsChain, projectStateRoot, registerProject } from "../orchestrator/projects";
+import { adoptableDagReader } from "../orchestrator/adopt/preflight";
 import { createApiServer, type ApiServer, type ProjectsTarget } from "../orchestrator/api/server";
 import {
   fixtureApiDeps,
@@ -1273,5 +1274,191 @@ test("journalViewFromDir drops a torn tail instead of failing the read", () => {
     expect(journalViewFromDir(dir).records().map((r) => r.kind)).toEqual(["a", "b"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- adopt preflight (spec 034) ----------------------------------------------
+
+function gitFor(dir: string, args: readonly string[]): void {
+  const result = Bun.spawnSync(["git", ...args], { cwd: dir });
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${new TextDecoder().decode(result.stderr)}`);
+  }
+}
+
+// An ungoverned target with a real merge history: a Bun/TypeScript surface,
+// no specs/, and two first-parent merges that each shipped the same two auth
+// files together (one clean candidate territory).
+function ungovernedRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "cli-adopt-repo-"));
+  gitFor(dir, ["init", "-q", "-b", "main"]);
+  gitFor(dir, ["config", "user.email", "test@example.com"]);
+  gitFor(dir, ["config", "user.name", "Test"]);
+  fs.writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { build: "tsc", test: "bun test" } }));
+  fs.writeFileSync(join(dir, "tsconfig.json"), "{}\n");
+  fs.writeFileSync(join(dir, "bun.lock"), "");
+  fs.mkdirSync(join(dir, "src", "auth"), { recursive: true });
+  fs.writeFileSync(join(dir, "src", "auth", "login.ts"), "export {};\n");
+  fs.writeFileSync(join(dir, "src", "auth", "token.ts"), "export {};\n");
+  gitFor(dir, ["add", "-A"]);
+  gitFor(dir, ["commit", "-qm", "init"]);
+  for (const round of [1, 2]) {
+    gitFor(dir, ["checkout", "-qb", `feature-${round}`]);
+    fs.appendFileSync(join(dir, "src", "auth", "login.ts"), `// round ${round}\n`);
+    fs.appendFileSync(join(dir, "src", "auth", "token.ts"), `// round ${round}\n`);
+    gitFor(dir, ["add", "-A"]);
+    gitFor(dir, ["commit", "-qm", `auth round ${round}`]);
+    gitFor(dir, ["checkout", "-q", "main"]);
+    gitFor(dir, ["merge", "-q", "--no-ff", `feature-${round}`, "-m", `merge auth round ${round} (#${round})`]);
+  }
+  return dir;
+}
+
+test("adopt without its subcommand, and preflight without a path, are usage errors", async () => {
+  const bare = await run(["adopt"]);
+  expect(bare.code).toBe(EXIT_USAGE);
+  expect(bare.err).toContain(`adopt needs the "preflight" subcommand`);
+
+  const noPath = await run(["adopt", "preflight"]);
+  expect(noPath.code).toBe(EXIT_USAGE);
+  expect(noPath.err).toContain("adopt preflight needs a repository path");
+});
+
+test("adopt preflight refuses stray flags, and --exclude belongs to it alone", async () => {
+  const stray = await run(["adopt", "preflight", "/tmp/x", "--project", "alpha"]);
+  expect(stray.code).toBe(EXIT_USAGE);
+  expect(stray.err).toContain(`--project is not a flag of "adopt"`);
+
+  const elsewhere = await run(["status", "--exclude", "docs/"]);
+  expect(elsewhere.code).toBe(EXIT_USAGE);
+  expect(elsewhere.err).toContain(`--exclude is not a flag of "status"`);
+});
+
+test("a target that is not a readable directory fails plainly", async () => {
+  const dataDir = freshDataDir("adopt-missing");
+  try {
+    const result = await run(["adopt", "preflight", join(dataDir, "nowhere")], { dataDir });
+    expect(result.code).toBe(EXIT_FAILURE);
+    expect(result.err).toContain("is not a readable directory");
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("adopt preflight writes a byte-identical proposal and prints the summary (034 AC-2)", async () => {
+  const repo = ungovernedRepo();
+  const dataDir = freshDataDir("adopt");
+  const out = join(dataDir, "proposal.md");
+  try {
+    const first = await run(["adopt", "preflight", repo, "--out", out], { dataDir });
+    expect(first.code).toBe(EXIT_OK);
+    expect(first.out).toContain(`proposal written to ${out}`);
+    expect(first.out).toContain("candidates: 1");
+    expect(first.out).toContain("remainder:  0 path(s)");
+    expect(first.out).toContain("unknowns:   none");
+    expect(first.out).toContain("2 first-parent merge(s)");
+    // An unregistered target runs fine and says nothing was journaled (B-6).
+    expect(first.out).toContain("journaled: nothing");
+
+    const document = fs.readFileSync(out, "utf8");
+    expect(document).toContain(`# Adoption preflight: ${repo}`);
+    expect(document).toContain("src/auth/login.ts");
+    expect(document).toContain("merge auth round 2 (#2)");
+
+    const second = await run(["adopt", "preflight", repo, "--out", out], { dataDir });
+    expect(second.code).toBe(EXIT_OK);
+    expect(fs.readFileSync(out, "utf8")).toBe(document);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a registered target's preflight is journaled into its state root (034 B-6)", async () => {
+  const repo = ungovernedRepo();
+  const dataDir = freshDataDir("adopt-journal");
+  const out = join(dataDir, "proposal.md");
+  const chain = openProjectsChain(dataDir);
+  registerProject({
+    chain,
+    repoDir: repo,
+    name: "adoptee",
+    qualification: { qualified: false, adoptable: true, checks: [], warnings: [] },
+    source: "cli",
+  });
+  chain.close();
+  try {
+    const result = await run(["adopt", "preflight", repo, "--out", out], { dataDir });
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.out).toContain("journaled: seq 0  adopt.preflight");
+    expect(result.out).toContain("(project adoptee)");
+
+    const records = journalViewFromDir(projectStateRoot(repo)).records();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.kind).toBe("adopt.preflight");
+    const payload = records[0]!.payload as Record<string, unknown>;
+    expect(payload.project).toBe("adoptee");
+    expect(payload.historyMode).toBe("merges");
+    expect(payload.out).toBe(out);
+    expect(typeof payload.contentHash).toBe("string");
+    expect(typeof payload.headSha).toBe("string");
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("an adoptable project renders adoptable, and dag/next refuse it by name (034 AC-3)", async () => {
+  const registry = freshRegistry("adoptable");
+  registry.add("alpha");
+  const world = registry.world("beta");
+  registerProject({
+    chain: registry.chain,
+    repoDir: world.repoDir,
+    name: "beta",
+    qualification: {
+      qualified: false,
+      adoptable: true,
+      checks: [
+        { id: "git-repo", ok: true, detail: "git work tree root" },
+        { id: "origin-remote", ok: true, detail: "origin is git@example.com:x/beta.git" },
+        { id: "default-branch", ok: true, detail: `default branch is "main"` },
+        { id: "compile-green", ok: false, detail: "spec-spine compile exited 2: no corpus" },
+        { id: "specs-present", ok: false, detail: "specs/ is missing or holds no spec.md" },
+      ],
+      warnings: [],
+    },
+    source: "cli",
+  });
+  // Exactly the production wiring in standbyProjects: an adoptable project's
+  // structural reads refuse by name; every other project is untouched.
+  const guarded: ProjectsTarget = {
+    ...registry.target,
+    resourcesFor: (project) => {
+      const api = registry.target.resourcesFor(project);
+      return { ...api, dagReader: adoptableDagReader(project) ?? api.dagReader };
+    },
+  };
+  const server = createApiServer(fixtureApiDeps(registry, { projects: guarded, pumpIntervalMs: 60_000 }));
+  try {
+    const rows = await run(["projects", "--url", server.url]);
+    expect(rows.code).toBe(EXIT_OK);
+    expect(rows.out).toContain("adoptable (compile-green, specs-present)");
+
+    for (const verb of ["dag", "next"]) {
+      const refused = await run([verb, "--project", "beta", "--url", server.url]);
+      expect(refused.code).toBe(EXIT_FAILURE);
+      expect(refused.err).toContain(`project "beta" is adoptable, not governed`);
+      expect(refused.err).toContain("specs/ is missing or holds no spec.md");
+    }
+
+    // The governed project is untouched by the vocabulary (FR-004): its dag
+    // still answers.
+    const governed = await run(["dag", "--project", "alpha", "--url", server.url]);
+    expect(governed.code).toBe(EXIT_OK);
+    expect(governed.out).toContain("next ready:");
+  } finally {
+    await server.stop();
+    registry.close();
   }
 });

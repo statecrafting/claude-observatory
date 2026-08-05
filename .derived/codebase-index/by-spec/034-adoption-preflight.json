@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [
-      {
-        "code": "I-004",
-        "message": "spec '034-adoption-preflight' file unit 'src/orchestrator/adopt/preflight.ts' does not exist",
-        "path": "src/orchestrator/adopt/preflight.ts"
-      },
-      {
-        "code": "I-004",
-        "message": "spec '034-adoption-preflight' file unit 'src/orchestrator/adopt/preflight.test.ts' does not exist",
-        "path": "src/orchestrator/adopt/preflight.test.ts"
-      }
-    ],
-    "warnings": []
-  },
   "mapping": {
     "dependsOn": [
       "025-project-registry"
@@ -24,7 +9,23 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/commands/orchestrator.test.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/commands/orchestrator.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/adopt/preflight.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/adopt/preflight.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/projects.test.ts",
         "source": "spec-edge"
       },
       {
@@ -34,7 +35,11 @@
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/adopt/preflight.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -43,12 +48,29 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/adopt/preflight.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/adopt/preflight.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
         }
       },
       {
@@ -62,6 +84,19 @@
         "unit": {
           "kind": "file",
           "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/projects.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/projects.test.ts"
         }
       },
       {
@@ -95,5 +130,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "e191bb933088ba58dfdf277b5b7342d3c2445908644a6cf134a6e30bb1d4f179"
+  "shardHash": "aadabb6f4f1233fb44daabd8bc6cf486e7f468bdf6d39b6a77d0eca8a6a0aa88"
 }
