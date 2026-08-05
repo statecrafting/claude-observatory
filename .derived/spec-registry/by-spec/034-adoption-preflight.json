@@ -36,7 +36,7 @@
       }
     ],
     "id": "034-adoption-preflight",
-    "implementation": "pending",
+    "implementation": "in-progress",
     "kind": "feature",
     "references": [
       {
@@ -63,6 +63,6 @@
     "summary": "The first stage of corpus adoption (010 A-2, D16) and the only one an operator can run against any repository with zero commitment: a read-only preflight that maps an ungoverned target and produces a written proposal, never a change. It detects language, build, and test surfaces; extracts a change-coupling map from the target's own merge history (files that change together, churn-weighted); and proposes candidate spec territories at change level, each with its file set and the evidence behind it, with the ungoverned remainder explicit. Registering an ungoverned repository stops being a bare qualification failure: the verdict gains an \"ungoverned, adoptable\" reading so such targets stay visible with reasons, never scheduled for build, and never silently dropped.\n",
     "title": "Adoption preflight: read-only cartography of an ungoverned target"
   },
-  "shardHash": "85d60e2b132940fef6012e8fdcc36658eab7a7b3c675f7e00695adbdc5c630b6",
+  "shardHash": "5e2af2c443ecf20e2fd3de18b1433f6f50b98470db7304ddf80b5bfbf982e4fb",
   "specVersion": "1.1.0"
 }
