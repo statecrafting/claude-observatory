@@ -1,0 +1,50 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-05",
+    "dependsOn": [
+      "035-corpus-synthesis"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/adopt/defects.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/adopt/defects.test.ts"
+      }
+    ],
+    "id": "037-defect-capture",
+    "implementation": "pending",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "medium",
+    "sectionHeadings": [
+      "037: Defect capture",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "6. Out of scope",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/037-defect-capture/spec.md",
+    "status": "approved",
+    "summary": "The rule that keeps adoption honest (010 A-2, D19), made mechanical: a reverse-engineered spec records what the code does, and known-wrong behavior is written down as a defect, never blessed as contract. Get this wrong and adoption launders every bug in the target into governed truth. This spec establishes the corpus-shape checker that synthesis must pass: every synthesized spec carries origin.retroactive true and a Known defects section that is present even when empty (no known defects is a recorded claim, not an omission), and a synthesis diff may touch only the corpus set, so \"record, never fix\" is enforced by code rather than requested by prompt. The shape is this corpus's own: specs 000-008 carry exactly these markers and sections for the observatory code that predates the graph.\n",
+    "title": "Defect capture: adopted specs record behavior, never bless it"
+  },
+  "shardHash": "b6976710d43b957a707aca3d65fccde70732864216fac2b6534fba40ebd58ae4",
+  "specVersion": "1.1.0"
+}

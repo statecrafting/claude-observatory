@@ -34,6 +34,16 @@
           "028-cli-projects",
           "029-ui-projects"
         ]
+      },
+      {
+        "kind": "sequencing-plan",
+        "note": "The adoption wave (amendment A-2): read-only cartography first. 036 may land before 035 (its replay validates any candidate corpus, and it gates ratification); nothing in the wave writes a target's authored files except 035's synthesis sessions, whose specs are born draft.\n",
+        "target_specs": [
+          "034-adoption-preflight",
+          "035-corpus-synthesis",
+          "036-holdback-validation",
+          "037-defect-capture"
+        ]
       }
     ],
     "created": "2026-07-29",
@@ -64,6 +74,6 @@
     "summary": "claude-observatory grows into an autonomous build orchestrator: given a spec-spine DAG, it drives one spec per fresh Claude Code session through build, ship, shepherd, and verify, survives quota exhaustion, records every choice in an append-only ledger, and exposes one typed HTTP API that the CLI and a localhost web UI both consume. This spec fixes the core model, the layering, and the sequencing plan; it owns no code.\n",
     "title": "Orchestrator thesis: governed autonomous builds, one spec per session"
   },
-  "shardHash": "a3dbffecb884e5fa41ec3f7d18363b0c0337d5ae9ee253ed74310bc8becc17a6",
+  "shardHash": "2cdb18890603169c5119df8d15c9cfd00fc2dd6278c120474c9826900b33c49e",
   "specVersion": "1.1.0"
 }
