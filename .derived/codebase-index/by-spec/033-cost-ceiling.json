@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '033-cost-ceiling' file unit 'src/orchestrator/budget.ts' does not exist",
-        "path": "src/orchestrator/budget.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '033-cost-ceiling' file unit 'src/orchestrator/budget.test.ts' does not exist",
-        "path": "src/orchestrator/budget.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "013-run-state-machine",
@@ -27,7 +12,23 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/commands/orchestrator.test.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/commands/orchestrator.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/api/api-client.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/api/fixtures.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/api/server.test.ts",
         "source": "spec-edge"
       },
       {
@@ -36,6 +37,22 @@
       },
       {
         "path": "src/orchestrator/api/state.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/api/types.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/budget.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/budget.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/daemon.test.ts",
         "source": "spec-edge"
       },
       {
@@ -49,11 +66,23 @@
       {
         "path": "src/orchestrator/state.ts",
         "source": "spec-edge"
+      },
+      {
+        "path": "web/test/fixtures.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "web/test/store.test.tsx",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/budget.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -62,12 +91,29 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/budget.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/budget.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
         }
       },
       {
@@ -81,6 +127,45 @@
         "unit": {
           "kind": "file",
           "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/api/api-client.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/api-client.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/api/fixtures.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/fixtures.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/api/server.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/server.test.ts"
         }
       },
       {
@@ -107,6 +192,32 @@
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/api/state.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/api/types.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/types.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/daemon.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.test.ts"
         }
       },
       {
@@ -151,6 +262,32 @@
       {
         "locations": [
           {
+            "file": "web/test/fixtures.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/fixtures.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "web/test/store.test.tsx"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/store.test.tsx"
+        }
+      },
+      {
+        "locations": [
+          {
             "file": "docs/design/00-ecosystem-analysis.md"
           }
         ],
@@ -166,5 +303,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "9eb271cc9a22d01689e6ecb3da04b8801c1f8d70e88fa85f954c4d47c8d6ec68"
+  "shardHash": "bb658245b003db4bd4161f4483b552019f8f1b611d92d618875118ad5ae4756c"
 }

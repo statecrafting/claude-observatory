@@ -23,6 +23,7 @@ import {
   type DaemonStageFns,
   type ProcessInspector,
 } from "./daemon";
+import { nextUtcMidnightMs, type CeilingSource } from "./budget";
 
 // --- fixtures --------------------------------------------------------------
 
@@ -243,6 +244,9 @@ interface MakeDepsParams {
   readonly normalizeCheckoutForScheduling?: () => void;
   readonly readHeadSha?: () => string | null;
   readonly killLiveSession?: (graceMs?: number) => boolean;
+  // 033 B-2: this project's spend limits, read at every spawn boundary.
+  // Absent is no ceiling, which is how every test above is driven.
+  readonly ceiling?: CeilingSource;
 }
 
 // Real clock and real (small-chunk) sleep by default: most tests exercise
@@ -278,7 +282,19 @@ function makeDeps(p: MakeDepsParams): DaemonDeps {
     normalizeCheckoutForScheduling: p.normalizeCheckoutForScheduling,
     readHeadSha: p.readHeadSha,
     killLiveSession: p.killLiveSession,
+    ceiling: p.ceiling,
   };
+}
+
+// Polls a condition the daemon's own loop will satisfy, instead of sleeping a
+// guessed interval and hoping. Throws on timeout so a stuck loop reads as a
+// failed assertion rather than as a test that hung.
+async function waitFor(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("waitFor: condition never became true");
+    await Bun.sleep(5);
+  }
 }
 
 function makeFakeTime(startMs = 0): { clock: { now(): number }; sleep: (ms: number) => Promise<void> } {
@@ -1576,3 +1592,172 @@ test("concludeIdle(): a resumed run still holding a live specExec refuses; the l
   expect(daemon.runStatus).toBe("running");
   await daemon.shutdown();
 });
+
+// --- 033 FR-003: a project driven across its cost ceiling --------------------
+
+// A build stage that spends money the way a real one does: the driver
+// journals a `session.result` per session (spec 014), and this is the record
+// budget evaluation sums. Everything else about the stage is the ordinary
+// failed-attempt fixture, so the retry loop returns to the spawn boundary and
+// the ceiling gets its chance to stop the next one.
+function spendingBuild(costMicroUsd: number | null, counter: { calls: number }): DaemonStageFns["build"] {
+  return async (options) => {
+    counter.calls++;
+    options.journal.append("session.result", {
+      sessionId: `s-${options.specId}-${counter.calls}`,
+      costMicroUsd,
+      terminationKind: "clean",
+    });
+    return buildResult(options.specId, "failed");
+  };
+}
+
+test("FR-003: a per-run ceiling pauses the run for a human before the next session is spawned (B-4)", async () => {
+  const dataDir = freshDir("budget-run-data");
+  const repoDir = freshDir("budget-run-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+  const builds = { calls: 0 };
+
+  // Two attempts fit under the limit (3 + 3); the third would cross it, and
+  // the boundary check is what stops it being spawned at all.
+  const deps = makeDeps({
+    dataDir,
+    repoDir,
+    dagReader,
+    stageFns: { ...neverCalledStageFns(), build: spendingBuild(3_000_000, builds) },
+    ceiling: { perRunMicroUsd: 5_000_000 },
+    // Generous on purpose: with the default budget of 1, two failed attempts
+    // exhaust retries and pause before the loop reaches a third spawn
+    // boundary, and the ceiling would never get its chance. What this test
+    // pins is that the ceiling, not retry exhaustion, is what stops attempt 3.
+    stageRetryBudget: 5,
+  });
+  const daemon = new Daemon(deps);
+  await daemon.start();
+  // A budget-run pause waits for an operator, so the loop never concludes on
+  // its own: joining would wait as long as the human would.
+  await waitFor(() => daemon.runStatus === "paused");
+  await daemon.shutdown();
+
+  // D-2's bound, observed: the ceiling was crossed by the session already in
+  // flight and by exactly one, never by a third that the check refused.
+  expect(builds.calls).toBe(2);
+
+  const journal = openJournal(dataDir);
+  try {
+    const byKind = journal.fold().byKind;
+    expect(byKind["budget.parked"]).toBeUndefined(); // a run trip is not a park
+    const paused = byKind["budget.paused"] ?? [];
+    expect(paused.length).toBe(1);
+    expect(paused[0]?.payload).toEqual({
+      reason: "budget-run",
+      scope: "run",
+      limitMicroUsd: 5_000_000,
+      floorMicroUsd: 6_000_000,
+      costKnownSessions: 2,
+      costUnknownSessions: 0,
+      overshootBoundSessions: 1,
+      targetMs: null,
+    });
+
+    // B-4's machine-readable half rides with the operator-facing sentence, so
+    // a surface can tell this pause from a failed stage without parsing prose.
+    const reason = (byKind["run.pause-reason"] ?? []).at(-1)?.payload as Record<string, JsonValue>;
+    expect(reason?.reasonKind).toBe("budget-run");
+    expect(String(reason?.reason)).toContain("needs a human");
+
+    expect(verifyChain(dataDir).ok).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+test("FR-003: a per-day ceiling parks to next UTC midnight, and a restart recovers the countdown from the journaled target (B-3)", async () => {
+  const dataDir = freshDir("budget-day-data");
+  const repoDir = freshDir("budget-day-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+  const builds = { calls: 0 };
+
+  // A frozen clock, captured now so it shares a UTC day with the timestamps
+  // the journal stamps its own records with. Frozen is what makes the park
+  // deterministic: next UTC midnight is strictly after this instant, so the
+  // countdown can never elapse on its own and only a shutdown ends the wait.
+  const frozenMs = Date.now();
+  const midnightMs = nextUtcMidnightMs(frozenMs);
+  const stageFns: DaemonStageFns = { ...neverCalledStageFns(), build: spendingBuild(6_000_000, builds) };
+  const makeCeilingDeps = (nowMs: number, fns: DaemonStageFns = stageFns): DaemonDeps =>
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns: fns,
+      clock: { now: () => nowMs },
+      ceiling: { perDayMicroUsd: 5_000_000 },
+    });
+
+  const daemon1 = new Daemon(makeCeilingDeps(frozenMs));
+  await daemon1.start();
+  await waitFor(() => daemon1.runStatus === "parked");
+  // The park is a wait, not a conclusion: shutting down here is the abrupt
+  // stop FR-002's recovery has to survive.
+  await daemon1.shutdown();
+  expect(daemon1.runStatus).toBe("parked");
+  expect(builds.calls).toBe(1);
+
+  const parkedPayload = ((): Record<string, JsonValue> => {
+    const journal = openJournal(dataDir);
+    try {
+      const byKind = journal.fold().byKind;
+      expect((byKind["budget.parked"] ?? []).length).toBe(1);
+      expect(byKind["budget.resumed"]).toBeUndefined();
+      return byKind["budget.parked"]![0]!.payload as Record<string, JsonValue>;
+    } finally {
+      journal.close();
+    }
+  })();
+  expect(parkedPayload).toEqual({
+    reason: "budget-day",
+    scope: "day",
+    limitMicroUsd: 5_000_000,
+    floorMicroUsd: 6_000_000,
+    costKnownSessions: 1,
+    costUnknownSessions: 0,
+    overshootBoundSessions: 1,
+    targetMs: midnightMs,
+  });
+
+  // Restart one: a daemon whose clock has not reached the journaled target
+  // resumes the same countdown rather than the run, which is the whole of
+  // FR-002's recovery. It stays parked and journals no resume.
+  forceReleaseDaemonLock(dataDir);
+  const daemon2 = new Daemon(makeCeilingDeps(midnightMs - 60_000));
+  await daemon2.start();
+  await Bun.sleep(40);
+  expect(daemon2.runStatus).toBe("parked");
+  await daemon2.shutdown();
+  expect(builds.calls).toBe(1); // nothing spawned while the horizon stands
+
+  // Restart two: past the journaled target, the same countdown is due, so the
+  // resume fires and the run goes back to running. The two restarts together
+  // are what prove the target came from the journal and not from restart time.
+  forceReleaseDaemonLock(dataDir);
+  const resumedBuilds = { calls: 0 };
+  const daemon3 = new Daemon(
+    makeCeilingDeps(midnightMs + 60_000, { ...neverCalledStageFns(), build: spendingBuild(null, resumedBuilds) })
+  );
+  await daemon3.start();
+  await waitFor(() => resumedBuilds.calls > 0);
+  await daemon3.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const byKind = journal.fold().byKind;
+    expect((byKind["budget.resumed"] ?? []).length).toBe(1);
+    // The interrupted stage retried as a fresh attempt rather than resuming a
+    // severed one (B-3), and the new UTC day starts its floor at nothing.
+    expect(resumedBuilds.calls).toBeGreaterThanOrEqual(1);
+    expect(verifyChain(dataDir).ok).toBe(true);
+  } finally {
+    journal.close();
+  }
+}, 15_000);

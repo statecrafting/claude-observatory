@@ -67,12 +67,21 @@ import {
   removeProject,
   requalifyProject,
   setProjectArmed,
+  setProjectCeiling,
   setProjectProfile,
   type Project,
   type ProjectProbe,
   type ProjectSource,
   type RecordedQualification,
 } from "../orchestrator/projects";
+import {
+  ceilingOf,
+  ceilingRefusal,
+  renderBudget,
+  renderBudgetStop,
+  renderCeiling,
+  type CostCeiling,
+} from "../orchestrator/budget";
 import {
   DEFAULT_REGISTRATION_PROFILE,
   GUARDED_BASELINE_ALLOWED_TOOLS,
@@ -127,6 +136,7 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   projects add <path>          register a project [--name <slug>] [--disarmed]
   projects arm|disarm <name>   let the scheduler drive it, or hold it back
   projects profile <name> <mode>  set the execution posture: bypass | guarded
+  projects ceiling <name>      spend limits: --per-run/--per-day <usd>, or "none"
   projects requalify <name>    re-run the preflight and journal the verdict
   projects remove <name>       drop it from the registry (a tombstone)
   dag                          every spec with readiness, blockers, drift
@@ -153,6 +163,8 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   --profile <mode>             posture for projects add: bypass | guarded
   --allow <tools>              comma-separated allowlist for a guarded posture
   --deny <tools>               comma-separated disallowlist for a guarded posture
+  --per-run <usd>              cost ceiling for one run (projects ceiling)
+  --per-day <usd>              cost ceiling for one UTC day (projects ceiling)
   --repo <dir>                 target repository (daemon run|start only)
 
 exit: 0 ok, 1 operational failure, 2 unreachable daemon, 3 usage`;
@@ -253,6 +265,9 @@ interface ParsedArgs {
   readonly profile: string | null;
   readonly allow: string | null;
   readonly deny: string | null;
+  // 033 B-1's spend limits, in dollars as typed (see `ceilingFromFlags`).
+  readonly perRun: string | null;
+  readonly perDay: string | null;
   // 031 B-4's journal flags: where export writes, and which bundle verify reads.
   readonly out: string | null;
   readonly bundle: string | null;
@@ -277,6 +292,8 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let profile: string | null = null;
   let allow: string | null = null;
   let deny: string | null = null;
+  let perRun: string | null = null;
+  let perDay: string | null = null;
   let out: string | null = null;
   let bundle: string | null = null;
   const rest: string[] = [];
@@ -308,6 +325,12 @@ function parseArgs(argv: readonly string[]): ParseResult {
     },
     "--deny": (v) => {
       deny = v;
+    },
+    "--per-run": (v) => {
+      perRun = v;
+    },
+    "--per-day": (v) => {
+      perDay = v;
     },
     "--out": (v) => {
       out = v;
@@ -344,7 +367,10 @@ function parseArgs(argv: readonly string[]): ParseResult {
     rest.push(arg);
   }
 
-  return { ok: true, args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, out, bundle, rest } };
+  return {
+    ok: true,
+    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, rest },
+  };
 }
 
 // The extra flags each command accepts. 023 D-6 refuses an unknown flag
@@ -373,6 +399,9 @@ const PROJECTS_ADD_FLAGS: readonly string[] = ["--name", "--disarmed", "--profil
 // list flags belong to it; `--profile` is registration's way of saying the
 // same thing and is refused here rather than silently outranked.
 const PROJECTS_PROFILE_FLAGS: readonly string[] = ["--allow", "--deny"];
+// 033 B-1: the ceiling verb's two limits. Neither belongs to any other verb,
+// and the posture flags do not belong to this one.
+const PROJECTS_CEILING_FLAGS: readonly string[] = ["--per-run", "--per-day"];
 // 031 B-4: `journal export` takes its own flag set, exactly as `projects add`
 // does; `--dir` and `--bundle` belong to verify alone and are refused here.
 const JOURNAL_EXPORT_FLAGS: readonly string[] = ["--project", "--out"];
@@ -382,6 +411,7 @@ const JOURNAL_EXPORT_FLAGS: readonly string[] = ["--project", "--out"];
 function acceptedFlags(command: string, sub: string | undefined): readonly string[] | undefined {
   if (command === "projects" && sub === "add") return PROJECTS_ADD_FLAGS;
   if (command === "projects" && sub === "profile") return PROJECTS_PROFILE_FLAGS;
+  if (command === "projects" && sub === "ceiling") return PROJECTS_CEILING_FLAGS;
   if (command === "journal" && sub === "export") return JOURNAL_EXPORT_FLAGS;
   return Object.hasOwn(EXTRA_FLAGS, command) ? EXTRA_FLAGS[command] : undefined;
 }
@@ -395,6 +425,8 @@ function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null
     args.profile !== null ? "--profile" : null,
     args.allow !== null ? "--allow" : null,
     args.deny !== null ? "--deny" : null,
+    args.perRun !== null ? "--per-run" : null,
+    args.perDay !== null ? "--per-day" : null,
     args.out !== null ? "--out" : null,
     args.bundle !== null ? "--bundle" : null,
   ].filter((flag): flag is string => flag !== null);
@@ -541,7 +573,12 @@ function projectRunCell(view: ProjectView): string {
   if (view.run === null) return "no run yet";
   const spec = view.spec === null ? "" : `  ${view.spec.specId}`;
   const stage = view.stage === null ? "" : `/${view.stage.stage}`;
-  return `${view.run.status}${spec}${stage}${view.run.needsReconcile ? "  (needs reconcile)" : ""}`;
+  // 033 B-7: a tripped ceiling names itself here. "parked" and "paused" are
+  // each reached for more than one reason now, and an operator scanning the
+  // list has to be able to tell a quota horizon from a spend limit without
+  // opening the project.
+  const budget = view.budget.stop === null ? "" : `  (${view.budget.stop.reason})`;
+  return `${view.run.status}${budget}${spec}${stage}${view.run.needsReconcile ? "  (needs reconcile)" : ""}`;
 }
 
 // B-1's one row per project, shared by the `projects` list, the composite
@@ -580,6 +617,11 @@ function renderProjectDetail(view: ProjectView): string[] {
     lines.push(`         allowed${origin}: ${allowed.join(", ")}`);
     if (profile.disallowedTools?.length) lines.push(`         denied: ${profile.disallowedTools.join(", ")}`);
   }
+  // 033 B-7: the ceiling and the spend evaluated against it, on the surface an
+  // operator reads before deciding anything. Both floors are named even when
+  // there is no ceiling, because "what has this cost so far" is the question
+  // that makes someone set one.
+  lines.push(...renderBudget(view.budget));
   return lines;
 }
 
@@ -790,6 +832,37 @@ function renderEconomics(view: ServedEconomicsView): string[] {
   return lines;
 }
 
+// 033 B-7: the ceiling above the spend it governs. Economics is 030's fold of
+// the journal; a ceiling is registry state on the projects payload, so this
+// verb reads both surfaces and renders them together rather than growing
+// 030's payload a field its own scope line puts outside it. A registry read
+// that failed says so: the numbers below are still true, and an absent
+// ceiling line would read as "no ceiling" when the truth is "not known".
+async function economicsCeilingLines(client: ApiClient, name: string): Promise<readonly string[]> {
+  const rows = await client.projects();
+  if (!rows.ok) return [`ceiling: unknown (${rows.error.kind}: ${rows.error.message})`, ""];
+  const view = rows.data.projects.find((row) => row.name === name);
+  if (view === undefined) return [`ceiling: unknown ("${name}" is not in the registry)`, ""];
+  return [...renderBudget(view.budget), ""];
+}
+
+async function cmdEconomics(
+  deps: OrchestratorCliDeps,
+  client: ApiClient,
+  url: string,
+  json: boolean,
+  name: string
+): Promise<number> {
+  const economics = await fetchEconomics(url, name);
+  // `--json` prints the envelope the daemon served, verbatim (023 B-3). The
+  // ceiling already has a served shape of its own on /api/projects, and two
+  // payloads claiming the same fact is exactly the drift the shared contract
+  // exists to prevent.
+  if (json || !economics.ok) return respond(deps, json, economics, renderEconomics);
+  const ceiling = await economicsCeilingLines(client, name);
+  return respond(deps, false, economics, (view) => [...ceiling, ...renderEconomics(view)]);
+}
+
 // Spec 030 B-4: the one economics read. The typed client (api-client.ts)
 // belongs to specs 022/027 and is outside 030's declared territory, so this
 // verb fetches its single route directly, under the same discipline the
@@ -970,6 +1043,60 @@ function profileFromFlags(mode: string | null, allow: string | null, deny: strin
   return refusal === null ? { ok: true, profile } : { ok: false, reason: refusal };
 }
 
+// 033 B-1's limits as an operator types them. The journal's unit is micro-USD
+// and stays micro-USD on the wire, but a terminal asks for dollars, because
+// "5" is a spend limit a person can check at a glance and "5000000" is one
+// they can be off by a factor of ten on without noticing. The conversion is
+// exact: anything finer than a micro-dollar is refused rather than rounded,
+// since silently rounding a limit down would enforce something the operator
+// did not ask for and rounding it up would permit it.
+type CeilingFromFlags =
+  | { readonly ok: true; readonly ceiling: CostCeiling | null }
+  | { readonly ok: false; readonly reason: string };
+
+function microUsdFromDollars(flag: string, value: string): number | string {
+  const trimmed = value.trim();
+  // Number("") is 0 and Number(" ") is 0; a limit of zero is a real thing to
+  // set, so an empty flag must not become one by accident.
+  if (trimmed.length === 0) return `${flag} needs a dollar amount`;
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    return `${flag} expects a non-negative dollar amount, got "${value}"`;
+  }
+  const micro = Number(trimmed) * 1e6;
+  if (!Number.isFinite(micro)) return `${flag} is too large to express in micro-USD`;
+  // Decimal-to-binary conversion leaves the odd $0.07 style value a hair off a
+  // whole micro-dollar; rounding to the nearest one is exact for every amount
+  // with six or fewer decimal places, and the digit check below is what
+  // refuses the ones that have more.
+  if (/\.\d{7,}$/.test(trimmed)) return `${flag} is finer than one micro-USD, got "${value}"`;
+  return Math.round(micro);
+}
+
+function ceilingFromFlags(perRun: string | null, perDay: string | null, clear: boolean): CeilingFromFlags {
+  if (clear) {
+    if (perRun !== null || perDay !== null) {
+      return { ok: false, reason: `"none" clears the ceiling; it takes no --per-run or --per-day` };
+    }
+    return { ok: true, ceiling: null };
+  }
+  if (perRun === null && perDay === null) {
+    return { ok: false, reason: `projects ceiling needs --per-run <usd>, --per-day <usd>, or "none" to clear` };
+  }
+  const limits: { perRunMicroUsd?: number; perDayMicroUsd?: number } = {};
+  for (const [flag, value, field] of [
+    ["--per-run", perRun, "perRunMicroUsd"],
+    ["--per-day", perDay, "perDayMicroUsd"],
+  ] as const) {
+    if (value === null) continue;
+    const micro = microUsdFromDollars(flag, value);
+    if (typeof micro === "string") return { ok: false, reason: micro };
+    limits[field] = micro;
+  }
+  const ceiling = ceilingOf(limits);
+  const refusal = ceilingRefusal(ceiling);
+  return refusal === null ? { ok: true, ceiling } : { ok: false, reason: refusal };
+}
+
 // What `projects add --disarmed` prints under `--json` (D-1): the two served
 // payloads, because registering disarmed is two controls against a v2
 // registration route that has no armed field of its own.
@@ -1063,9 +1190,31 @@ async function cmdProjects(
     return respond(deps, args.json, await client.setProjectProfile(name, profile), renderProjectControl);
   }
 
+  // 033 B-1's one write verb. The whole ceiling travels, so naming only
+  // `--per-day` sets a day limit and no run limit rather than patching the day
+  // limit into whatever run limit the chain already held: an operator reading
+  // the record back sees the limits the project is actually driven under.
+  // Clearing is the positional "none", because an absence of flags is how a
+  // typo reads and it must not be how "remove the limit" reads.
+  if (sub === "ceiling") {
+    const name = rest[1];
+    if (name === undefined) return usage(deps, "projects ceiling needs a project name");
+    const clear = rest[2];
+    if (clear !== undefined && clear !== "none") {
+      return usage(deps, `unexpected argument "${clear}" after projects ceiling (expected "none" or nothing)`);
+    }
+    if (rest.length > 3) return usage(deps, `unexpected argument "${rest[3]}" after projects ceiling`);
+    const limits = ceilingFromFlags(args.perRun, args.perDay, clear === "none");
+    if (!limits.ok) return usage(deps, limits.reason);
+    return respond(deps, args.json, await client.setProjectCeiling(name, limits.ceiling), renderProjectControl);
+  }
+
   const call = Object.hasOwn(PROJECT_REGISTRY_CALLS, sub) ? PROJECT_REGISTRY_CALLS[sub] : undefined;
   if (call === undefined) {
-    return usage(deps, `unknown projects subcommand "${sub}" (expected add, arm, disarm, profile, requalify, or remove)`);
+    return usage(
+      deps,
+      `unknown projects subcommand "${sub}" (expected add, arm, disarm, profile, ceiling, requalify, or remove)`
+    );
   }
   const name = rest[1];
   if (name === undefined) return usage(deps, `projects ${sub} needs a project name`);
@@ -1699,6 +1848,9 @@ function standbyProjects(standby: StandbyDaemon, probe: ProjectProbe): ProjectsT
     setProfile(name: string, profile: ExecutionProfile, source: ProjectSource): void {
       setProjectProfile({ chain: chain(), name, profile, source });
     },
+    setCeiling(name: string, ceiling: CostCeiling | null, source: ProjectSource): void {
+      setProjectCeiling({ chain: chain(), name, ceiling, source });
+    },
     requalify(name: string, source: ProjectSource): void {
       const project = live(name);
       requalifyProject({ chain: chain(), name, qualification: qualifyProject(probe, project.repoDir), source });
@@ -1760,6 +1912,12 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
         // process's life, so a profile read once here would mean a posture
         // an operator tightened did not apply until the daemon restarted.
         profile: () => standby.projects.get(project.name)?.profile ?? project.profile,
+        // 033 B-2: read at every spawn boundary for the same reason, and one
+        // more besides. A per-run trip pauses for an operator (B-4), and the
+        // act that releases it is usually raising this very ceiling; a value
+        // read once when the seams were built could not carry that release to
+        // the boundary that is waiting for it.
+        ceiling: () => standby.projects.get(project.name)?.ceiling ?? project.ceiling,
       }),
     // 021 B-6, D-19: SIGTERM severs the live session child; without this a
     // mid-build stop waits out the child's own 30-minute deadline.
@@ -1973,7 +2131,7 @@ async function dispatch(
       if (rest.length > 0) return usage(scoped, `unexpected argument "${rest[0]}" after economics`);
       const target = await project();
       if (!target.ok) return respond(scoped, args.json, target, () => []);
-      return respond(scoped, args.json, await fetchEconomics(url, target.data.name), renderEconomics);
+      return cmdEconomics(scoped, client, url, args.json, target.data.name);
     }
     case "start":
     case "pause":

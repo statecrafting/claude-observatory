@@ -28,6 +28,8 @@ import type { FoldedState, JournalHandle, JournalRecord, JsonValue, VerifyResult
 import { openJournal, verifyChain } from "./journal";
 import type { ExecutionProfile, RecordedProfile } from "./profile";
 import { DEFAULT_REGISTRATION_PROFILE, LEGACY_BYPASS_PROFILE, parseProfile, profilePayload } from "./profile";
+import type { CostCeiling } from "./budget";
+import { ceilingPayload, parseCeiling } from "./budget";
 
 // --- model (B-1) ------------------------------------------------------------
 
@@ -76,6 +78,11 @@ export interface Project {
   // chain with no profile record folds to bypass flagged legacy, which is
   // today's behavior with today's silence removed.
   readonly profile: RecordedProfile;
+  // The spend limits this project is driven under (spec 033 B-1), folded the
+  // same way. null is the honest absence: a chain with no ceiling record has
+  // no ceiling, and that project is driven exactly as it was before ceilings
+  // existed, so no default is invented for it here.
+  readonly ceiling: CostCeiling | null;
 }
 
 // Keyed by name, in registration order (a project re-registered after removal
@@ -91,7 +98,9 @@ export const PROJECTS_CHAIN_BASENAME = "projects";
 // surfaces (027, 028) render the journaled record itself back to the caller.
 // `profileSet` is spec 032 B-2's addition: posture is registry state, so it
 // arrives here as a sixth appended kind rather than as a field an operator
-// edits somewhere.
+// edits somewhere. `ceilingSet` is spec 033 B-1's, on the same reasoning: a
+// spend limit is operator-owned registry state, journaled with its source and
+// folded like `armed`, never a value edited in place.
 export const PROJECT_KINDS = {
   registered: "project.registered",
   armed: "project.armed",
@@ -99,6 +108,7 @@ export const PROJECT_KINDS = {
   requalified: "project.requalified",
   removed: "project.removed",
   profileSet: "project.profile.set",
+  ceilingSet: "project.ceiling.set",
 } as const;
 
 // The projects chain lives in the daemon home: projects.jsonl plus its own
@@ -245,6 +255,9 @@ export function foldProjects(records: readonly JournalRecord[]): ProjectsSnapsho
           // appended beside it does (032 B-2), so a registration read on its
           // own is legacy bypass and only a profile record moves it off that.
           profile: LEGACY_BYPASS_PROFILE,
+          // 033 B-1: likewise for the ceiling, except that its absence needs no
+          // legacy flag. No ceiling is a complete, current answer.
+          ceiling: null,
         });
         break;
       }
@@ -271,6 +284,13 @@ export function foldProjects(records: readonly JournalRecord[]): ProjectsSnapsho
         if (current) {
           projects.set(name, { ...current, profile: { ...parseProfile(o.profile, kind), legacy: false } });
         }
+        break;
+      }
+      case PROJECT_KINDS.ceilingSet: {
+        const o = asObject(record.payload, kind);
+        const name = asString(o, "name", kind);
+        const current = projects.get(name);
+        if (current) projects.set(name, { ...current, ceiling: parseCeiling(o.ceiling, kind) });
         break;
       }
       case PROJECT_KINDS.removed: {
@@ -327,6 +347,15 @@ export interface SetProjectProfileParams {
   readonly chain: JournalHandle;
   readonly name: string;
   readonly profile: ExecutionProfile;
+  readonly source: ProjectSource;
+}
+
+export interface SetProjectCeilingParams {
+  readonly chain: JournalHandle;
+  readonly name: string;
+  // null clears the ceiling. Clearing is a record that says so rather than an
+  // absence, so the chain carries who removed a spend limit and when.
+  readonly ceiling: CostCeiling | null;
   readonly source: ProjectSource;
 }
 
@@ -410,6 +439,21 @@ export function setProjectProfile(params: SetProjectProfileParams): ProjectMutat
   const record = params.chain.append(PROJECT_KINDS.profileSet, {
     name: params.name,
     profile: profilePayload(params.profile),
+    source: params.source,
+  });
+  return mutationOf(params.chain, record, params.name);
+}
+
+// Sets (or, with a null ceiling, clears) the spend limits every run against
+// this project is evaluated at (033 B-1). Appended like arm and disarm, and
+// for the same reason: the chain records what was asked and by whom, which is
+// the only thing that makes a raised ceiling auditable against the run it
+// released.
+export function setProjectCeiling(params: SetProjectCeilingParams): ProjectMutation {
+  requireLive(params.chain, params.name);
+  const record = params.chain.append(PROJECT_KINDS.ceilingSet, {
+    name: params.name,
+    ceiling: ceilingPayload(params.ceiling),
     source: params.source,
   });
   return mutationOf(params.chain, record, params.name);

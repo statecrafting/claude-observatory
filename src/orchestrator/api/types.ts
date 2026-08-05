@@ -20,6 +20,7 @@ import type { ShippedSource } from "../dag";
 import type { DecisionRecord } from "../decisions";
 import type { RecordedQualification } from "../projects";
 import type { ExecutionProfile, RecordedProfile } from "../profile";
+import type { CostCeiling, ProjectBudgetView } from "../budget";
 
 // --- version (B-1) ----------------------------------------------------------
 
@@ -88,6 +89,9 @@ export const PROJECT_ROUTES = {
   requalify: "requalify",
   remove: "remove",
   profile: "profile",
+  // 033 B-1: the one write verb a cost ceiling needs. Setting and clearing are
+  // the same route; the body says which.
+  ceiling: "ceiling",
   runStart: "run/start",
   runPause: "run/pause",
   runResume: "run/resume",
@@ -110,7 +114,7 @@ export type SpecControlVerb = (typeof SPEC_CONTROL_VERBS)[number];
 
 export type ControlVerbToken = "start" | "pause" | "resume" | SpecControlVerb;
 
-export const PROJECT_CONTROL_VERBS = ["register", "arm", "disarm", "requalify", "remove", "profile"] as const;
+export const PROJECT_CONTROL_VERBS = ["register", "arm", "disarm", "requalify", "remove", "profile", "ceiling"] as const;
 export type ProjectControlVerb = (typeof PROJECT_CONTROL_VERBS)[number];
 
 // --- /api/meta (B-4) --------------------------------------------------------
@@ -201,6 +205,11 @@ export interface ProjectView {
   // under, never omitted. `legacy` distinguishes a bypass derived from a
   // chain that has no profile record from one an operator chose.
   readonly profile: RecordedProfile;
+  // 033 B-7: the spend limits this project is driven under and the journaled
+  // floor evaluated against them, on the same row the operator already reads.
+  // Never omitted: a project with no ceiling says so (FR-004), which is a
+  // different fact from a ceiling of zero.
+  readonly budget: ProjectBudgetView;
   // null when this project has no run yet, or when `readError` says its state
   // root could not be read. Never a fabricated idle run (022 B-6).
   readonly run: RunSummary | null;
@@ -229,6 +238,14 @@ export interface RegisterProjectRequest {
 // posture is one journaled decision rather than a set of fields to nudge.
 export interface SetProjectProfileRequest {
   readonly profile: ExecutionProfile;
+}
+
+// The body of 033 B-1's write verb (POST /api/projects/<name>/ceiling): the
+// whole ceiling, never a patch, for the same reason a profile travels whole. A
+// null ceiling clears it, which is a decision the chain records rather than an
+// absence it has to infer.
+export interface SetProjectCeilingRequest {
+  readonly ceiling: CostCeiling | null;
 }
 
 // The answer to a registry control (B-2): spec 022 D-2's pattern applied to

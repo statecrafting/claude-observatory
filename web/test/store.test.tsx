@@ -27,7 +27,7 @@ import type {
   QuotaView,
   RunView,
 } from "../src/api";
-import { FIXTURE_QUOTA } from "./fixtures";
+import { FIXTURE_NO_CEILING, FIXTURE_QUOTA } from "./fixtures";
 
 useDom();
 
@@ -45,6 +45,7 @@ function projectRow(name: string): ProjectView {
     armed: true,
     qualification: { qualified: true, checks: [], warnings: [], checkedAt: "2026-08-01T00:00:00.000Z" },
     profile: { mode: "bypass", legacy: false },
+    budget: FIXTURE_NO_CEILING,
     run: null,
     spec: null,
     stage: null,
@@ -143,6 +144,7 @@ function gatedClient(): { client: ApiClient; release(name: string): void } {
     disarmProject: registryAnswer,
     requalifyProject: registryAnswer,
     removeProject: registryAnswer,
+    setProjectCeiling: registryAnswer,
     setProjectProfile: registryAnswer,
     project: scoped,
   };

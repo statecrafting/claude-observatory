@@ -189,6 +189,22 @@ export const FIXTURE_DECISIONS: DecisionsView = {
   ],
 };
 
+// 033 B-7: every served row carries the project's ceiling and the spend
+// evaluated against it, so every fixture row does too. The default is the
+// ordinary case: no ceiling set, on a journal that reported what it spent.
+// A test about enforcement overrides the one field it is about.
+export const FIXTURE_NO_CEILING: ProjectView["budget"] = {
+  ceiling: null,
+  runId: null,
+  utcDay: "2026-08-01",
+  run: { knownMicroUsd: 0, costKnownSessions: 0, costUnknownSessions: 0 },
+  day: { knownMicroUsd: 0, costKnownSessions: 0, costUnknownSessions: 0 },
+  over: null,
+  warnPorousFloor: false,
+  stop: null,
+  spendError: null,
+};
+
 export const FIXTURE_PROJECT_VIEW: ProjectView = {
   name: FIXTURE_PROJECT,
   repoDir: "/repo",
@@ -203,6 +219,7 @@ export const FIXTURE_PROJECT_VIEW: ProjectView = {
   // too. An operator-set bypass here, because the legacy variant is a
   // distinct rendering a test should have to ask for.
   profile: { mode: "bypass", legacy: false },
+  budget: FIXTURE_NO_CEILING,
   run: FIXTURE_RUN.run,
   spec: FIXTURE_RUN.spec,
   stage: FIXTURE_RUN.stage,
@@ -228,6 +245,7 @@ export function fixtureProjectView(name: string, overrides: Partial<ProjectView>
       checkedAt: "2026-08-01T09:00:00.000Z",
     },
     profile: { mode: "bypass", legacy: false },
+    budget: FIXTURE_NO_CEILING,
     run: null,
     spec: null,
     stage: null,
@@ -378,6 +396,7 @@ const REGISTRY_KIND: Readonly<Record<ProjectControlVerb, string>> = {
   requalify: "project.requalified",
   remove: "project.removed",
   profile: "project.profile.set",
+  ceiling: "project.ceiling.set",
 };
 
 export function registryAnswerFor(verb: ProjectControlVerb, name: string | null, seq: number = 12): ProjectControlResult {
@@ -465,6 +484,7 @@ export function fixtureApiClient(options: FixtureClientOptions = {}): FixtureCli
     requalifyProject: (name) => registryAnswer("requalify", name),
     removeProject: (name) => registryAnswer("remove", name),
     setProjectProfile: (name) => registryAnswer("profile", name),
+    setProjectCeiling: (name) => registryAnswer("ceiling", name),
     project: (name) => projectClient(name, calls, options),
   };
 }
