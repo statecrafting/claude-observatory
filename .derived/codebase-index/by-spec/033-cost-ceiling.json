@@ -1,18 +1,18 @@
 {
   "diagnostics": {
-    "errors": [],
-    "warnings": [
+    "errors": [
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '033-cost-ceiling' file unit 'src/orchestrator/budget.ts' does not exist",
         "path": "src/orchestrator/budget.ts"
       },
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '033-cost-ceiling' file unit 'src/orchestrator/budget.test.ts' does not exist",
         "path": "src/orchestrator/budget.test.ts"
       }
-    ]
+    ],
+    "warnings": []
   },
   "mapping": {
     "dependsOn": [
@@ -166,5 +166,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "9eb271cc9a22d01689e6ecb3da04b8801c1f8d70e88fa85f954c4d47c8d6ec68"
+  "shardHash": "dfa98488325ab86145aca0acd5b2953ac62549bb0515b992a6f75fb77cbed3ef"
 }
