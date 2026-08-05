@@ -20,6 +20,8 @@ import { createProcessSpecFileAtShaReader, loadRegistrySnapshot } from "../dag";
 import type { RunStatus } from "../state";
 import type { Project, ProjectSource, ProjectsSnapshot } from "../projects";
 import { isValidProjectName } from "../projects";
+import type { ExecutionProfile } from "../profile";
+import { parseProfile, profileRefusal } from "../profile";
 import {
   EventHub,
   SSE_HEADERS,
@@ -150,8 +152,11 @@ export interface ProjectsTarget {
   // Throws when the project's state root cannot be resolved; the route
   // reports that rather than serving an empty success.
   resourcesFor(project: Project): ProjectApi;
-  register(path: string, name: string | undefined, source: ProjectSource): void;
+  register(path: string, name: string | undefined, profile: ExecutionProfile | undefined, source: ProjectSource): void;
   setArmed(name: string, armed: boolean, source: ProjectSource): void;
+  // 032 B-2: the second consent, as its own journaled mutation. Arming says
+  // this project may be driven; this says what a drive is allowed to do.
+  setProfile(name: string, profile: ExecutionProfile, source: ProjectSource): void;
   requalify(name: string, source: ProjectSource): void;
   remove(name: string, source: ProjectSource): void;
 }
@@ -539,6 +544,23 @@ function runRegistryControl(
   return ok(result);
 }
 
+// A profile from a request body: absent is absent (the caller said nothing
+// about posture), malformed or unrecordable is a refusal with the reason,
+// never a quietly substituted default. 032 B-2 makes posture a chosen,
+// journaled fact; guessing one here would put a guess in the chain.
+function profileFromBody(body: JsonBody | null, field: string): ExecutionProfile | Response | null {
+  const value = body?.[field];
+  if (value === undefined || value === null) return null;
+  let profile: ExecutionProfile;
+  try {
+    profile = parseProfile(value, `"${field}"`);
+  } catch (err) {
+    return fail("bad-request", (err as Error).message);
+  }
+  const refusal = profileRefusal(profile);
+  return refusal === null ? profile : fail("bad-request", refusal);
+}
+
 function handleRegister(deps: ApiDeps, body: JsonBody | null, source: string): Response {
   const path = stringFromBody(body, "path");
   if (path === null) {
@@ -548,8 +570,10 @@ function handleRegister(deps: ApiDeps, body: JsonBody | null, source: string): R
   if (name !== null && !isValidProjectName(name)) {
     return fail("bad-request", `"${name}" is not a valid project name (lowercase slug, [a-z0-9][a-z0-9-]*)`);
   }
+  const profile = profileFromBody(body, "profile");
+  if (isResponse(profile)) return profile;
   return runRegistryControl(deps, "register", name, () =>
-    deps.projects.register(path, name ?? undefined, projectSourceOf(source))
+    deps.projects.register(path, name ?? undefined, profile ?? undefined, projectSourceOf(source))
   );
 }
 
@@ -688,6 +712,7 @@ const REGISTRY_VERB_FOR_ROUTE: Readonly<Record<string, ProjectControlVerb | unde
   [PROJECT_ROUTES.disarm]: "disarm",
   [PROJECT_ROUTES.requalify]: "requalify",
   [PROJECT_ROUTES.remove]: "remove",
+  [PROJECT_ROUTES.profile]: "profile",
 };
 
 // A fresh Response every time: a body can only be consumed once, so a shared
@@ -777,7 +802,7 @@ function scopeTo(deps: ApiDeps, name: string): Scoped | Response {
   return { name, project, api };
 }
 
-function isResponse(value: Scoped | Response): value is Response {
+function isResponse(value: unknown): value is Response {
   return value instanceof Response;
 }
 
@@ -815,7 +840,22 @@ async function routeProject(
     if (guard) return guard;
     if (!isValidProjectName(name)) return fail("bad-request", `"${name}" is not a valid project name`);
     if (!deps.projects.projects().has(name)) return fail("not-found", `no registered project named "${name}"`);
-    const source = projectSourceOf(controlSourceFrom(request, await readJsonBody(request)));
+    const body = await readJsonBody(request);
+    const source = projectSourceOf(controlSourceFrom(request, body));
+    // The one registry verb that carries state of its own (032 B-2): the
+    // whole profile, refused before anything is appended when it is not a
+    // posture this daemon can honor.
+    if (registryVerb === "profile") {
+      const profile = profileFromBody(body, "profile");
+      if (isResponse(profile)) return profile;
+      if (profile === null) {
+        return fail(
+          "bad-request",
+          `POST ${path} expects a JSON body with a "profile" object ({mode, allowedTools?, disallowedTools?})`
+        );
+      }
+      return runRegistryControl(deps, registryVerb, name, () => deps.projects.setProfile(name, profile, source));
+    }
     return runRegistryControl(deps, registryVerb, name, () => {
       switch (registryVerb) {
         case "arm":

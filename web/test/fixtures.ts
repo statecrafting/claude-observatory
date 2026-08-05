@@ -199,6 +199,10 @@ export const FIXTURE_PROJECT_VIEW: ProjectView = {
     warnings: [],
     checkedAt: "2026-07-30T10:00:00.000Z",
   },
+  // 032 B-6: the served row always carries a posture, so the fixture does
+  // too. An operator-set bypass here, because the legacy variant is a
+  // distinct rendering a test should have to ask for.
+  profile: { mode: "bypass", legacy: false },
   run: FIXTURE_RUN.run,
   spec: FIXTURE_RUN.spec,
   stage: FIXTURE_RUN.stage,
@@ -223,6 +227,7 @@ export function fixtureProjectView(name: string, overrides: Partial<ProjectView>
       warnings: [],
       checkedAt: "2026-08-01T09:00:00.000Z",
     },
+    profile: { mode: "bypass", legacy: false },
     run: null,
     spec: null,
     stage: null,
@@ -372,6 +377,7 @@ const REGISTRY_KIND: Readonly<Record<ProjectControlVerb, string>> = {
   disarm: "project.disarmed",
   requalify: "project.requalified",
   remove: "project.removed",
+  profile: "project.profile.set",
 };
 
 export function registryAnswerFor(verb: ProjectControlVerb, name: string | null, seq: number = 12): ProjectControlResult {
@@ -458,6 +464,7 @@ export function fixtureApiClient(options: FixtureClientOptions = {}): FixtureCli
     disarmProject: (name) => registryAnswer("disarm", name),
     requalifyProject: (name) => registryAnswer("requalify", name),
     removeProject: (name) => registryAnswer("remove", name),
+    setProjectProfile: (name) => registryAnswer("profile", name),
     project: (name) => projectClient(name, calls, options),
   };
 }

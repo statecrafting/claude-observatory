@@ -474,6 +474,9 @@ export function projectsView(rows: readonly ProjectRowInput[]): ProjectsView {
       repoDir: project.repoDir,
       armed: project.armed,
       qualification: project.qualification,
+      // 032 B-6: the posture travels with every row, on the read path that
+      // cannot fail, so no client ever renders a project without one.
+      profile: project.profile,
     };
     try {
       const view = runView(row.records(), project.name);

@@ -43,6 +43,7 @@ import {
   type RegisterProjectRequest,
   type RunView,
 } from "./types";
+import type { ExecutionProfile } from "../profile";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -91,6 +92,9 @@ export interface ApiClient {
   disarmProject(name: string): Promise<ApiResponse<ProjectControlResult>>;
   requalifyProject(name: string): Promise<ApiResponse<ProjectControlResult>>;
   removeProject(name: string): Promise<ApiResponse<ProjectControlResult>>;
+  // 032 B-2: sets the posture sessions driven against this project run
+  // under. The whole profile travels, never a patch.
+  setProjectProfile(name: string, profile: ExecutionProfile): Promise<ApiResponse<ProjectControlResult>>;
   project(name: string): ProjectClient;
 }
 
@@ -209,6 +213,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     disarmProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.disarm)),
     requalifyProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.requalify)),
     removeProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.remove)),
+    setProjectProfile: (name, profile) =>
+      post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.profile), { profile }),
     project: projectClient,
   };
 }

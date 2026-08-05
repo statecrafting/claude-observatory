@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '032-execution-profiles' file unit 'src/orchestrator/profile.ts' does not exist",
-        "path": "src/orchestrator/profile.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '032-execution-profiles' file unit 'src/orchestrator/profile.test.ts' does not exist",
-        "path": "src/orchestrator/profile.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "014-session-driver",
@@ -29,6 +14,18 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/orchestrator/api/api-client.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/api/fixtures.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/api/server.test.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/orchestrator/api/server.ts",
         "source": "spec-edge"
       },
@@ -37,7 +34,23 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/orchestrator/api/types.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/orchestrator/daemon.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/profile.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/profile.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/projects.test.ts",
         "source": "spec-edge"
       },
       {
@@ -47,11 +60,31 @@
       {
         "path": "src/orchestrator/session.ts",
         "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/stages/build.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/stages/verify.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "web/test/fixtures.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "web/test/store.test.tsx",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/profile.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -60,7 +93,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/profile.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -79,6 +116,45 @@
         "unit": {
           "kind": "file",
           "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/api/api-client.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/api-client.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/api/fixtures.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/fixtures.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/api/server.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/server.test.ts"
         }
       },
       {
@@ -110,6 +186,19 @@
       {
         "locations": [
           {
+            "file": "src/orchestrator/api/types.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/types.ts"
+        }
+      },
+      {
+        "locations": [
+          {
             "file": "src/orchestrator/daemon.ts"
           }
         ],
@@ -118,6 +207,19 @@
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/projects.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/projects.test.ts"
         }
       },
       {
@@ -149,6 +251,58 @@
       {
         "locations": [
           {
+            "file": "src/orchestrator/stages/build.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/build.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/verify.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/verify.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "web/test/fixtures.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/fixtures.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "web/test/store.test.tsx"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/store.test.tsx"
+        }
+      },
+      {
+        "locations": [
+          {
             "file": "docs/design/00-ecosystem-analysis.md"
           }
         ],
@@ -164,5 +318,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "ca6d4f3ea94be21ee292c07a16f3d2de04ff063049fdc3fbb167d94cd35e0309"
+  "shardHash": "14ea2efc09da77462be6f6dd3766feec87733fe710c84e8cbb814b70913ffaba"
 }

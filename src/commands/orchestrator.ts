@@ -67,11 +67,20 @@ import {
   removeProject,
   requalifyProject,
   setProjectArmed,
+  setProjectProfile,
   type Project,
   type ProjectProbe,
   type ProjectSource,
   type RecordedQualification,
 } from "../orchestrator/projects";
+import {
+  DEFAULT_REGISTRATION_PROFILE,
+  GUARDED_BASELINE_ALLOWED_TOOLS,
+  isExecutionMode,
+  profileRefusal,
+  renderProfile,
+  type ExecutionProfile,
+} from "../orchestrator/profile";
 import { API_VERSION, API_VERSION_HEADER, projectRoute } from "../orchestrator/api/types";
 import { ECONOMICS_ROUTE, type RunEconomics, type SpecEconomics } from "../orchestrator/economics";
 import type { ServedEconomicsView } from "../orchestrator/api/state";
@@ -114,9 +123,10 @@ function exitCodeFor(kind: ApiErrorKind): number {
 export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--json] [--url <base>]
 
   status                       daemon state, quota, and one row per project
-  projects                     the registry: name, armed, qualification, run
+  projects                     the registry: name, armed, posture, qualification, run
   projects add <path>          register a project [--name <slug>] [--disarmed]
   projects arm|disarm <name>   let the scheduler drive it, or hold it back
+  projects profile <name> <mode>  set the execution posture: bypass | guarded
   projects requalify <name>    re-run the preflight and journal the verdict
   projects remove <name>       drop it from the registry (a tombstone)
   dag                          every spec with readiness, blockers, drift
@@ -140,6 +150,9 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   --out <path>                 where journal export writes its bundle file
   --name <slug>                project name for projects add
   --disarmed                   register disarmed (projects add)
+  --profile <mode>             posture for projects add: bypass | guarded
+  --allow <tools>              comma-separated allowlist for a guarded posture
+  --deny <tools>               comma-separated disallowlist for a guarded posture
   --repo <dir>                 target repository (daemon run|start only)
 
 exit: 0 ok, 1 operational failure, 2 unreachable daemon, 3 usage`;
@@ -235,6 +248,11 @@ interface ParsedArgs {
   readonly dir: string | null;
   readonly name: string | null;
   readonly disarmed: boolean;
+  // 032's posture flags: the mode a registration consents to, and the two
+  // tool lists a guarded one may carry.
+  readonly profile: string | null;
+  readonly allow: string | null;
+  readonly deny: string | null;
   // 031 B-4's journal flags: where export writes, and which bundle verify reads.
   readonly out: string | null;
   readonly bundle: string | null;
@@ -256,6 +274,9 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let project: string | null = null;
   let dir: string | null = null;
   let name: string | null = null;
+  let profile: string | null = null;
+  let allow: string | null = null;
+  let deny: string | null = null;
   let out: string | null = null;
   let bundle: string | null = null;
   const rest: string[] = [];
@@ -278,6 +299,15 @@ function parseArgs(argv: readonly string[]): ParseResult {
     },
     "--name": (v) => {
       name = v;
+    },
+    "--profile": (v) => {
+      profile = v;
+    },
+    "--allow": (v) => {
+      allow = v;
+    },
+    "--deny": (v) => {
+      deny = v;
     },
     "--out": (v) => {
       out = v;
@@ -314,7 +344,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
     rest.push(arg);
   }
 
-  return { ok: true, args: { json, url, dataDir, repoDir, project, dir, name, disarmed, out, bundle, rest } };
+  return { ok: true, args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, out, bundle, rest } };
 }
 
 // The extra flags each command accepts. 023 D-6 refuses an unknown flag
@@ -338,10 +368,23 @@ const EXTRA_FLAGS: Readonly<Record<string, readonly string[] | undefined>> = {
   daemon: [],
 };
 
-const PROJECTS_ADD_FLAGS: readonly string[] = ["--name", "--disarmed"];
+const PROJECTS_ADD_FLAGS: readonly string[] = ["--name", "--disarmed", "--profile", "--allow", "--deny"];
+// 032 B-2: the posture verb takes its mode as a positional, so only the two
+// list flags belong to it; `--profile` is registration's way of saying the
+// same thing and is refused here rather than silently outranked.
+const PROJECTS_PROFILE_FLAGS: readonly string[] = ["--allow", "--deny"];
 // 031 B-4: `journal export` takes its own flag set, exactly as `projects add`
 // does; `--dir` and `--bundle` belong to verify alone and are refused here.
 const JOURNAL_EXPORT_FLAGS: readonly string[] = ["--project", "--out"];
+
+// The flags a command accepts, subcommand included: three of them carry flag
+// sets of their own, and everything else takes the group's.
+function acceptedFlags(command: string, sub: string | undefined): readonly string[] | undefined {
+  if (command === "projects" && sub === "add") return PROJECTS_ADD_FLAGS;
+  if (command === "projects" && sub === "profile") return PROJECTS_PROFILE_FLAGS;
+  if (command === "journal" && sub === "export") return JOURNAL_EXPORT_FLAGS;
+  return Object.hasOwn(EXTRA_FLAGS, command) ? EXTRA_FLAGS[command] : undefined;
+}
 
 function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null {
   const present = [
@@ -349,6 +392,9 @@ function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null
     args.dir !== null ? "--dir" : null,
     args.name !== null ? "--name" : null,
     args.disarmed ? "--disarmed" : null,
+    args.profile !== null ? "--profile" : null,
+    args.allow !== null ? "--allow" : null,
+    args.deny !== null ? "--deny" : null,
     args.out !== null ? "--out" : null,
     args.bundle !== null ? "--bundle" : null,
   ].filter((flag): flag is string => flag !== null);
@@ -500,13 +546,41 @@ function projectRunCell(view: ProjectView): string {
 
 // B-1's one row per project, shared by the `projects` list, the composite
 // `status`, and the snapshot a registry control returns.
+// 032 B-6: the posture appears wherever the project does, and a legacy-derived
+// bypass reads differently from one an operator chose. Never blank: the fold
+// always produces a profile, so a missing column would be this surface's
+// omission rather than the registry's.
 function renderProjectRows(projects: readonly ProjectView[]): string[] {
   if (projects.length === 0) return ["no projects are registered with this daemon"];
   const nameWidth = projects.reduce((max, view) => Math.max(max, view.name.length), 0);
+  const postureWidth = projects.reduce((max, view) => Math.max(max, renderProfile(view.profile).length), 0);
   return projects.map((view) =>
     `${view.name.padEnd(nameWidth)}  ${(view.armed ? "armed" : "disarmed").padEnd(8)}  ` +
+    `${renderProfile(view.profile).padEnd(postureWidth)}  ` +
     `${qualificationCell(view.qualification).padEnd(11)}  ${projectRunCell(view)}`.trimEnd()
   );
+}
+
+// The project detail an operator reads before deciding anything (B-6): the
+// row, then the posture spelled out in full, because "guarded (9 baseline
+// tools)" is a summary and an allowlist is a thing you check item by item.
+function renderProjectDetail(view: ProjectView): string[] {
+  const lines = [...renderProjectRows([view])];
+  const profile = view.profile;
+  lines.push(`posture: ${renderProfile(profile)}`);
+  if (profile.mode === "bypass") {
+    lines.push(
+      profile.legacy
+        ? "         no profile record on the chain; sessions skip permissions (pre-032 default)"
+        : "         sessions skip permissions entirely"
+    );
+  } else {
+    const allowed = profile.allowedTools ?? GUARDED_BASELINE_ALLOWED_TOOLS;
+    const origin = profile.allowedTools === undefined ? " (guarded baseline)" : "";
+    lines.push(`         allowed${origin}: ${allowed.join(", ")}`);
+    if (profile.disallowedTools?.length) lines.push(`         denied: ${profile.disallowedTools.join(", ")}`);
+  }
+  return lines;
 }
 
 function renderStatus(run: RunView, quota: QuotaView, nowMs: number): string[] {
@@ -763,7 +837,10 @@ function renderProjectControl(result: ProjectControlResult): string[] {
   if (!result.applied) return [`${result.verb} ${target}: no-op, nothing journaled`];
   const lines = [`${result.verb} ${target}: applied`];
   if (result.record !== null) lines.push(`journaled: seq ${result.record.seq}  ${result.record.kind}  ${result.record.ts}`);
-  if (result.snapshot !== null) lines.push(...renderProjectRows([result.snapshot]).map((line) => `  ${line}`));
+  // The detail rather than the row (032 B-6): a registration or a profile
+  // change is exactly the moment an operator needs the whole posture spelled
+  // out, not summarized.
+  if (result.snapshot !== null) lines.push(...renderProjectDetail(result.snapshot).map((line) => `  ${line}`));
   return lines;
 }
 
@@ -854,6 +931,45 @@ const PROJECT_REGISTRY_CALLS: Readonly<
   remove: (client, name) => client.removeProject(name),
 };
 
+// 032 B-2: a posture an operator typed, assembled into the profile that
+// travels to the registry, or the reason it is not one. A comma-separated
+// list is split and trimmed here so the wire carries the array the chain
+// stores; an empty entry is dropped rather than journaled as a tool named "".
+// Returns undefined when no posture was named at all, which registration
+// reads as D-1's default and the profile verb refuses outright.
+type ProfileFromFlags =
+  | { readonly ok: true; readonly profile: ExecutionProfile | undefined }
+  | { readonly ok: false; readonly reason: string };
+
+function toolList(value: string | null): readonly string[] | undefined {
+  if (value === null) return undefined;
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function profileFromFlags(mode: string | null, allow: string | null, deny: string | null): ProfileFromFlags {
+  if (mode === null) {
+    if (allow !== null || deny !== null) {
+      return { ok: false, reason: `--allow and --deny need a guarded posture; name one with --profile guarded` };
+    }
+    return { ok: true, profile: undefined };
+  }
+  if (!isExecutionMode(mode)) {
+    return { ok: false, reason: `"${mode}" is not an execution mode (expected bypass or guarded)` };
+  }
+  const allowed = toolList(allow);
+  const disallowed = toolList(deny);
+  const profile: ExecutionProfile = {
+    mode,
+    ...(allowed === undefined ? {} : { allowedTools: allowed }),
+    ...(disallowed === undefined ? {} : { disallowedTools: disallowed }),
+  };
+  const refusal = profileRefusal(profile);
+  return refusal === null ? { ok: true, profile } : { ok: false, reason: refusal };
+}
+
 // What `projects add --disarmed` prints under `--json` (D-1): the two served
 // payloads, because registering disarmed is two controls against a v2
 // registration route that has no armed field of its own.
@@ -868,13 +984,21 @@ async function cmdProjectsAdd(
   json: boolean,
   path: string,
   name: string | null,
-  disarmed: boolean
+  disarmed: boolean,
+  profile: ExecutionProfile | undefined
 ): Promise<number> {
   // D-2: the path is resolved against this shell's working directory before
   // it travels, because the registry stores an absolute path and the daemon's
   // own cwd is not the operator's.
   const absolute = resolve(path);
-  const registered = await client.registerProject({ path: absolute, ...(name === null ? {} : { name }) });
+  const registered = await client.registerProject({
+    path: absolute,
+    ...(name === null ? {} : { name }),
+    // 032 B-2: omitted is not "guarded by accident" and not silence either;
+    // the registry records D-1's bypass explicitly, and the output below
+    // says which posture landed.
+    ...(profile === undefined ? {} : { profile }),
+  });
   if (!registered.ok) return respond(deps, json, registered, renderProjectControl);
   if (!disarmed) return respond(deps, json, registered, renderProjectControl);
 
@@ -917,12 +1041,31 @@ async function cmdProjects(
       return usage(deps, "projects add needs a repository path");
     }
     if (rest.length > 2) return usage(deps, `unexpected argument "${rest[2]}" after projects add`);
-    return cmdProjectsAdd(deps, client, args.json, path, args.name, args.disarmed);
+    const posture = profileFromFlags(args.profile, args.allow, args.deny);
+    if (!posture.ok) return usage(deps, posture.reason);
+    return cmdProjectsAdd(deps, client, args.json, path, args.name, args.disarmed, posture.profile);
+  }
+
+  // 032 B-2's one write verb: the mode is a positional because it is the
+  // whole point of the command, and the whole profile travels rather than a
+  // patch, so what the chain records is what the operator typed.
+  if (sub === "profile") {
+    const name = rest[1];
+    if (name === undefined) return usage(deps, "projects profile needs a project name");
+    const mode = rest[2];
+    if (mode === undefined) return usage(deps, "projects profile needs a mode (bypass or guarded)");
+    if (rest.length > 3) return usage(deps, `unexpected argument "${rest[3]}" after projects profile`);
+    const posture = profileFromFlags(mode, args.allow, args.deny);
+    if (!posture.ok) return usage(deps, posture.reason);
+    // profileFromFlags only answers undefined for a null mode, which the
+    // check above has already refused.
+    const profile = posture.profile ?? DEFAULT_REGISTRATION_PROFILE;
+    return respond(deps, args.json, await client.setProjectProfile(name, profile), renderProjectControl);
   }
 
   const call = Object.hasOwn(PROJECT_REGISTRY_CALLS, sub) ? PROJECT_REGISTRY_CALLS[sub] : undefined;
   if (call === undefined) {
-    return usage(deps, `unknown projects subcommand "${sub}" (expected add, arm, disarm, requalify, or remove)`);
+    return usage(deps, `unknown projects subcommand "${sub}" (expected add, arm, disarm, profile, requalify, or remove)`);
   }
   const name = rest[1];
   if (name === undefined) return usage(deps, `projects ${sub} needs a project name`);
@@ -1540,17 +1683,21 @@ function standbyProjects(standby: StandbyDaemon, probe: ProjectProbe): ProjectsT
         wakeControls: () => standby.openForControl(project.name),
       };
     },
-    register(path: string, name: string | undefined, source: ProjectSource): void {
+    register(path: string, name: string | undefined, profile: ExecutionProfile | undefined, source: ProjectSource): void {
       registerProject({
         chain: chain(),
         repoDir: path,
         qualification: qualifyProject(probe, path),
         source,
         ...(name === undefined ? {} : { name }),
+        ...(profile === undefined ? {} : { profile }),
       });
     },
     setArmed(name: string, armed: boolean, source: ProjectSource): void {
       setProjectArmed({ chain: chain(), name, armed, source });
+    },
+    setProfile(name: string, profile: ExecutionProfile, source: ProjectSource): void {
+      setProjectProfile({ chain: chain(), name, profile, source });
     },
     requalify(name: string, source: ProjectSource): void {
       const project = live(name);
@@ -1595,7 +1742,9 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
   if (bind === null) return usage(deps, `--url ${url} is not a usable base url`);
 
   const probe = createProcessProjectProbe();
-  const standby = new StandbyDaemon({
+  // Annotated because `makeProjectDeps` reads the live registry back off this
+  // same daemon (032 B-4), which is a cycle the inferencer will not resolve.
+  const standby: StandbyDaemon = new StandbyDaemon({
     daemonHomeDir: deps.dataDir,
     // 010 D13: each project's state root lives inside that project, in
     // exactly this checkout's own layout; 026 B-6: the scheduler holds the
@@ -1605,6 +1754,12 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
         dataDir: projectStateRoot(project.repoDir),
         repoDir: project.repoDir,
         supervised: true,
+        // 032 B-4: every session this project's seams spawn runs under the
+        // posture the chain holds now, not the one it held when the seams
+        // were built. The scheduler caches a seam set per project for the
+        // process's life, so a profile read once here would mean a posture
+        // an operator tightened did not apply until the daemon restarted.
+        profile: () => standby.projects.get(project.name)?.profile ?? project.profile,
       }),
     // 021 B-6, D-19: SIGTERM severs the live session child; without this a
     // mid-build stop waits out the child's own 30-minute deadline.
@@ -1749,14 +1904,7 @@ async function dispatch(
   // EXTRA_FLAGS. A command that table does not name is an unknown command,
   // left to the switch below to report as one, so a typo does not come back
   // as a complaint about its flags.
-  const accepted =
-    command === "projects" && rest[0] === "add"
-      ? PROJECTS_ADD_FLAGS
-      : command === "journal" && rest[0] === "export"
-        ? JOURNAL_EXPORT_FLAGS
-        : Object.hasOwn(EXTRA_FLAGS, command)
-          ? EXTRA_FLAGS[command]
-          : undefined;
+  const accepted = acceptedFlags(command, rest[0]);
   if (accepted !== undefined) {
     const stray = strayFlag(args, accepted);
     if (stray !== null) return usage(scoped, `${stray} is not a flag of "${command}"`);

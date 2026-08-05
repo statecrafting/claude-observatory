@@ -341,9 +341,11 @@ test("POST /api/projects registers a target and answers with the chain's own rec
     expect(result.record?.payload).toMatchObject({ name: "gamma", repoDir: fresh.repoDir, armed: true, source: "cli" });
     expect(result.snapshot).toMatchObject({ name: "gamma", armed: true });
 
-    // The API appended nothing itself: exactly the one record the registry
-    // helper wrote is in the chain (022 D-2).
-    expect(registry.chain.fold().records.length).toBe(before + 1);
+    // The API appended nothing itself: exactly the records the registry
+    // helper wrote are in the chain (022 D-2), which since 032 B-2 is the
+    // registration plus the posture it consented to.
+    expect(registry.chain.fold().records.length).toBe(before + 2);
+    expect(registry.chain.fold().records.at(-1)?.kind).toBe("project.profile.set");
     expect(registry.projects().has("gamma")).toBe(true);
   });
 });

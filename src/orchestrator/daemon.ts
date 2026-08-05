@@ -57,6 +57,7 @@ import {
   statusSchedulable,
 } from "./dag";
 import { killLiveSession, runSession } from "./session";
+import type { ProfileSource } from "./profile";
 import type {
   BuildResult,
   ReadinessCheck,
@@ -285,11 +286,18 @@ export interface CreateProductionDaemonDepsParams {
   readonly ghBin?: string;
   // Set by spec 026's scheduler for a project's run; see DaemonDeps.supervised.
   readonly supervised?: boolean;
+  // 032 B-4: this project's execution posture, threaded into every seam that
+  // spawns a session (the Runner build, ship, and shepherd drive through,
+  // and the verify stage's browser verifier). Passed as a function by the
+  // scheduler's wiring so a profile set mid-flight reaches the next spawn
+  // rather than the next daemon; absent derives 032 D-1's default, which is
+  // the posture every session had before profiles existed.
+  readonly profile?: ProfileSource;
 }
 
 export function createProductionDaemonDeps(params: CreateProductionDaemonDepsParams): DaemonDeps {
-  const { dataDir, repoDir, claudeBin, ghBin } = params;
-  const runner = createProcessRunner({ repoDir, claudeBin });
+  const { dataDir, repoDir, claudeBin, ghBin, profile } = params;
+  const runner = createProcessRunner({ repoDir, claudeBin, profile });
   return {
     dataDir,
     repoDir,
@@ -329,7 +337,7 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
     },
     gh: createProcessGitHubClient({ repoDir, ghBin }),
     verifyRunner: createProcessVerifyRunner({ repoDir }),
-    browserVerifier: createBrowserMcpVerifier({ repo: repoDir, claudeBin }),
+    browserVerifier: createBrowserMcpVerifier({ repo: repoDir, claudeBin, profile }),
     runSession,
     killLiveSession,
     processInspector: createProcessInspector(),

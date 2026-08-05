@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-05"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "014-session-driver"
@@ -35,10 +35,32 @@ extends:
   - { spec: "014-session-driver", unit: "src/orchestrator/session.ts", nature: superseding }
   # The daemon threads each project's profile into every session spawn.
   - { spec: "021-orchestrator-daemon", unit: "src/orchestrator/daemon.ts", nature: additive }
+  # B-4 admits no spawn path with a hardcoded posture, and two production
+  # session factories sit between the daemon and the driver: the build
+  # stage's Runner (which ship and shepherd drive through) and the verify
+  # stage's browser verifier (D-3 grants it no special case). Each takes the
+  # profile as one more injected parameter; neither stage's contract moves.
+  - { spec: "016-stage-build", unit: "src/orchestrator/stages/build.ts", nature: additive }
+  - { spec: "019-stage-verify", unit: "src/orchestrator/stages/verify.ts", nature: additive }
   # One write verb and posture rendering in the projects surfaces.
   - { spec: "028-cli-projects", unit: "src/commands/orchestrator.ts", nature: additive }
   - { spec: "027-api-projects", unit: "src/orchestrator/api/server.ts", nature: additive }
   - { spec: "027-api-projects", unit: "src/orchestrator/api/state.ts", nature: additive }
+  # B-6 puts the posture in the served project payload and the write verb on
+  # the registry route table, so the wire contract, the typed client the CLI
+  # verb calls through, and the fixture registry the route tests drive all
+  # take the same additive field. No served shape loses anything.
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/types.ts", nature: additive }
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/api-client.ts", nature: additive }
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/fixtures.ts", nature: additive }
+  # The colocated tests of extended units take the same additive edits: the
+  # registry fold tests grow posture cases, the route tests cover the profile
+  # control, and the web fixtures carry the served payload's new field. Tests
+  # move with the code they pin.
+  - { spec: "025-project-registry", unit: "src/orchestrator/projects.test.ts", nature: additive }
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/server.test.ts", nature: additive }
+  - { spec: "029-ui-projects", unit: "web/test/fixtures.ts", nature: additive }
+  - { spec: "029-ui-projects", unit: "web/test/store.test.tsx", nature: additive }
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -164,3 +186,45 @@ D-3. Verify-stage browser sessions get no special case: they are spawned
 through the same derivation (B-4). A guarded profile that omits the
 browser MCP tools fails browser assertions honestly at the verify gate
 rather than escalating itself.
+
+D-4 (build session). Every guarded flag is emitted as one `flag=value`
+argv element, never as a flag and a separate value. The real CLI's tool
+flags are variadic, so a space-separated allowlist whose entry began
+with `--` would end the list and be parsed as a flag in its own right;
+an entry of the bypass flag itself would then derive exactly the argv
+B-1 forbids. Joined with `=`, an operator's list can only ever be read
+as a value, which is what makes B-1's mutual exclusion structural
+rather than conventional.
+
+D-5 (build session). Tool lists travel comma-joined, one flag to one
+argv element, and an effective allowlist that is empty emits no flag at
+all. The write verbs (CLI and API) refuse two profiles rather than
+journaling ambiguity: a bypass profile carrying tool lists it can never
+honor, and a guarded profile with an explicit empty allowlist, whose
+derived argv would be indistinguishable from "no allowlist at all".
+
+D-6 (build session). Seams receive the profile late-bound (a reader,
+resolved at spawn time) rather than as a value captured at wiring time:
+the scheduler builds a project's seam set once per process, so a
+captured value would mean a posture an operator tightened does not
+apply until the daemon restarts. The registration default doubles as
+the absent-source derivation, byte-identical to the pre-032 argv.
+
+D-7 (build session). B-6's surfaces grew one write path each: a
+`projects profile` CLI verb and a project-scoped API control, both
+carrying the whole profile, never a patch, so the journaled record is
+the posture and not a diff against unstated state. Registration appends
+the posture as its own record beside the registration record (one kind,
+one consent), which is what keeps `legacy` capable of describing only
+pre-032 history.
+
+D-8 (operator, 2026-08-05). Provenance: build attempt 1 consumed two
+sessions, both terminated `max-turns` (journaled, 14.08 USD combined),
+leaving the implementation complete but for one type error and these
+unrecorded decisions; attempt 2 refused on the dirty tree the dead
+session left. The operator completed the build from the session's own
+work (the 031 D-1 precedent): exported `qualificationPayload` so the
+API fixtures' legacy-chain path encodes verdicts exactly as
+`registerProject` does, and recorded D-4 through D-7 from the code and
+its tests. The spec's turn budget being too small for its territory is
+noted for the 033/034 build sessions to come.

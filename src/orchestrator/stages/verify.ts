@@ -35,6 +35,7 @@ import { tmpdir } from "os";
 import { randomUUID, createHash } from "crypto";
 import type { JournalHandle, JsonValue } from "../journal";
 import { runSession as driveClaudeSession } from "../session";
+import { resolveProfileSource, type ProfileSource } from "../profile";
 
 // --- Verification-section parser (B-1, FR-001) ------------------------------
 
@@ -391,6 +392,11 @@ export interface CreateBrowserMcpVerifierParams {
   readonly model?: string;
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
+  // The owning project's execution posture (spec 032 B-4), read at spawn
+  // time when passed as a function. 032 D-3 gives a browser session no
+  // special case: a guarded profile that omits the browser MCP tools fails
+  // its assertions honestly at this gate rather than escalating itself.
+  readonly profile?: ProfileSource;
 }
 
 // The server saves captures under its own --output-dir with names the model
@@ -461,6 +467,7 @@ export function createBrowserMcpVerifier(params: CreateBrowserMcpVerifierParams)
           maxTurns: params.maxTurns ?? DEFAULT_BROWSER_MAX_TURNS,
           timeoutMs: params.timeoutMs ?? DEFAULT_BROWSER_TIMEOUT_MS,
           mcpConfigPath,
+          profile: resolveProfileSource(params.profile),
           prompt: buildBrowserVerifyPrompt({ url, assertion }),
           sink: (event) => {
             const text = extractResultText(event);

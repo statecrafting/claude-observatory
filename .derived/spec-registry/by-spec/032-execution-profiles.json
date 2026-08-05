@@ -45,6 +45,22 @@
       },
       {
         "nature": "additive",
+        "spec": "016-stage-build",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/build.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "019-stage-verify",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/verify.ts"
+        }
+      },
+      {
+        "nature": "additive",
         "spec": "028-cli-projects",
         "unit": {
           "kind": "file",
@@ -66,10 +82,66 @@
           "kind": "file",
           "path": "src/orchestrator/api/state.ts"
         }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/types.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/api-client.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/fixtures.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "025-project-registry",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/projects.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/server.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "029-ui-projects",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/fixtures.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "029-ui-projects",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/store.test.tsx"
+        }
       }
     ],
     "id": "032-execution-profiles",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "feature",
     "references": [
       {
@@ -96,6 +168,6 @@
     "summary": "Every driven session today runs with --dangerously-skip-permissions hardcoded at the one argv construction site, whatever the target. For the self-hosted checkout that was a defensible bootstrap; for a general builder it conflates two consents: arming a project consents to being driven, and nothing separately consents to the execution posture the drive runs under. This spec makes posture per-project registry state: a journaled execution profile (bypass or guarded with an explicit tool allowlist), folded from the projects chain like armed, derived into session argv by one pure function that every spawn path uses, recorded in the journal for every session, and displayed on every surface that names the project. A project with no profile record folds to bypass marked legacy, so existing registrations keep today's behavior while losing today's silence.\n",
     "title": "Execution profiles: per-project session posture as registry state"
   },
-  "shardHash": "eb62d71c808ed1f58546dafc2d9ddf4eb75aac7b5086eb45187399c42b485dbf",
+  "shardHash": "04f8662612dd32f233d1f9e1e26c2b20b14147da2e18f62c0f3aac90dd7e75a3",
   "specVersion": "1.1.0"
 }
