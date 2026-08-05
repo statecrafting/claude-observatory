@@ -69,7 +69,7 @@
       }
     ],
     "id": "032-execution-profiles",
-    "implementation": "pending",
+    "implementation": "in-progress",
     "kind": "feature",
     "references": [
       {
@@ -96,6 +96,6 @@
     "summary": "Every driven session today runs with --dangerously-skip-permissions hardcoded at the one argv construction site, whatever the target. For the self-hosted checkout that was a defensible bootstrap; for a general builder it conflates two consents: arming a project consents to being driven, and nothing separately consents to the execution posture the drive runs under. This spec makes posture per-project registry state: a journaled execution profile (bypass or guarded with an explicit tool allowlist), folded from the projects chain like armed, derived into session argv by one pure function that every spawn path uses, recorded in the journal for every session, and displayed on every surface that names the project. A project with no profile record folds to bypass marked legacy, so existing registrations keep today's behavior while losing today's silence.\n",
     "title": "Execution profiles: per-project session posture as registry state"
   },
-  "shardHash": "eb62d71c808ed1f58546dafc2d9ddf4eb75aac7b5086eb45187399c42b485dbf",
+  "shardHash": "081c91a2f8c05817a9c26915784d6de19d1966417ac295bb0b1d98e5f3e662d4",
   "specVersion": "1.1.0"
 }

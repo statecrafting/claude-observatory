@@ -1,18 +1,18 @@
 {
   "diagnostics": {
-    "errors": [],
-    "warnings": [
+    "errors": [
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '032-execution-profiles' file unit 'src/orchestrator/profile.ts' does not exist",
         "path": "src/orchestrator/profile.ts"
       },
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '032-execution-profiles' file unit 'src/orchestrator/profile.test.ts' does not exist",
         "path": "src/orchestrator/profile.test.ts"
       }
-    ]
+    ],
+    "warnings": []
   },
   "mapping": {
     "dependsOn": [
@@ -164,5 +164,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "ca6d4f3ea94be21ee292c07a16f3d2de04ff063049fdc3fbb167d94cd35e0309"
+  "shardHash": "da8c313c057c36966dd5908201f5ee454779b0a8129223bf83d10a6a18c96527"
 }
