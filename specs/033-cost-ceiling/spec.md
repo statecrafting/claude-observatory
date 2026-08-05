@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-05"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: in-progress
+implementation: complete
 risk: medium
 depends_on:
   - "013-run-state-machine"
@@ -39,6 +39,21 @@ extends:
   - { spec: "028-cli-projects", unit: "src/commands/orchestrator.ts", nature: additive }
   - { spec: "027-api-projects", unit: "src/orchestrator/api/server.ts", nature: additive }
   - { spec: "027-api-projects", unit: "src/orchestrator/api/state.ts", nature: additive }
+  # B-7 puts the ceiling and the evaluated spend on the served project
+  # payload and the write verb on the route table, so the wire contract, the
+  # typed client, and the fixture registry take the same additive field (the
+  # 032 build's own reasoning, holding here unchanged).
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/types.ts", nature: additive }
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/api-client.ts", nature: additive }
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/fixtures.ts", nature: additive }
+  # The colocated tests of extended units take the same additive edits:
+  # FR-003 lives in the daemon fixture world, FR-004 in the route and CLI
+  # tests, and the web fixtures carry the served payload's new field.
+  - { spec: "021-orchestrator-daemon", unit: "src/orchestrator/daemon.test.ts", nature: additive }
+  - { spec: "027-api-projects", unit: "src/orchestrator/api/server.test.ts", nature: additive }
+  - { spec: "028-cli-projects", unit: "src/commands/orchestrator.test.ts", nature: additive }
+  - { spec: "029-ui-projects", unit: "web/test/fixtures.ts", nature: additive }
+  - { spec: "029-ui-projects", unit: "web/test/store.test.tsx", nature: additive }
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -172,3 +187,39 @@ D-3. The per-day window is the UTC calendar day, matching the corpus
 rule that all times are UTC internally and display is the client's
 concern (015 FR-001). Midnight UTC as the park target is exact
 knowledge, so a budget-day park never renders as an estimate.
+
+D-4 (build session). Budget events ride the work journal as their own
+kinds (`budget.paused`, `budget.parked`) with machine-readable payloads
+(scope, limit, floor, known and unknown session counts, the one-session
+overshoot bound, and the target for a day park), appended beside the
+run's own pause-reason record, so a surface can tell a budget stop from
+a failed stage without parsing prose. All surfaces read one shared
+shape (`ProjectBudgetView`) rather than each folding the journal their
+own way, and a project whose journal cannot be read reports
+`spendError` beside a still-knowable ceiling instead of a zero that
+would read as "nothing spent".
+
+D-5 (build session). The write surfaces take the whole ceiling, never a
+patch, and clearing is an explicit null-ceiling record the chain
+carries rather than an absence the fold infers. The CLI takes dollars
+as typed and refuses a value finer than one micro-USD instead of
+rounding it silently; `none` clears, and `none` combined with a limit
+flag is a usage error refused before the chain moves.
+
+D-6 (operator, 2026-08-05). The interplay B-4 left implicit, pinned by
+FR-003's fixture: the retry-exhaustion pause and the ceiling pause are
+both legitimate stops at the same boundary, and whichever condition
+trips first governs. With the default stage retry budget of 1, two
+failed attempts exhaust retries before a third spawn boundary is ever
+reached, so the fixture that pins the ceiling's own behavior must
+raise the retry budget; that ordering is deliberate, not a defect: a
+run out of retries needs a human regardless of what it spent.
+
+D-7 (operator, 2026-08-05). Provenance: build attempt 1 consumed two
+sessions, both terminated `max-turns` (journaled, 17.89 USD combined),
+attempt 2 refused on the dead session's dirty tree: the same pattern
+032's build hit, confirming its D-8 note that the session turn budget
+is too small for spec-sized territory. The operator completed the
+build from the session's own work, per the 031 D-1 precedent: the
+FR-003 fixture's retry budget (D-6) and the FR-004 surface tests were
+the only additions; everything else is the session's.

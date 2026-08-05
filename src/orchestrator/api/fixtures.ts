@@ -27,6 +27,7 @@ import {
   removeProject,
   requalifyProject,
   setProjectArmed,
+  setProjectCeiling,
   setProjectProfile,
   type Project,
   type ProjectSource,
@@ -34,6 +35,7 @@ import {
   type QualificationVerdict,
 } from "../projects";
 import type { ExecutionProfile } from "../profile";
+import type { CostCeiling } from "../budget";
 import { journalViewFromHandle, type ApiDeps, type ControlTarget, type DaemonStatus, type ProjectApi, type ProjectsTarget } from "./server";
 
 export interface FixtureSpec {
@@ -300,6 +302,10 @@ export interface FixtureProjectOptions {
   // existed, so a surface can be tested against a chain that holds no
   // profile record rather than against a simulation of one.
   readonly profile?: ExecutionProfile | "legacy";
+  // 033 B-1: the spend limits this project is registered under, appended as
+  // its own record after registration. Absent leaves the project with no
+  // ceiling, which is how every project was driven before 033.
+  readonly ceiling?: CostCeiling | null;
   // A project with no live run has no controls attached, which is what the
   // daemon reports for one sitting in the registry untouched.
   readonly controls?: boolean;
@@ -363,6 +369,9 @@ export function freshRegistry(prefix: string): FixtureRegistry {
     setProfile(name: string, profile: ExecutionProfile, source: ProjectSource): void {
       setProjectProfile({ chain, name, profile, source });
     },
+    setCeiling(name: string, ceiling: CostCeiling | null, source: ProjectSource): void {
+      setProjectCeiling({ chain, name, ceiling, source });
+    },
     requalify(name: string, source: ProjectSource): void {
       requalifyProject({ chain, name, qualification: fixtureQualification(true), source });
     },
@@ -408,6 +417,12 @@ export function freshRegistry(prefix: string): FixtureRegistry {
         source: "cli",
         ...(options.profile === undefined ? {} : { profile: options.profile }),
       });
+      // 033 B-1: a ceiling is its own appended record, never part of the
+      // registration, so a fixture project with one is registered and then
+      // given it, exactly as an operator would.
+      if (options.ceiling !== undefined) {
+        setProjectCeiling({ chain, name, ceiling: options.ceiling, source: "cli" });
+      }
       return world;
     },
     worldFor(name: string): FixtureWorld {

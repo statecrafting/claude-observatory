@@ -68,10 +68,74 @@
           "kind": "file",
           "path": "src/orchestrator/api/state.ts"
         }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/types.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/api-client.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/fixtures.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "021-orchestrator-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "027-api-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/api/server.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "029-ui-projects",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/fixtures.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "029-ui-projects",
+        "unit": {
+          "kind": "file",
+          "path": "web/test/store.test.tsx"
+        }
       }
     ],
     "id": "033-cost-ceiling",
-    "implementation": "in-progress",
+    "implementation": "complete",
     "kind": "feature",
     "references": [
       {
@@ -98,6 +162,6 @@
     "summary": "The quota scheduler protects a subscription window; nothing protects a balance. Economics (030) computes what a run cost and nothing reads it: an oscillating remediation loop on a genuinely broken spec has no financial floor. This spec adds per-project cost ceilings as registry state (a per-run limit, a per-UTC-day limit, or both), evaluated at session spawn boundaries from the journal's own cost records. A crossed per-day ceiling parks the run to the next UTC midnight with the same journaled-target, jittered-resume mechanics as a quota park; a crossed per-run ceiling pauses the run for an operator, since no clock makes a run cheaper. Enforcement sums only journaled costs: the known-cost floor, with the unknown-session count carried alongside it in every record and rendering, never an estimate.\n",
     "title": "Cost ceiling: journaled spend limits that park the run"
   },
-  "shardHash": "8f59e58a001b040a6d118adb5c86f986b1729ebd513238369d3d3ca30674dab6",
+  "shardHash": "1595359b8de30c7e3208f475e2974e4240eed5cd324caebad8369ebe4e049fa0",
   "specVersion": "1.1.0"
 }

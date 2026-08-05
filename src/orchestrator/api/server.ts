@@ -22,6 +22,8 @@ import type { Project, ProjectSource, ProjectsSnapshot } from "../projects";
 import { isValidProjectName } from "../projects";
 import type { ExecutionProfile } from "../profile";
 import { parseProfile, profileRefusal } from "../profile";
+import type { CostCeiling } from "../budget";
+import { ceilingRefusal, parseCeiling } from "../budget";
 import {
   EventHub,
   SSE_HEADERS,
@@ -157,6 +159,9 @@ export interface ProjectsTarget {
   // 032 B-2: the second consent, as its own journaled mutation. Arming says
   // this project may be driven; this says what a drive is allowed to do.
   setProfile(name: string, profile: ExecutionProfile, source: ProjectSource): void;
+  // 033 B-1: the spend limits this project is driven under. null clears them,
+  // which is a journaled decision rather than an absence.
+  setCeiling(name: string, ceiling: CostCeiling | null, source: ProjectSource): void;
   requalify(name: string, source: ProjectSource): void;
   remove(name: string, source: ProjectSource): void;
 }
@@ -340,8 +345,8 @@ function projectRows(deps: ApiDeps): ProjectRowInput[] {
   return rows;
 }
 
-function projectViewOf(deps: ApiDeps, name: string): ProjectView | null {
-  return projectsView(projectRows(deps)).projects.find((p) => p.name === name) ?? null;
+function projectViewOf(deps: ApiDeps, name: string, nowMs: number): ProjectView | null {
+  return projectsView(projectRows(deps), nowMs).projects.find((p) => p.name === name) ?? null;
 }
 
 // Every project's work journal, for the global quota fold. A project whose
@@ -511,6 +516,7 @@ function runRegistryControl(
   deps: ApiDeps,
   verb: ProjectControlVerb,
   name: string | null,
+  nowMs: number,
   apply: () => void
 ): Response {
   const chain = deps.projects.chain;
@@ -539,7 +545,7 @@ function runRegistryControl(
     project,
     applied: record !== null,
     record: record === null ? null : toApiJournalRecord(record),
-    snapshot: project === null ? null : projectViewOf(deps, project),
+    snapshot: project === null ? null : projectViewOf(deps, project, nowMs),
   };
   return ok(result);
 }
@@ -561,7 +567,25 @@ function profileFromBody(body: JsonBody | null, field: string): ExecutionProfile
   return refusal === null ? profile : fail("bad-request", refusal);
 }
 
-function handleRegister(deps: ApiDeps, body: JsonBody | null, source: string): Response {
+// A ceiling from a request body, on the same discipline profileFromBody
+// applies (033 B-1): an explicit null clears, a malformed or unrecordable one
+// is a refusal carrying the reason, and nothing is ever quietly substituted.
+// `undefined` (the field absent entirely) is distinguished from `null` by the
+// caller, since "say nothing" and "clear it" are different requests.
+function ceilingFromBody(body: JsonBody | null, field: string): CostCeiling | null | Response {
+  const value = body?.[field];
+  if (value === null) return null;
+  let ceiling: CostCeiling | null;
+  try {
+    ceiling = parseCeiling(value, `"${field}"`);
+  } catch (err) {
+    return fail("bad-request", (err as Error).message);
+  }
+  const refusal = ceilingRefusal(ceiling);
+  return refusal === null ? ceiling : fail("bad-request", refusal);
+}
+
+function handleRegister(deps: ApiDeps, body: JsonBody | null, source: string, nowMs: number): Response {
   const path = stringFromBody(body, "path");
   if (path === null) {
     return fail("bad-request", `POST ${API_ROUTES.projects} expects a JSON body with a "path" string`);
@@ -572,7 +596,7 @@ function handleRegister(deps: ApiDeps, body: JsonBody | null, source: string): R
   }
   const profile = profileFromBody(body, "profile");
   if (isResponse(profile)) return profile;
-  return runRegistryControl(deps, "register", name, () =>
+  return runRegistryControl(deps, "register", name, nowMs, () =>
     deps.projects.register(path, name ?? undefined, profile ?? undefined, projectSourceOf(source))
   );
 }
@@ -713,6 +737,7 @@ const REGISTRY_VERB_FOR_ROUTE: Readonly<Record<string, ProjectControlVerb | unde
   [PROJECT_ROUTES.requalify]: "requalify",
   [PROJECT_ROUTES.remove]: "remove",
   [PROJECT_ROUTES.profile]: "profile",
+  [PROJECT_ROUTES.ceiling]: "ceiling",
 };
 
 // A fresh Response every time: a body can only be consumed once, so a shared
@@ -854,9 +879,28 @@ async function routeProject(
           `POST ${path} expects a JSON body with a "profile" object ({mode, allowedTools?, disallowedTools?})`
         );
       }
-      return runRegistryControl(deps, registryVerb, name, () => deps.projects.setProfile(name, profile, source));
+      return runRegistryControl(deps, registryVerb, name, clock.now(), () =>
+        deps.projects.setProfile(name, profile, source)
+      );
     }
-    return runRegistryControl(deps, registryVerb, name, () => {
+    // 033 B-1: the second registry verb that carries state of its own. An
+    // explicit `"ceiling": null` clears the limits; omitting the field
+    // entirely is a request that says nothing, which is refused rather than
+    // read as either one.
+    if (registryVerb === "ceiling") {
+      if (body === null || !Object.hasOwn(body, "ceiling")) {
+        return fail(
+          "bad-request",
+          `POST ${path} expects a JSON body with a "ceiling" object ({perRunMicroUsd?, perDayMicroUsd?}) or null to clear it`
+        );
+      }
+      const ceiling = ceilingFromBody(body, "ceiling");
+      if (isResponse(ceiling)) return ceiling;
+      return runRegistryControl(deps, registryVerb, name, clock.now(), () =>
+        deps.projects.setCeiling(name, ceiling, source)
+      );
+    }
+    return runRegistryControl(deps, registryVerb, name, clock.now(), () => {
       switch (registryVerb) {
         case "arm":
           return deps.projects.setArmed(name, true, source);
@@ -992,9 +1036,9 @@ async function route(
       if (method === "POST") {
         if (!controlsAllowed(deps)) return readOnlyRefusal();
         const body = await readJsonBody(request);
-        return handleRegister(deps, body, controlSourceFrom(request, body));
+        return handleRegister(deps, body, controlSourceFrom(request, body), clock.now());
       }
-      return requireGet() ?? ok(projectsView(projectRows(deps)));
+      return requireGet() ?? ok(projectsView(projectRows(deps), clock.now()));
     }
     default:
       break;

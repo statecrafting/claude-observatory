@@ -677,6 +677,44 @@ test("projects add --disarmed registers and then holds the project back", async 
   });
 });
 
+test("projects ceiling sets, renders, and clears the spend limits (033 FR-004, AC-3)", async () => {
+  await withFixtureDaemon("projects-ceiling-verb", async ({ registry, url, dataDir }) => {
+    // Setting prints the journaled record and the detail, ceiling line included.
+    const set = await run(
+      ["projects", "ceiling", "alpha", "--per-run", "5", "--per-day", "20", "--url", url],
+      { dataDir }
+    );
+    expect(set.code).toBe(EXIT_OK);
+    expect(set.out).toContain("ceiling alpha: applied");
+    expect(set.out).toContain("project.ceiling.set");
+    expect(set.out).toContain("ceiling: run $5.0000, day $20.0000");
+    expect(registry.projects().get("alpha")!.ceiling).toEqual({
+      perRunMicroUsd: 5_000_000,
+      perDayMicroUsd: 20_000_000,
+    });
+
+    // FR-004's negative: a fresh registration has no ceiling record, and the
+    // detail printed for it says "no ceiling" rather than a blank or a zero.
+    const newcomer = registry.world("newcomer");
+    const added = await run(["projects", "add", newcomer.repoDir, "--name", "gamma", "--url", url], { dataDir });
+    expect(added.code).toBe(EXIT_OK);
+    expect(added.out).toContain("ceiling: no ceiling");
+
+    // "none" clears, and the clearing is a journaled decision, not an
+    // absence the fold infers.
+    const cleared = await run(["projects", "ceiling", "alpha", "none", "--url", url], { dataDir });
+    expect(cleared.code).toBe(EXIT_OK);
+    expect(cleared.out).toContain("project.ceiling.set");
+    expect(cleared.out).toContain("ceiling: no ceiling");
+    expect(registry.projects().get("alpha")!.ceiling).toBeNull();
+
+    // Half a clear is a usage error, refused before the chain moves.
+    const mixed = await run(["projects", "ceiling", "alpha", "none", "--per-run", "5", "--url", url], { dataDir });
+    expect(mixed.code).not.toBe(EXIT_OK);
+    expect(mixed.err).toContain(`"none" clears the ceiling`);
+  });
+});
+
 test("projects add refuses a path the registry already holds, as an operational failure", async () => {
   await withFixtureDaemon("projects-add-clash", async ({ registry, url, dataDir }) => {
     const alpha = registry.worldFor("alpha");

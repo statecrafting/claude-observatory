@@ -19,6 +19,7 @@ import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, Shipped
 import { findCycle, invalidatedSet, nextReady, pinOf, pinOfBytes, statusSchedulable } from "../dag";
 import { foldQuotaState, shouldWarn } from "../quota";
 import { economicsView, type EconomicsView } from "../economics";
+import { projectBudgetView, unreadableBudgetView } from "../budget";
 import type { DecisionQuery, DecisionRecord } from "../decisions";
 import { decisionRecordsFromChain, queryDecisions } from "../decisions";
 import type { Project } from "../projects";
@@ -465,7 +466,12 @@ export interface ProjectRowInput {
 // project the registry carries appears, armed or not, qualified or not: 025
 // B-4 keeps a refused target visible with its reasons, and hiding it here
 // would undo that.
-export function projectsView(rows: readonly ProjectRowInput[]): ProjectsView {
+//
+// 033 B-7: each row also carries that project's ceiling and the journaled
+// floor evaluated against it, which is why this takes a clock reading. The
+// evaluation is recomputed from records per request like every other view here
+// (022 B-6); there is no cached spend the journal could disagree with.
+export function projectsView(rows: readonly ProjectRowInput[], nowMs: number): ProjectsView {
   const projects: ProjectView[] = [];
   for (const row of rows) {
     const { project } = row;
@@ -479,13 +485,34 @@ export function projectsView(rows: readonly ProjectRowInput[]): ProjectsView {
       profile: project.profile,
     };
     try {
-      const view = runView(row.records(), project.name);
-      projects.push({ ...base, run: view.run, spec: view.spec, stage: view.stage, readError: null });
+      const records = row.records();
+      projects.push({
+        ...base,
+        budget: projectBudgetView(records, project.ceiling, nowMs),
+        ...pick(runView(records, project.name)),
+        readError: null,
+      });
     } catch (err) {
-      projects.push({ ...base, run: null, spec: null, stage: null, readError: (err as Error).message });
+      const reason = (err as Error).message;
+      projects.push({
+        ...base,
+        // The ceiling is registry state and survives an unreadable state root;
+        // the spend against it does not, and says so rather than folding to a
+        // zero that would read as "nothing spent" (033 B-5's stance on what
+        // enforcement cannot see).
+        budget: unreadableBudgetView(project.ceiling, nowMs, reason),
+        run: null,
+        spec: null,
+        stage: null,
+        readError: reason,
+      });
     }
   }
   return { projects };
+}
+
+function pick(view: RunView): Pick<ProjectView, "run" | "spec" | "stage"> {
+  return { run: view.run, spec: view.spec, stage: view.stage };
 }
 
 // --- quota view (027 B-4) ---------------------------------------------------

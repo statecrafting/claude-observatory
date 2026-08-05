@@ -35,6 +35,7 @@ import type {
   Run,
   FoldedRun,
   FoldedSpecExec,
+  RunPauseReason,
   RunStatus,
   SpecExecStatus,
   Stage,
@@ -43,6 +44,17 @@ import { createRun, createSpecExec, createStageExec, foldOrchestratorState, isLi
 import type { Classification } from "./classify-termination";
 import type { LastParkInfo, ParkPlan } from "./quota";
 import { foldQuotaState, isResumeDue, journalPark, journalResume, planPark, resumeJitterMs } from "./quota";
+import type { BudgetStopPlan, CeilingSource } from "./budget";
+import {
+  evaluateBudget,
+  foldBudgetState,
+  journalBudgetPark,
+  journalBudgetPause,
+  journalBudgetResume,
+  planBudgetStop,
+  renderBudgetStop,
+  resolveCeilingSource,
+} from "./budget";
 import type { DagReader, PinLookup, RegistrySnapshot, RegistrySpecEntry, ShippedEntry, ShippedMap, ShippedSource } from "./dag";
 import {
   adoptedShipped,
@@ -259,6 +271,13 @@ export interface DaemonDeps {
   // The current checkout's head sha, or null when unreadable. D-18's
   // requalification verifies an amended prior-run spec at this sha.
   readonly readHeadSha?: () => string | null;
+  // 033 B-2: this project's cost ceiling, read at every session spawn
+  // boundary. A function rather than a value for the same reason the profile
+  // is one (032 B-4): the scheduler builds a project's seams once and reuses
+  // them, and a ceiling an operator raised to release a budget-paused run has
+  // to reach the next boundary rather than the next daemon. Absent means no
+  // ceiling, which is exactly how every project was driven before 033.
+  readonly ceiling?: CeilingSource;
   // 026 B-6: this instance is one project's run inside a standby daemon that
   // already holds the daemon home's identity lock, so it acquires none of its
   // own; spec 011's per-chain writer locks in this project's own state root
@@ -293,6 +312,9 @@ export interface CreateProductionDaemonDepsParams {
   // rather than the next daemon; absent derives 032 D-1's default, which is
   // the posture every session had before profiles existed.
   readonly profile?: ProfileSource;
+  // 033 B-2: this project's spend limits, late-bound for the same reason the
+  // profile is (see DaemonDeps.ceiling).
+  readonly ceiling?: CeilingSource;
 }
 
 export function createProductionDaemonDeps(params: CreateProductionDaemonDepsParams): DaemonDeps {
@@ -302,6 +324,7 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
     dataDir,
     repoDir,
     supervised: params.supervised,
+    ceiling: params.ceiling,
     dagReader: createProcessDagReader(),
     runner,
     readCheckoutBranch: () => {
@@ -615,10 +638,36 @@ export class Daemon {
   // The supervisor's cheap "would driving this paused run do anything" check
   // (026 B-3). A yielded run sits with its journals open and its loop stopped,
   // so only a queued control that can lift the pause is worth re-entering for.
+  //
+  // 033 B-6 adds the one thing that lifts a yield without any control at all:
+  // a budget-day park released the flight slot (unlike a quota park, which
+  // holds it), so nothing but this getter can tell the supervisor that the
+  // horizon has passed and this run is drivable again. The journal fold is the
+  // same one concludeIdle already does, and it runs once per scan per live
+  // project, not per stage.
   get hasQueuedResume(): boolean {
-    return this.pendingControls.some(
-      (cmd) => cmd.verb === "resume" || cmd.verb === "retryStage" || cmd.verb === "approve"
-    );
+    if (
+      this.pendingControls.some(
+        (cmd) => cmd.verb === "resume" || cmd.verb === "retryStage" || cmd.verb === "approve"
+      )
+    ) {
+      return true;
+    }
+    return this.budgetParkDue();
+  }
+
+  // Whether this run is parked on a released slot (a budget park with no quota
+  // park open beside it) whose journaled horizon the clock has now passed.
+  // Never throws: a supervisor polling a daemon whose journals have closed
+  // gets "nothing to drive", not an exception through a getter.
+  private budgetParkDue(): boolean {
+    if (this.run.status !== "parked") return false;
+    try {
+      const horizon = this.parkHorizon();
+      return horizon !== null && horizon.releasesSlot && this.deps.clock.now() >= horizon.targetMs;
+    } catch {
+      return false;
+    }
   }
 
   // 026 D-5: a queued reverify is also worth driving for: D-18's
@@ -1123,11 +1172,27 @@ export class Daemon {
         continue;
       }
 
-      // 026 B-5: quota is one account-wide pool, so a park is not a yield.
-      // Holding the slot through the wait is exactly what stops another
+      // 026 B-5: quota is one account-wide pool, so a quota park is not a
+      // yield. Holding the slot through the wait is exactly what stops another
       // project from starting a session before the horizon resumes this one.
+      //
+      // 033 B-6 is the deliberate opposite for a cost ceiling: a ceiling is one
+      // project's setting, so a budget park hands the slot back and other
+      // projects proceed. A horizon that has already passed is not a wait at
+      // all, so it resumes here rather than yielding into an immediate
+      // re-drive.
       if (this.run.status === "parked") {
-        await this.resumeFromParkedOnRestart();
+        const horizon = this.parkHorizon();
+        if (
+          this.deps.supervised &&
+          horizon !== null &&
+          horizon.releasesSlot &&
+          this.deps.clock.now() < horizon.targetMs
+        ) {
+          yielded = "paused";
+          break;
+        }
+        await this.resumeFromPark();
         continue;
       }
 
@@ -1188,20 +1253,50 @@ export class Daemon {
     return this.run.status === "failed" ? "failed" : "completed";
   }
 
-  private async resumeFromParkedOnRestart(): Promise<void> {
-    const folded = foldQuotaState(this.workJournal.fold().records);
-    if (!folded.parked || !folded.lastPark) {
+  // What governs the next spawn while this run is parked. A quota park and a
+  // budget park may coexist (033 section 6), and the later horizon simply
+  // wins: resuming at the earlier one would spawn a session the other park
+  // exists to prevent. `releasesSlot` is true only when nothing but a budget
+  // park is open, since the account-wide pool a quota park is waiting on is
+  // not this project's to hand back (026 B-5, 033 B-6).
+  private parkHorizon(): { readonly targetMs: number; readonly releasesSlot: boolean } | null {
+    const records = this.workJournal.fold().records;
+    const quota = foldQuotaState(records);
+    const quotaTargetMs = quota.parked && quota.lastPark ? quota.lastPark.targetMs : null;
+    const budgetStop = foldBudgetState(records).stop;
+    const budgetTargetMs =
+      budgetStop !== null && budgetStop.reason === "budget-day" ? budgetStop.targetMs : null;
+
+    if (quotaTargetMs === null && budgetTargetMs === null) return null;
+    return {
+      targetMs: Math.max(quotaTargetMs ?? Number.NEGATIVE_INFINITY, budgetTargetMs ?? Number.NEGATIVE_INFINITY),
+      releasesSlot: quotaTargetMs === null,
+    };
+  }
+
+  // FR-002 for both park kinds: the countdown is derived from the journaled
+  // target, never from restart time, so a daemon killed mid-park resumes the
+  // horizon it was already waiting on. Answers false when shutdown interrupted
+  // the wait, in which case nothing was journaled and the run stays parked.
+  private async resumeFromPark(): Promise<boolean> {
+    const horizon = this.parkHorizon();
+    if (horizon === null) {
       // Structurally should not happen (a "parked" run always has a park
       // record); resolve defensively rather than spin forever.
       this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
-      return;
+      return true;
     }
     const jitterMs = resumeJitterMs(this.deps.rng, this.deps.resumeJitterMinMs, this.deps.resumeJitterMaxMs);
-    const targetMs = folded.lastPark.targetMs;
-    await this.chunkedSleepUntil(() => isResumeDue(this.deps.clock.now(), targetMs, jitterMs));
-    if (this.shutdownRequested) return;
-    journalResume(this.workJournal, this.deps.clock.now());
+    await this.chunkedSleepUntil(() => isResumeDue(this.deps.clock.now(), horizon.targetMs, jitterMs));
+    if (this.shutdownRequested) return false;
+    // One resume record per park actually open: a stray resume for a park that
+    // never happened would leave spec 030's parked-duration fold pairing
+    // windows that do not exist.
+    const records = this.workJournal.fold().records;
+    if (foldQuotaState(records).parked) journalResume(this.workJournal, this.deps.clock.now());
+    if (foldBudgetState(records).stop !== null) journalBudgetResume(this.workJournal, this.deps.clock.now());
     this.run = { ...transition(this.workJournal, this.run, "running"), needsReconcile: false };
+    return true;
   }
 
   // --- per-spec walk (B-3) -------------------------------------------------
@@ -1325,6 +1420,33 @@ export class Daemon {
         }
       }
 
+      // 033 B-2: the session spawn boundary. Every stage attempt below spawns
+      // at least one session, and this is the last point at which not spawning
+      // one is still free, so the ceiling is evaluated here and nothing is
+      // minted when it has been crossed. Nothing is ever killed mid-flight for
+      // budget (D-2): overshoot is bounded by the one session already in
+      // flight, and the trip record says so.
+      const stop = this.budgetStopAtBoundary();
+      if (stop !== null) {
+        if (stop.reason === "budget-run") {
+          // B-4: no clock makes a run cheaper, so this waits for an operator
+          // (a raised or cleared ceiling, or a retry/skip verb) rather than
+          // for a horizon that would only bring the same trip back.
+          journalBudgetPause(this.workJournal, stop);
+          this.pauseRun(`${specExec.specId}: ${renderBudgetStop(stop)}`, "budget-run");
+          return { kind: "paused" };
+        }
+        journalBudgetPark(this.workJournal, stop);
+        this.run = { ...transition(this.workJournal, this.run, "parked"), needsReconcile: false };
+        // B-6: a ceiling is per-project, so a supervised run gives the flight
+        // slot back instead of holding it through the horizon the way a quota
+        // park does. The loop's parked branch yields on the next pass.
+        if (this.deps.supervised) return { kind: "paused" };
+        if (!(await this.resumeFromPark())) return { kind: "shutdown" };
+        attempt++;
+        continue; // resumes the same stage as a fresh attempt, no budget spent
+      }
+
       let stageExec = { ...createStageExec(this.workJournal, specExec.id, stage, attempt), needsReconcile: false };
       stageExec = { ...transition(this.workJournal, stageExec, "running"), needsReconcile: false };
 
@@ -1393,9 +1515,30 @@ export class Daemon {
     }
   }
 
-  private pauseRun(reason: string): void {
+  // 033 B-2: the ceiling read at a spawn boundary, and the stop it plans, or
+  // null when this project has no ceiling or is still under it. The ceiling is
+  // resolved through the seam on every call, so one raised through a control
+  // surface applies at the very next boundary.
+  private budgetStopAtBoundary(): BudgetStopPlan | null {
+    const ceiling = resolveCeilingSource(this.deps.ceiling);
+    if (ceiling === null) return null;
+    const nowMs = this.deps.clock.now();
+    const evaluation = evaluateBudget({
+      records: this.workJournal.fold().records,
+      ceiling,
+      nowMs,
+      runId: this.run.id,
+    });
+    return planBudgetStop(evaluation, nowMs);
+  }
+
+  // `reasonKind` is spec 033 B-4's machine-readable half (state.ts's
+  // RunPauseReason); the sentence stays exactly what it was, because it is
+  // what an operator reads. Every pre-033 pause is a stage pause, which is
+  // what the default says.
+  private pauseRun(reason: string, reasonKind: RunPauseReason = "stage"): void {
     if (this.run.status !== "running") return;
-    this.workJournal.append("run.pause-reason", { runId: this.run.id, reason });
+    this.workJournal.append("run.pause-reason", { runId: this.run.id, reason, reasonKind });
     this.run = { ...transition(this.workJournal, this.run, "paused"), needsReconcile: false };
   }
 

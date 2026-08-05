@@ -117,6 +117,28 @@ export const STAGE_EXEC_TRANSITIONS: Readonly<Record<StageExecStatus, readonly S
   blocked: [],
 };
 
+// --- park and pause reasons (spec 033 B-3, B-4) ----------------------------
+
+// Why a run left "running" without being terminal, as a closed vocabulary
+// rather than as free text. The table above says a run may park and may pause;
+// it never said what for, because until spec 033 there was exactly one park
+// reason (quota, spec 015) and every pause carried an operator-facing sentence
+// and nothing machine-readable. A budget stop needs both to be checkable: a
+// surface has to tell a quota park from a budget park, and a resume policy has
+// to tell a stop a clock can lift from one only a human can.
+//
+// These are tokens journaled alongside the transition, not statuses: the state
+// machine's own tables (B-2) are untouched, and "parked" still means exactly
+// what it meant.
+export const RUN_PARK_REASONS = ["quota", "budget-day"] as const;
+export type RunParkReason = (typeof RUN_PARK_REASONS)[number];
+
+// "stage" is every pause the daemon took before this vocabulary existed: a
+// crashed, failed, or blocked stage, and a gate awaiting approval. It is named
+// here so the vocabulary is total rather than a set of exceptions.
+export const RUN_PAUSE_REASONS = ["stage", "budget-run"] as const;
+export type RunPauseReason = (typeof RUN_PAUSE_REASONS)[number];
+
 // --- invalid transition (B-5) ----------------------------------------------
 
 export class InvalidTransitionError extends Error {

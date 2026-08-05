@@ -44,6 +44,7 @@ import {
   type RunView,
 } from "./types";
 import type { ExecutionProfile } from "../profile";
+import type { CostCeiling } from "../budget";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -95,6 +96,11 @@ export interface ApiClient {
   // 032 B-2: sets the posture sessions driven against this project run
   // under. The whole profile travels, never a patch.
   setProjectProfile(name: string, profile: ExecutionProfile): Promise<ApiResponse<ProjectControlResult>>;
+  // 033 B-1: sets the spend limits this project is driven under, or clears
+  // them with an explicit null. The whole ceiling travels for the same reason
+  // the profile does: what the chain records is what the operator asked for,
+  // not the result of merging a patch into state nobody saw.
+  setProjectCeiling(name: string, ceiling: CostCeiling | null): Promise<ApiResponse<ProjectControlResult>>;
   project(name: string): ProjectClient;
 }
 
@@ -215,6 +221,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     removeProject: (name) => post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.remove)),
     setProjectProfile: (name, profile) =>
       post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.profile), { profile }),
+    setProjectCeiling: (name, ceiling) =>
+      post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.ceiling), { ceiling }),
     project: projectClient,
   };
 }

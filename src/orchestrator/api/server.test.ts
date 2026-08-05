@@ -409,6 +409,39 @@ test("arm, disarm, requalify, and remove each answer with the record the chain c
   });
 });
 
+test("the ceiling verb sets, clears, and shows on the project payload; no ceiling says so (033 FR-004)", async () => {
+  await withServer("projects-ceiling", async ({ server, registry }) => {
+    // Before any ceiling record: the served payload says "no ceiling" as a
+    // fact (ceiling null with the floors beside it), never an omitted field.
+    const before = expectOk((await getJson<ProjectsView>(server, API_ROUTES.projects)).body);
+    expect(before.projects[0]!.budget.ceiling).toBeNull();
+    expect(before.projects[0]!.budget.spendError).toBeNull();
+
+    const set = expectOk(
+      (await getJson<ProjectControlResult>(server, projectRoute("beta", PROJECT_ROUTES.ceiling), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ceiling: { perRunMicroUsd: 5_000_000, perDayMicroUsd: 20_000_000 } }),
+      })).body
+    );
+    expect(set).toMatchObject({ verb: "ceiling", project: "beta", applied: true });
+    expect(set.record?.kind).toBe("project.ceiling.set");
+    expect(set.snapshot?.budget.ceiling).toEqual({ perRunMicroUsd: 5_000_000, perDayMicroUsd: 20_000_000 });
+
+    // Clearing is a decision the chain records (a null-ceiling record), not
+    // an absence the fold has to infer.
+    const cleared = expectOk(
+      (await getJson<ProjectControlResult>(server, projectRoute("beta", PROJECT_ROUTES.ceiling), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ceiling: null }),
+      })).body
+    );
+    expect(cleared.record?.kind).toBe("project.ceiling.set");
+    expect(cleared.snapshot?.budget.ceiling).toBeNull();
+  });
+});
+
 test("an unknown project name answers not-found on every scoped route, never an empty success", async () => {
   await withServer("unknown-project", async ({ server }) => {
     const reads = [PROJECT_ROUTES.dag, PROJECT_ROUTES.run, PROJECT_ROUTES.decisions, PROJECT_ROUTES.history];
