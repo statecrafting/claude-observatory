@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '035-corpus-synthesis' file unit 'src/orchestrator/adopt/synthesis.ts' does not exist",
-        "path": "src/orchestrator/adopt/synthesis.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '035-corpus-synthesis' file unit 'src/orchestrator/adopt/synthesis.test.ts' does not exist",
-        "path": "src/orchestrator/adopt/synthesis.test.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "014-session-driver",
@@ -27,13 +12,29 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/commands/orchestrator.test.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/commands/orchestrator.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/adopt/synthesis.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/adopt/synthesis.ts",
         "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/adopt/synthesis.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -42,12 +43,29 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/adopt/synthesis.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/adopt/synthesis.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
         }
       },
       {
@@ -81,5 +99,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "432d99b294f153ebd3316ecbf2acaf02e835ab30e476866acc6747b57ab1c3dc"
+  "shardHash": "ca056141adb5a5e63a488e150a48d4bcbfbf74f2b15677211140e07953e74620"
 }

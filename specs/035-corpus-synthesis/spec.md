@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-05"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: pending
+implementation: complete
 risk: high
 depends_on:
   - "014-session-driver"
@@ -31,6 +31,8 @@ establishes:
 extends:
   # One verb: adopt synthesize, driving the sessions and reporting.
   - { spec: "028-cli-projects", unit: "src/commands/orchestrator.ts", nature: additive }
+  # The verb's usage and AC-2 coverage ride in 028's test surface (028 D-10).
+  - { spec: "028-cli-projects", unit: "src/commands/orchestrator.test.ts", nature: additive }
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -147,3 +149,63 @@ the reference implementation (spec 000, D12) is the one worked example
 with a year of gate history behind it; a target wanting a different
 layout adopts by hand and still gets 036's replay, which reads any
 compiling corpus.
+
+D-4 (build session). The corpus set includes `.claude/rules/`,
+`.derived/`, and the root `.gitignore` alongside B-2's named three (the
+specs directory, the spec-spine config, standards). `spec-spine init`
+writes the rule seeds as part of the scaffold, so a set without them
+would fail every scaffold session on the reference layout (D-3);
+`.derived/` is D-3's committed artifacts; and `.gitignore` is there for
+the two ignores every governed target needs, found live twice
+(tenant-tail's permanently dirty tree from the orchestrator's own
+state root under `data/`, 2026-08-05; and compile's non-deterministic
+`build-meta.json` dirtying this spec's own AC-2 fixture). The scaffold
+prompt bounds the .gitignore edit to exactly those two lines; a
+session that rewrites it further still passes confinement, and the
+ratification read is where a hostile ignore list would be caught (the
+same trust boundary every authored spec body already crosses). The set
+is exported data, tested path by path (D-2), and prefix-matching is
+directory-exact: `specs.md` is not inside `specs/`.
+
+D-5 (build session). Session bracketing. Each session's delta is
+computed against the last pinned sha, not the branch base; a passing
+session's delta is committed by the harness (never by the session), so
+every commit on the branch is a guard-passed corpus state, and a
+violating session's writes are discarded back to the pin, untracked
+files included, so one bad session cannot poison the next session's
+diff. The branch therefore carries only corpus that passed the guard,
+and a failed run's branch remains inspectable.
+
+D-6 (build session). Territory independence. A territory whose session
+died or whose guard refused is recorded and the remaining territories
+still run (D-1's "a failed territory retries alone"); the report is
+`failed` unless every territory authored and the B-4 gate is green, so
+a partial corpus is never reported as success. Re-running the verb
+starts over from the proposal; the failed run's branch keeps what
+passed, for inspection rather than resumption, in v1.
+
+D-7 (build session). Ceilings (B-2's "033 unchanged") map as: the day
+scope folds the project's work journal through 033's own
+`evaluateBudget`, exactly as a driven run would (production sessions
+journal `session.result` through the 014 driver into the same journal);
+the run scope reads as this synthesis invocation, floored on its own
+journaled synthesis session costs. Both are checked at spawn
+boundaries, so overshoot keeps 033's one-session bound. A trip journals
+a violation record naming the scope and stops spawning; territories
+after it report `not-run`.
+
+D-8 (build session). The branch is `corpus/synthesis-<hash12>`, the
+first twelve hex of the proposal's content hash: provenance in the
+name, and a re-synthesis from an amended proposal lands on a different
+branch by construction. A branch that already exists refuses (the
+operator deletes or renames it deliberately; synthesis never force
+moves a ref).
+
+D-9 (build session). Proposal resolution. `--proposal` takes a document
+path, or a 64-hex sha256 resolved through the project's journaled
+adopt.preflight records (034 B-6) to the recorded out path, with the
+document re-hashed on read: a proposal that moved or was edited since
+the operator chose it refuses rather than synthesizing from something
+nobody read. The parse targets 034 FR-003's deterministic markdown
+exactly, and a document that does not parse refuses with the reason
+named.

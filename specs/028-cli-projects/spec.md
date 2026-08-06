@@ -183,3 +183,20 @@ over: usage is 3; an unknown project, an unusable corpus, or a history
 too shallow to evaluate is 1; a completed replay is 0 whatever it
 measured, because a low score is a finding, not a failure.
 orchestrator.test.ts gains the verb's usage and AC-2 coverage.
+
+D-10 (2026-08-06, spec 035's build, per its granted authority). The
+adopt group gains `adopt synthesize <project> --proposal <path-or-hash>`,
+offline of any daemon like its siblings but not free: it drives real
+spec 014 sessions against the target under the project's execution
+profile unless the test seam (`makeSynthesisSession` in the CLI deps)
+injects scripted ones. The project resolves from the registry fold off
+disk and must read adoptable (035 B-1); the proposal resolves by path,
+or by sha256 through the project's journaled adopt.preflight records
+with the document re-hashed on read (035 D-9). The project's work
+journal is held open for the whole run (sessions journal into it, 033's
+day floor folds it), so a live daemon driving the project refuses this
+verb cleanly at the writer lock. `--proposal` belongs to this verb
+alone (D-5's flag discipline). Exit codes: usage is 3; an unknown or
+non-adoptable project, an unresolvable proposal, or a failed synthesis
+is 1; a completed synthesis is 0. orchestrator.test.ts gains the verb's
+usage and AC-2 coverage.
