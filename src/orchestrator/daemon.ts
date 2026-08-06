@@ -673,7 +673,17 @@ export class Daemon {
   // 026 D-5: a queued reverify is also worth driving for: D-18's
   // requalification runs from the loop's reverify queue, so a daemon opened
   // solely to receive the control must be driven for it to act.
+  //
+  // 026 D-10: only answered while the run can reach the drain. The loop
+  // yields for a pause (and for a slot-releasing park) before it touches the
+  // reverify queue, so on a yielded run this getter saying "drive me" sent
+  // the scheduler into a drive that consumed nothing, every cycle, starving
+  // the API of the very resume that would have lifted the pause (found live
+  // 2026-08-06). The queue keeps its entries; the control that lifts the
+  // yield is hasQueuedResume's to report, and the drive it earns drains the
+  // queue right after.
   get hasQueuedReverify(): boolean {
+    if (this.run.status !== "running") return false;
     return this.reverifyQueue.length > 0 || this.pendingControls.some((cmd) => cmd.verb === "reverify");
   }
 

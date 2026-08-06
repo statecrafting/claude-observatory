@@ -216,3 +216,23 @@ flight slot instead of abandoning it. A run stranded by a pre-D-9 probe
 heals the same way: the next open resumes it, finds nothing in flight,
 and concludes it. Zero-queued settling is otherwise unchanged, and a
 healthy probe still costs no session and no quota.
+
+D-10 (2026-08-06, operator). The reverify half of B-3's priority is
+gated on the run being able to act on it. Found live: the first restart
+onto post-034 code recovered a run paused on a failed build while the
+corpus carried both a drifted shipped root and new pending work; the
+open queued auto-reverifies (D-8), but the supervised loop yields for a
+pause before it ever touches the reverify queue, so the drive consumed
+nothing, `hasQueuedReverify` stayed true, and the priority half re-drove
+the same daemon every cycle. Standby spun at roughly four cycles a
+second, the scan's process spawns starved the API, and the resume that
+would have lifted the pause could never be delivered; SIGTERM could not
+land either (B-7's prompt exit needs the loop to reach a wait), so the
+daemon died by SIGKILL. The daemon's getter now answers false unless
+the run is "running": a queued reverify on a paused run, or on a park
+that released the slot, is not actionable; its queue entries persist,
+and the control that lifts the yield already reports through
+`hasQueuedResume`, whose drive drains the queue immediately after. The
+scheduler is unchanged except its citation: a cycle with nothing
+actionable falls through to the standby wait, which is what keeps the
+API serving and the pause liftable.
