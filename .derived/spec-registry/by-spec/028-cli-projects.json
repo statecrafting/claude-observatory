@@ -8,6 +8,12 @@
       "023-orchestrator-cli",
       "027-api-projects"
     ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/commands/orchestrator.test.ts"
+      }
+    ],
     "extends": [
       {
         "nature": "superseding",
@@ -46,6 +52,6 @@
     "summary": "The orchestrator command group follows the API to v2: a projects subgroup (list, add, arm, disarm, requalify, remove), a --project flag scoping the existing verbs to a named project, a composite status that renders the daemon state plus one row per project, and an offline journal verify that resolves a project's state root through the daemon home's registry chain. Client-not-engine, exit codes, and the X-Control-Source discipline from 023 carry over unchanged.\n",
     "title": "CLI v2: the projects group and project-scoped verbs"
   },
-  "shardHash": "8293811739aaa67f70cf023a8b1ce578f954015da6875feb489772b81925494d",
+  "shardHash": "1bf3b4dd43ba645d1326a4520f42621edeb2ced3a88920183c7297235f6a77cc",
   "specVersion": "1.1.0"
 }

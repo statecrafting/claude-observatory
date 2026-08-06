@@ -15,6 +15,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { openJournal } from "../orchestrator/journal";
+import { foldOrchestratorState, transition } from "../orchestrator/state";
 import { openDecisionsChain } from "../orchestrator/decisions";
 import type { ProcessInspector } from "../orchestrator/daemon";
 import { openProjectsChain, projectStateRoot, registerProject } from "../orchestrator/projects";
@@ -332,6 +333,29 @@ test("an unknown project name is an operational failure, not a usage error (B-4)
     expect(result.err).toContain("error: not-found:");
     expect(result.err).toContain("nowhere");
   });
+});
+
+test("a terminal run's row drops the historical spec/stage suffix (028 D-11)", async () => {
+  await withFixtureDaemon(
+    "terminal-cell",
+    async ({ url, dataDir }) => {
+      const result = await run(["status", "--url", url], { dataDir });
+      expect(result.code).toBe(EXIT_OK);
+      const row = result.out.split("\n").find((line) => line.includes("alpha")) ?? "";
+      expect(row).toContain("completed");
+      // The last spec and stage are history on a terminal run, not a cell
+      // that reads as work in flight.
+      expect(row).not.toContain("003-gamma");
+      expect(row).not.toContain("/build");
+    },
+    (world) => {
+      seedRun(world);
+      const state = foldOrchestratorState(world.journal.fold().records);
+      const seededRun = [...state.runs.values()].at(-1)!;
+      world.journal.append("run.result", { runId: seededRun.id, status: "completed" });
+      transition(world.journal, seededRun, "completed");
+    }
+  );
 });
 
 test("status states an estimated quota horizon as an estimate (B-3)", async () => {

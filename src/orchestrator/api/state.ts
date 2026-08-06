@@ -421,8 +421,15 @@ export function runView(records: readonly JournalRecord[], project: string): Run
   let lastHeartbeatMs: number | null = null;
   for (const record of records) {
     if (record.kind === "run.pause-reason") pauseReason = stringField(record.payload, "reason");
-    else if (record.kind === "run.blocked") blockers = specBlockersFromPayload(record.payload);
-    else if (record.kind === "daemon.heartbeat") lastHeartbeatMs = numberField(record.payload, "ts");
+    else if (record.kind === "run.blocked") {
+      // 027 D-9: a blocked verdict belongs to the run that stopped on it. An
+      // unscoped fold surfaced a dead run's blockers as if they were news
+      // (found live: a "status draft is not approved" list from a run two
+      // restarts gone, while the current run's pause said something else).
+      if (run !== null && stringField(record.payload, "runId") === run.id) {
+        blockers = specBlockersFromPayload(record.payload);
+      }
+    } else if (record.kind === "daemon.heartbeat") lastHeartbeatMs = numberField(record.payload, "ts");
   }
   // A pause reason only describes the pause it belongs to; once the run is
   // moving again it is history, not current state.

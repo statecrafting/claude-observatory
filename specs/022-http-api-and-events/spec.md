@@ -170,3 +170,13 @@ request declaring version 1.
 ```verify:cli
 bun test src/orchestrator/api/
 ```
+
+D-9 (2026-08-06, operator). `Bun.serve` runs with `idleTimeout: 0`,
+deliberately: the runtime's default 10 s idle timeout severed every
+quiet SSE stream (B-4 holds a connection open between journal appends,
+which standby can space minutes apart) and logged a "[Bun.serve]:
+request timed out" line for each kill. The listener is loopback-only
+and every JSON route answers within one fold, so the timeout's only
+observed effect was breaking the one route built to stay open. A
+client that vanishes without closing costs a lingering socket on
+localhost, accepted and recorded here.

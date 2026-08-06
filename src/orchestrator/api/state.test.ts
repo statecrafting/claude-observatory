@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import * as fs from "fs";
 import { join } from "path";
-import { createSpecExec, foldOrchestratorState, transition } from "../state";
+import { createRun, createSpecExec, foldOrchestratorState, transition } from "../state";
 import { journalResume, QUOTA_HEALTH_WARNING_THRESHOLD } from "../quota";
 import { loadRegistrySnapshot } from "../dag";
 import { pinOfBytes } from "../dag";
@@ -383,6 +383,33 @@ test("runView surfaces the pause reason only while the run is paused", () => {
 
     transition(world.journal, paused, "running");
     expect(runView(world.journal.fold().records, "alpha").pauseReason).toBeNull();
+  } finally {
+    world.close();
+  }
+});
+
+test("runView scopes blockers to the run that stopped on them, never a dead run's (D-9)", () => {
+  const world = freshWorld("blockers-scope");
+  try {
+    seedRun(world);
+    const state = foldOrchestratorState(world.journal.fold().records);
+    const first = [...state.runs.values()][0]!;
+    world.journal.append("run.blocked", {
+      runId: first.id,
+      blockers: [{ specId: "003-gamma", reasons: ["status draft is not approved"] }],
+    });
+    const failed = transition(world.journal, first, "failed");
+
+    // The verdict is current while its run is the latest.
+    expect(runView(world.journal.fold().records, "alpha").blockers).toEqual([
+      { specId: "003-gamma", reasons: ["status draft is not approved"] },
+    ]);
+
+    // A fresh run makes the dead run's verdict history, not news.
+    void failed;
+    const next = createRun(world.journal, world.repoDir);
+    transition(world.journal, next, "running");
+    expect(runView(world.journal.fold().records, "alpha").blockers).toEqual([]);
   } finally {
     world.close();
   }

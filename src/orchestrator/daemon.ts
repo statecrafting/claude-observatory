@@ -28,7 +28,7 @@
 // nothing else can start (026 B-5).
 import * as fs from "fs";
 import { join } from "path";
-import type { JournalHandle, JsonValue } from "./journal";
+import type { JournalHandle, JournalRecord, JsonValue } from "./journal";
 import { openJournal } from "./journal";
 import { openDecisionsChain } from "./decisions";
 import type {
@@ -400,6 +400,10 @@ export interface ControlCommand {
   readonly verb: ControlVerb;
   readonly specId?: string;
   readonly source: string;
+  // The journal seq of the control.<verb> record this command came from
+  // (D-24): applying it journals control.applied against this seq, which is
+  // what lets a restart tell a consumed control from one that died queued.
+  readonly seq?: number;
 }
 
 // --- small JSON helpers -------------------------------------------------
@@ -696,6 +700,11 @@ export class Daemon {
   // park, or live/retryable spec work; the supervisor drives it instead.
   concludeIdle(): boolean {
     if (this.run.status !== "running") return false;
+    // D-24: a run with queued controls is not idle. Concluding around them
+    // would close the journals with the controls unapplied and unconsumed,
+    // re-restoring them at every later open; refusing makes the probe drive
+    // this daemon, which applies and journals them exactly once.
+    if (this.pendingControls.length > 0) return false;
     const folded = foldOrchestratorState(this.workJournal.fold().records);
     const unfinished = [...folded.specExecs.values()].some(
       (se) => se.runId === this.run.id && (isLive(se) || se.status === "failed")
@@ -824,6 +833,43 @@ export class Daemon {
       const created = createRun(this.workJournal, this.deps.repoDir);
       this.run = { ...transition(this.workJournal, created, "running"), needsReconcile: false };
     }
+
+    this.restorePendingControls(records);
+  }
+
+  // D-24: a journaled control the dying process never applied is a promise
+  // the operator was given, and it survives the process. Restoration replays
+  // every `restorable: true` control record with no `control.applied` keyed
+  // to its seq, in journal order; pre-D-24 records lack the marker and stay
+  // history (a consumed-but-unmarked control must never re-fire). The one
+  // exclusion: standby-auto reverifies, which 026 D-8's next scan re-derives
+  // from drift, so restoring them would double-queue the same healing.
+  private restorePendingControls(records: readonly JournalRecord[]): void {
+    const applied = new Set<number>();
+    for (const record of records) {
+      if (record.kind !== "control.applied") continue;
+      const seq = isJsonRecord(record.payload) ? record.payload.controlSeq : null;
+      if (typeof seq === "number") applied.add(seq);
+    }
+    const restored: ControlCommand[] = [];
+    for (const record of records) {
+      if (!record.kind.startsWith("control.") || record.kind === "control.applied" || record.kind === "control.reverify.refused") {
+        continue;
+      }
+      if (!isJsonRecord(record.payload) || record.payload.restorable !== true) continue;
+      if (applied.has(record.seq)) continue;
+      const verb = record.kind.slice("control.".length) as ControlVerb;
+      const source = typeof record.payload.source === "string" ? record.payload.source : "unknown";
+      if (verb === "reverify" && source === "standby-auto") continue;
+      const specId = typeof record.payload.specId === "string" ? record.payload.specId : undefined;
+      restored.push({ verb, specId, source, seq: record.seq });
+    }
+    if (restored.length === 0) return;
+    this.pendingControls.push(...restored);
+    this.workJournal.append("daemon.controls.restored", {
+      count: restored.length,
+      seqs: restored.map((cmd) => cmd.seq ?? null) as unknown as JsonValue,
+    });
   }
 
   // --- control API (B-4) --------------------------------------------------
@@ -833,38 +879,43 @@ export class Daemon {
   // loop checkpoint (between stages, or at the top of the loop). Minimal but
   // real: spec 022's HTTP surface calls these directly.
 
+  // D-24: every issue journals `restorable: true` and queues the record's
+  // own seq, so recovery can tell a consumed control from one whose process
+  // died with it queued. Records without the marker (every pre-D-24 journal)
+  // are history, never restored.
+
   pause(source: string): void {
     if (this.run.status !== "running") {
       throw new Error(`daemon: pause() requires the run to be "running" (current: "${this.run.status}")`);
     }
-    this.workJournal.append("control.pause", { runId: this.run.id, source });
-    this.pendingControls.push({ verb: "pause", source });
+    const record = this.workJournal.append("control.pause", { runId: this.run.id, source, restorable: true });
+    this.pendingControls.push({ verb: "pause", source, seq: record.seq });
   }
 
   resume(source: string): void {
     if (this.run.status !== "paused") {
       throw new Error(`daemon: resume() requires the run to be "paused" (current: "${this.run.status}")`);
     }
-    this.workJournal.append("control.resume", { runId: this.run.id, source });
-    this.pendingControls.push({ verb: "resume", source });
+    const record = this.workJournal.append("control.resume", { runId: this.run.id, source, restorable: true });
+    this.pendingControls.push({ verb: "resume", source, seq: record.seq });
   }
 
   skipSpec(specId: string, source: string): void {
     if (specId.length === 0) throw new Error("daemon: skipSpec() requires a non-empty specId");
-    this.workJournal.append("control.skipSpec", { specId, source });
-    this.pendingControls.push({ verb: "skipSpec", specId, source });
+    const record = this.workJournal.append("control.skipSpec", { specId, source, restorable: true });
+    this.pendingControls.push({ verb: "skipSpec", specId, source, seq: record.seq });
   }
 
   retryStage(specId: string, source: string): void {
     if (specId.length === 0) throw new Error("daemon: retryStage() requires a non-empty specId");
-    this.workJournal.append("control.retryStage", { specId, source });
-    this.pendingControls.push({ verb: "retryStage", specId, source });
+    const record = this.workJournal.append("control.retryStage", { specId, source, restorable: true });
+    this.pendingControls.push({ verb: "retryStage", specId, source, seq: record.seq });
   }
 
   reverify(specId: string, source: string): void {
     if (specId.length === 0) throw new Error("daemon: reverify() requires a non-empty specId");
-    this.workJournal.append("control.reverify", { specId, source });
-    this.pendingControls.push({ verb: "reverify", specId, source });
+    const record = this.workJournal.append("control.reverify", { specId, source, restorable: true });
+    this.pendingControls.push({ verb: "reverify", specId, source, seq: record.seq });
   }
 
   // 026's amendment-cascade healing (D-22): queue a reverify for every
@@ -928,19 +979,24 @@ export class Daemon {
 
   forceHumanGate(specId: string, source: string): void {
     if (specId.length === 0) throw new Error("daemon: forceHumanGate() requires a non-empty specId");
-    this.workJournal.append("control.forceHumanGate", { specId, source });
-    this.pendingControls.push({ verb: "forceHumanGate", specId, source });
+    const record = this.workJournal.append("control.forceHumanGate", { specId, source, restorable: true });
+    this.pendingControls.push({ verb: "forceHumanGate", specId, source, seq: record.seq });
   }
 
   approve(specId: string, source: string): void {
     if (specId.length === 0) throw new Error("daemon: approve() requires a non-empty specId");
-    this.workJournal.append("control.approve", { specId, source });
-    this.pendingControls.push({ verb: "approve", specId, source });
+    const record = this.workJournal.append("control.approve", { specId, source, restorable: true });
+    this.pendingControls.push({ verb: "approve", specId, source, seq: record.seq });
   }
 
   private applyPendingControls(): void {
     while (this.pendingControls.length > 0) {
       const cmd = this.pendingControls.shift()!;
+      // D-24: consumption is a journaled fact, keyed to the control record's
+      // own seq; a state-conditional no-op below is still consumption.
+      if (cmd.seq !== undefined) {
+        this.workJournal.append("control.applied", { controlSeq: cmd.seq, verb: cmd.verb });
+      }
       switch (cmd.verb) {
         case "pause":
           if (this.run.status === "running") this.run = { ...transition(this.workJournal, this.run, "paused"), needsReconcile: false };
@@ -1508,7 +1564,13 @@ export class Daemon {
 
       if (isBlockedOutcome(tagged)) {
         transition(this.workJournal, stageExec, "blocked");
-        this.pauseRun(`${specExec.specId}: ${stage} outcome "${tagged.result.outcome}"`);
+        // D-25: a refusal's pause reason carries the refusal itself, bounded,
+        // so the status surface answers "why is it paused right now" without
+        // an operator spelunking the journal (found live: a gate-red-at-base
+        // pause that read only as `build outcome "refused"`).
+        const refusal = tagged.stage === "build" ? tagged.result.evidence.refusal : null;
+        const detail = refusal === null ? "" : ` (${refusal.kind}: ${refusal.message.trim().slice(0, 400)})`;
+        this.pauseRun(`${specExec.specId}: ${stage} outcome "${tagged.result.outcome}"${detail}`);
         return { kind: "paused" };
       }
 

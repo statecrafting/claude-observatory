@@ -18,6 +18,11 @@ summary: >
   journal verify that resolves a project's state root through the daemon
   home's registry chain. Client-not-engine, exit codes, and the
   X-Control-Source discipline from 023 carry over unchanged.
+establishes:
+  # The v2 test surface (this spec's own FR coverage; §2 already said
+  # "and its colocated tests", and 035/036's extends edges name this spec
+  # as its owner; the graph now says what both always meant).
+  - "src/commands/orchestrator.test.ts"
 extends:
   - { spec: "023-orchestrator-cli", unit: "src/commands/orchestrator.ts", nature: superseding }
 references:
@@ -200,3 +205,10 @@ alone (D-5's flag discipline). Exit codes: usage is 3; an unknown or
 non-adoptable project, an unresolvable proposal, or a failed synthesis
 is 1; a completed synthesis is 0. orchestrator.test.ts gains the verb's
 usage and AC-2 coverage.
+
+D-11 (2026-08-06, operator). A terminal run's row cell drops the
+spec/stage suffix: `completed  033-cost-ceiling/build` read as work in
+flight for a day on a settled project, and the last touched spec of a
+finished run is history the detail views already carry. Live and
+paused runs keep the suffix, because for them it is the answer to
+"what is it doing".
