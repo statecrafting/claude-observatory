@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { openJournal } from "../journal";
@@ -13,6 +13,7 @@ import {
   readImplementationStatus,
   parseFrontmatterListField,
   extractBacklogStep,
+  gateCommandsFor,
   BUILD_PROMPT_VERSION,
   GATE_COMMANDS,
   type Runner,
@@ -78,6 +79,10 @@ function initFixtureRepo(specId = "900-fixture-spec"): { dir: string; specId: st
   writeFileSync(join(dir, "AGENTS.md"), AGENTS_MD_FIXTURE);
   writeFileSync(join(dir, "specs", specId, "spec.md"), specFixture(specId, "pending"));
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture" }));
+  // The fixture target shares this repo's Bun + TypeScript conventions, so
+  // the full six-command gate applies (D-10's four-command path has its own
+  // fixture below).
+  writeFileSync(join(dir, "tsconfig.json"), "{}\n");
 
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", "chore: fixture base"]);
@@ -232,6 +237,34 @@ test("createProcessRunner: statusClean/currentBranch/headSha reflect real git st
   expect(runner.statusClean()).toBe(true);
   expect(runner.currentBranch()).toBe("main");
   expect(runner.headSha()).toMatch(/^[0-9a-f]{40}$/);
+});
+
+test("gateCommandsFor: a root tsconfig.json earns the full six-command gate (D-10)", () => {
+  const { dir } = initFixtureRepo();
+  const runner = createProcessRunner({ repoDir: dir });
+  expect(gateCommandsFor(runner)).toEqual(GATE_COMMANDS);
+});
+
+test("gateCommandsFor: a target without tsconfig.json runs only the spec-spine four (D-10)", () => {
+  const { dir } = initFixtureRepo();
+  rmSync(join(dir, "tsconfig.json"));
+  const runner = createProcessRunner({ repoDir: dir });
+  const commands = gateCommandsFor(runner);
+  expect(commands).toEqual(GATE_COMMANDS.filter((cmd) => cmd[0] === "spec-spine"));
+  expect(commands.some((cmd) => cmd[0] === "bun")).toBe(false);
+});
+
+test("the build prompt lists the target's own gate program, not the constant (D-10)", () => {
+  const prompt = buildPrompt({
+    specBody: "# spec body",
+    backlogStep: "1. step",
+    decisions: { included: [], overflowCount: 0 },
+    dropboxDir: "/tmp/dropbox",
+    gateCommands: GATE_COMMANDS.filter((cmd) => cmd[0] === "spec-spine"),
+  });
+  expect(prompt).toContain("spec-spine compile");
+  expect(prompt).not.toContain("bun run typecheck");
+  expect(prompt).not.toContain("bun test");
 });
 
 test("createProcessRunner: readFile/writeFile round-trip relative to repoDir", () => {

@@ -179,3 +179,19 @@ deadline, and spend is now bounded by spec 033's ceilings, which is the
 guard that was actually being asked of the turn cap; a turn budget
 whose main observed effect is doubling the cost of finishing is not a
 guard.
+
+D-10 (2026-08-06, operator). The gate's language half is conditional on
+the target sharing it. D-5's six commands split: the four spec-spine
+commands are the universal governance gate and always run; `bun run
+typecheck` and `bun test` are this repo's Bun + TypeScript conventions
+and run only where a readable root tsconfig.json says the target shares
+them (`gateCommandsFor(runner)`, probed through the Runner's own
+readFile so fixtures and production answer alike). Found live on the
+first driven family-repo build: tenant-tail is a Rust workspace whose
+package.json exists only for spec-spine scripts, so "bun run typecheck"
+exited 1 at a clean base and B-1 refused a target whose language
+verification lives in its own CI, which shepherd (018) already watches
+per PR. The session prompts carry the computed program rather than the
+constant, so a session is never promised a command the evaluation will
+not run; the earlier family corpus (tenant-emit) never noticed because
+it was wholly adopted, never built.
