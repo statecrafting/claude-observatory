@@ -13,6 +13,9 @@ import type { JournalHandle, JsonValue } from "../journal";
 import type { SessionResult } from "../session";
 import { evaluateBudget, type CeilingScope, type CostCeiling } from "../budget";
 import { proposalHash } from "./preflight";
+// A value import against defects' type-only import of this module: no cycle
+// at runtime, and 037's checker is the seam's default (035 D-10).
+import { synthesisShapeChecker } from "./defects";
 
 // --- the corpus set (B-2, D-2) ----------------------------------------------
 
@@ -225,7 +228,8 @@ export interface ShapeViolation {
 }
 
 // Spec 037's checker seam (FR-002 there): synthesis invokes it after every
-// session once 037 ships, in addition to the B-3 minimum below. The input is
+// session, in addition to the B-3 minimum below; 037's checkAdoptedCorpus is
+// the default and tests may inject a stub (035 D-10). The input is
 // everything a shape rule could need; the strings come back journal-stable.
 export type CorpusShapeChecker = (input: {
   readonly specs: readonly AuthoredSpecFile[];
@@ -617,9 +621,8 @@ export async function runSynthesis(params: SynthesisParams): Promise<SynthesisRe
         shape.push(...establishesViolations(specFile, territoryFiles));
       }
     }
-    if (params.shapeChecker) {
-      shape.push(...params.shapeChecker({ specs: specFiles, changedPaths: delta, corpusSet: CORPUS_SET }));
-    }
+    const shapeChecker = params.shapeChecker ?? synthesisShapeChecker;
+    shape.push(...shapeChecker({ specs: specFiles, changedPaths: delta, corpusSet: CORPUS_SET }));
 
     if (offending.length > 0 || shape.length > 0) {
       const violations = [

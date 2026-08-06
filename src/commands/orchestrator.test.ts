@@ -1506,7 +1506,7 @@ function writeCorpusSpec(repo: string, id: string, title: string, paths: readonl
   fs.mkdirSync(join(repo, "specs", id), { recursive: true });
   fs.writeFileSync(
     join(repo, "specs", id, "spec.md"),
-    `---\nid: "${id}"\ntitle: "${title}"\nstatus: draft\ncreated: "2026-08-06"\nsummary: >\n  ${title}, recorded as found.\norigin:\n  retroactive: true\nestablishes:\n${establishes}\n---\n\n# ${id}\n\nRecords the territory as found.\n`
+    `---\nid: "${id}"\ntitle: "${title}"\nstatus: draft\ncreated: "2026-08-06"\nsummary: >\n  ${title}, recorded as found.\norigin:\n  retroactive: true\nestablishes:\n${establishes}\n---\n\n# ${id}\n\nRecords the territory as found.\n\n## Known defects\n\nNone found during adoption.\n`
   );
 }
 

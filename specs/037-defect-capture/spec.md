@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-05"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: pending
+implementation: complete
 risk: medium
 depends_on:
   - "035-corpus-synthesis"
@@ -124,3 +124,16 @@ paths outside the spec's territory) rather than attempting NLP over
 honesty rule into a false-confidence machine. The human read at
 ratification (010 D18) is the real reviewer of descriptive-vs-wishful;
 the checker just removes the excuses.
+
+D-3 (build session). The checker is the seam's default. Synthesis
+consumes it through 035's `shapeChecker` seam (FR-002), and with
+nothing injected the seam resolves to `checkAdoptedCorpus` via the
+`synthesisShapeChecker` adapter (035 D-10), so production enforcement
+needs no wiring step anyone could forget. The narrow B-4 token rule:
+backtick-quoted, whitespace-free tokens containing a path separator,
+under an acceptance-criteria heading, covered when they equal an
+establishes path, sit under an establishes directory, or are a parent
+directory of one. The checker deliberately re-reads ground 035's own
+minimum also covers (the retroactive marker, the confinement set):
+both guards journal in their own words, and deduplicating them would
+couple the modules for cosmetics.

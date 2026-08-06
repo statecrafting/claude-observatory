@@ -480,15 +480,10 @@ test("a session that edits target source is failed by confinement with the path 
   }
 });
 
-test("the 037 checker seam is invoked after every session and its violations journal verbatim (037 FR-002)", async () => {
+test("the 037 checker runs as the seam's default and its violations journal verbatim (D-10, 037 FR-002)", async () => {
   const harness = makeHarness();
   try {
-    const report = await harness.run({
-      shapeChecker: ({ specs }) =>
-        specs
-          .filter((spec) => !spec.content.includes("## Known defects"))
-          .map((spec) => ({ path: spec.path, reason: "no Known defects section (037 B-1)" })),
-    }, (request) => {
+    const report = await harness.run({}, (request) => {
       if (request.purpose === "scaffold") scriptedScaffold(harness.target);
       if (request.purpose === "001-src-auth") {
         writeDraftSpec(harness.target, request.purpose, "Auth", ["src/auth/login.ts", "src/auth/token.ts"], {
@@ -504,7 +499,7 @@ test("the 037 checker seam is invoked after every session and its violations jou
     expect(report.outcome).toBe("failed");
     const auth = report.territories.find((territory) => territory.specId === "001-src-auth")!;
     expect(auth.outcome).toBe("guard-failed");
-    expect(auth.detail).toContain("no Known defects section (037 B-1)");
+    expect(auth.detail).toContain('no "## Known defects" section (037 B-1: present even when empty)');
   } finally {
     fs.rmSync(harness.target, { recursive: true, force: true });
     fs.rmSync(harness.stateRoot, { recursive: true, force: true });

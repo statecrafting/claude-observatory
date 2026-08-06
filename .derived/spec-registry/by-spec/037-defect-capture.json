@@ -18,7 +18,7 @@
       }
     ],
     "id": "037-defect-capture",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "feature",
     "references": [
       {
@@ -45,6 +45,6 @@
     "summary": "The rule that keeps adoption honest (010 A-2, D19), made mechanical: a reverse-engineered spec records what the code does, and known-wrong behavior is written down as a defect, never blessed as contract. Get this wrong and adoption launders every bug in the target into governed truth. This spec establishes the corpus-shape checker that synthesis must pass: every synthesized spec carries origin.retroactive true and a Known defects section that is present even when empty (no known defects is a recorded claim, not an omission), and a synthesis diff may touch only the corpus set, so \"record, never fix\" is enforced by code rather than requested by prompt. The shape is this corpus's own: specs 000-008 carry exactly these markers and sections for the observatory code that predates the graph.\n",
     "title": "Defect capture: adopted specs record behavior, never bless it"
   },
-  "shardHash": "b6976710d43b957a707aca3d65fccde70732864216fac2b6534fba40ebd58ae4",
+  "shardHash": "870001e7d925c08bc518f3f558be6b1b4910362dd47531f8eb6a001dffef53be",
   "specVersion": "1.1.0"
 }
