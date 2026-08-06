@@ -455,7 +455,10 @@ export class StandbyDaemon {
     // any new run starts, wherever that project sits in registration order.
     // D-5 extends the same priority to a queued reverify: a daemon opened by
     // openForControl to receive one sits live with its loop stopped until
-    // this drive lets the requalification run.
+    // this drive lets the requalification run. D-10: the reverify getter
+    // answers false while its run is paused or parked off the slot, so a
+    // recovered pause over a drifted corpus idles at the scan interval
+    // below instead of hot-looping a drive that can consume nothing.
     for (const project of this.schedulable()) {
       const daemon = this.live.get(project.name);
       if (daemon?.hasQueuedResume || daemon?.hasQueuedReverify) {

@@ -1031,3 +1031,76 @@ test("a probe that resumed a paused run drives it back to a live pause instead o
 
   await standby.shutdown();
 });
+
+// --- D-10: a paused run with queued reverifies idles instead of hot-looping --
+
+test("a recovered pause over a drifted corpus idles in standby, then heals and builds on resume (D-10)", async () => {
+  const home = freshDir("paused-drift-home");
+  const repo = new FixtureRepo("paused-drift", { "913-a": { implementation: "pending" } });
+  seedRegistry(home, [["a", repo]]);
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const logs: string[] = [];
+  const first = makeQuietStandby(home, { a: repo }, order, counter, logs);
+
+  // Phase 1: ship 913-a through the pipeline so the journal pins it.
+  await first.start();
+  await waitFor("the spec to ship through the pipeline", () => repo.stageCalls.length === 4);
+  await waitFor("the first daemon to settle into standby", () => first.state === "standby");
+  await first.shutdown();
+
+  // The incident shape (2026-08-06): the daemon died leaving a paused run,
+  // and by the next restart the corpus had both a drifted shipped root and
+  // new pending work, so the open queues an auto-reverify the paused loop
+  // cannot drain.
+  const seeded = openJournal(repo.stateRoot);
+  try {
+    const run = createRun(seeded, repo.repoDir);
+    const running = transition(seeded, run, "running");
+    transition(seeded, running, "paused");
+  } finally {
+    seeded.close();
+  }
+  repo.specs = {
+    "913-a": { implementation: "complete", content: "amended spec content\n" },
+    "914-b": { implementation: "pending" },
+  };
+
+  const logs2: string[] = [];
+  const standby = makeQuietStandby(home, { a: repo }, order, counter, logs2);
+  await standby.start();
+
+  // The restart's one futile drive yields "paused"; the scheduler must then
+  // fall through to the standby wait. Pre-D-10 it re-drove every cycle, so
+  // it never idled, the starved API could not deliver the resume below, and
+  // the deadlock held until SIGKILL.
+  await waitFor(
+    "the recovered pause to release the flight slot",
+    () => logs2.some((l) => l.includes("paused; flight slot released"))
+  );
+  await waitFor("the scheduler to idle with the pause standing", () => standby.state === "standby");
+  expect(logs2.filter((l) => l.includes('driving "a"')).length).toBe(1);
+  expect(repo.stageCalls.length).toBe(4);
+  expect(standby.snapshot.projects.find((p) => p.name === "a")?.disposition).toBe("paused");
+
+  // The resume is the human decision the pause waited for; its drive drains
+  // the queued reverify first, then builds the pending spec in the same run.
+  standby.daemonFor("a")!.resume("test-operator");
+  await waitFor("the heal-then-build run to conclude", () => repo.stageCalls.length === 9, 10_000);
+  await waitFor("the daemon to settle after healing", () => standby.state === "standby");
+  expect(repo.stageCalls).toEqual([
+    "build",
+    "ship",
+    "shepherd",
+    "verify",
+    "verify",
+    "build",
+    "ship",
+    "shepherd",
+    "verify",
+  ]);
+  expect(counter.calls).toBe(0);
+
+  await standby.shutdown();
+});
