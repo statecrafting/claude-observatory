@@ -356,3 +356,32 @@ failed specExec of its own: paused and parked runs, and runs still
 holding unfinished or retryable spec work, are the loop's to reconcile,
 never a supervisor's to declare done. 026 D-9 records the scheduler
 half, including the drive-on-refusal it implies.
+
+D-24 (2026-08-06, operator). Journaled controls survive the process that
+received them. Found live three times over: tenant-tail's bootstrap
+retry was journaled, its daemon died before any drive applied it, and
+the operator had to re-issue it after every restart, a
+journaled-but-broken promise. Every control issue now journals
+`restorable: true` and queues the record's own seq; applying a control,
+including a state-conditional no-op apply, journals `control.applied`
+keyed to that seq, so consumption is a fact of the chain rather than a
+memory of the process. Recovery replays every restorable control with
+no applied record, in journal order, and journals one
+`daemon.controls.restored` summary; records without the marker (every
+pre-D-24 journal) are history and never re-fire, because a
+consumed-but-unmarked control cannot be told from an unconsumed one.
+Standby-auto reverifies are the one exclusion: 026 D-8's next scan
+re-derives them from drift, so restoring them would double-queue the
+same healing. `concludeIdle()` refuses while restored controls sit
+unapplied: a run with queued controls is not idle, and the probe's
+drive is what applies and journals them exactly once. 026 D-11 records
+the scheduler half.
+
+D-25 (2026-08-06, operator). A refusal's pause reason carries the
+refusal itself: when a blocked stage outcome pauses the run, the
+journaled reason appends the build refusal's kind and message (bounded
+to 400 characters) beside the outcome word, so the status surface
+answers "why is it paused right now" without the operator spelunking
+the journal. Found live: the first driven family-repo build paused as
+`build outcome "refused"` while the actionable fact (gate-red-at-base,
+"bun run typecheck" exited 1) sat one journal record away.

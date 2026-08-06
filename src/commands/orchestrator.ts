@@ -658,8 +658,12 @@ function qualificationCell(qualification: RecordedQualification): string {
 function projectRunCell(view: ProjectView): string {
   if (view.readError !== null) return `unreadable: ${view.readError}`;
   if (view.run === null) return "no run yet";
-  const spec = view.spec === null ? "" : `  ${view.spec.specId}`;
-  const stage = view.stage === null ? "" : `/${view.stage.stage}`;
+  // 028 D-11: a terminal run's last spec and stage are history, and printing
+  // them beside "completed" read as work in flight (found live: a settled
+  // project whose row said `completed  033-cost-ceiling/build` for a day).
+  const terminal = view.run.status === "completed" || view.run.status === "failed";
+  const spec = terminal || view.spec === null ? "" : `  ${view.spec.specId}`;
+  const stage = terminal || view.stage === null ? "" : `/${view.stage.stage}`;
   // 033 B-7: a tripped ceiling names itself here. "parked" and "paused" are
   // each reached for more than one reason now, and an operator scanning the
   // list has to be able to tell a quota horizon from a spend limit without

@@ -1032,6 +1032,51 @@ test("a probe that resumed a paused run drives it back to a live pause instead o
   await standby.shutdown();
 });
 
+// --- D-11: a journaled control outlives the daemon that received it ----------
+
+test("a retry journaled before a daemon death lifts the recovered pause at the next open (D-11, 021 D-24)", async () => {
+  const home = freshDir("control-survives-home");
+  const repo = new FixtureRepo("control-survives", { "915-a": { implementation: "pending" } });
+  seedRegistry(home, [["a", repo]]);
+
+  // The tenant-tail wound: a run paused on a human decision, the operator's
+  // retry journaled, and the process dead before any drive applied it.
+  const seeded = openJournal(repo.stateRoot);
+  try {
+    const run = createRun(seeded, repo.repoDir);
+    const running = transition(seeded, run, "running");
+    transition(seeded, running, "paused");
+    seeded.append("control.retryStage", { specId: "915-a", source: "cli", restorable: true });
+  } finally {
+    seeded.close();
+  }
+
+  const order: string[] = [];
+  const counter = { calls: 0 };
+  const logs: string[] = [];
+  const standby = makeQuietStandby(home, { a: repo }, order, counter, logs);
+  await standby.start();
+
+  // Pre-D-24 this idled paused forever (the retry evaporated with its
+  // process); now the open restores it, the drive applies it, and the
+  // pending spec ships in the same resumed run.
+  await waitFor("the restored retry to lift the pause and build", () => repo.stageCalls.length === 4, 10_000);
+  await waitFor("the run to conclude", () => standby.state === "standby");
+  expect(repo.stageCalls).toEqual(["build", "ship", "shepherd", "verify"]);
+  expect(counter.calls).toBe(0);
+
+  const journal = openJournal(repo.stateRoot);
+  try {
+    const byKind = journal.fold().byKind;
+    expect((byKind["daemon.controls.restored"] ?? []).length).toBe(1);
+    expect((byKind["control.applied"] ?? []).length).toBeGreaterThanOrEqual(1);
+  } finally {
+    journal.close();
+  }
+
+  await standby.shutdown();
+});
+
 // --- D-10: a paused run with queued reverifies idles instead of hot-looping --
 
 test("a recovered pause over a drifted corpus idles in standby, then heals and builds on resume (D-10)", async () => {

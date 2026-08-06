@@ -10,11 +10,28 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/commands/orchestrator.test.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/commands/orchestrator.ts",
         "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
+        }
+      },
       {
         "locations": [
           {
@@ -46,5 +63,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "a1407aaab607c53a0e777313b9cbe4456ded1aa59a1a633b52c9ab1f571307c9"
+  "shardHash": "e91dccc563d4cbd1b0bc540abc9fb4305844d3ee732970e66f3d08cac6d63723"
 }

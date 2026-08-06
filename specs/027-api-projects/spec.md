@@ -158,3 +158,11 @@ listed in the meta route table with GET-only enforcement. The suffix
 constant and the view shapes live in spec 030's own unit
 (`src/orchestrator/economics.ts`) rather than PROJECT_ROUTES, so this
 spec's contract files (types.ts, api-client.ts) are unchanged.
+
+D-9 (2026-08-06, operator). The run view's blockers are scoped to the
+run that stopped on them: a `run.blocked` record surfaces only while
+its `runId` is the latest run's, where the unscoped fold surfaced a
+dead run's verdict as if it were news (found live: a "status draft is
+not approved" list from a run two restarts gone, shown beside a
+current pause that said something else entirely). The pause reason
+already had this scoping; the blockers now match it.

@@ -1593,6 +1593,139 @@ test("concludeIdle(): a resumed run still holding a live specExec refuses; the l
   await daemon.shutdown();
 });
 
+// --- D-25: a refusal's pause reason carries the refusal itself ---------------
+
+test("a build refusal pauses the run with the refusal kind and message in the reason (D-25)", async () => {
+  const dataDir = freshDir("refusal-reason-data");
+  const repoDir = freshDir("refusal-reason-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": { implementation: "pending" } });
+
+  const refusedBuild: DaemonStageFns["build"] = async (options) => ({
+    ...buildResult(options.specId, "refused"),
+    evidence: {
+      ...buildResult(options.specId, "refused").evidence,
+      refusal: { kind: "gate-red-at-base", message: '"bun run typecheck" exited 1 at the base branch' },
+    },
+  });
+  const daemon = new Daemon({
+    ...makeDeps({ dataDir, repoDir, dagReader, stageFns: { ...neverCalledStageFns(), build: refusedBuild } }),
+    supervised: true,
+  });
+  await daemon.start();
+  expect(await daemon.drive()).toBe("paused");
+  await daemon.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const reasons = (journal.fold().byKind["run.pause-reason"] ?? []).map((r) => r.payload as Record<string, JsonValue>);
+    expect(reasons.length).toBe(1);
+    expect(reasons[0]!.reason).toContain('build outcome "refused"');
+    expect(reasons[0]!.reason).toContain("gate-red-at-base");
+    expect(reasons[0]!.reason).toContain('"bun run typecheck" exited 1');
+  } finally {
+    journal.close();
+  }
+});
+
+// --- D-24: journaled controls survive the process that received them ---------
+
+test("a control queued when the daemon dies is restored at the next open and applied exactly once (D-24)", async () => {
+  const dataDir = freshDir("control-restore-data");
+  const repoDir = freshDir("control-restore-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": { implementation: "complete" } });
+  const depsOf = () => ({ ...makeDeps({ dataDir, repoDir, dagReader, stageFns: neverCalledStageFns() }), supervised: true });
+
+  // The wound: controls journaled, never applied, process gone.
+  const first = new Daemon(depsOf());
+  await first.start();
+  first.pause("cli");
+  first.skipSpec("900-fixture", "cli");
+  await first.shutdown();
+
+  // The next open restores both; the drive applies them (the pause wins the
+  // run's state) and journals each consumption.
+  const second = new Daemon(depsOf());
+  await second.start();
+  expect(await second.drive()).toBe("paused");
+  expect(second.runStatus).toBe("paused");
+  await second.shutdown();
+
+  // A third open restores nothing: consumption was journaled, not remembered.
+  const third = new Daemon(depsOf());
+  await third.start();
+  expect(third.hasQueuedResume).toBe(false);
+  await third.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const byKind = journal.fold().byKind;
+    expect((byKind["daemon.controls.restored"] ?? []).length).toBe(1);
+    const restored = (byKind["daemon.controls.restored"] ?? [])[0]!.payload as Record<string, JsonValue>;
+    expect(restored.count).toBe(2);
+    expect((byKind["control.applied"] ?? []).length).toBe(2);
+    expect(verifyChain(dataDir).ok).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a pre-D-24 control record without the restorable marker is history, never re-fired (D-24)", async () => {
+  const dataDir = freshDir("control-legacy-data");
+  const repoDir = freshDir("control-legacy-repo");
+
+  const seedJournal = openJournal(dataDir);
+  try {
+    const run = createRun(seedJournal, repoDir);
+    transition(seedJournal, run, "running");
+    // The shape every pre-D-24 journal carries: consumed or not, nobody can
+    // tell, so it must never re-fire.
+    seedJournal.append("control.retryStage", { specId: "900-fixture", source: "cli" });
+  } finally {
+    seedJournal.close();
+  }
+
+  const dagReader = fixtureDagReader({ "900-fixture": { implementation: "complete" } });
+  const daemon = new Daemon({ ...makeDeps({ dataDir, repoDir, dagReader, stageFns: neverCalledStageFns() }), supervised: true });
+  await daemon.start();
+  expect(daemon.hasQueuedResume).toBe(false);
+  // Nothing queued means the probe's idle verdict stands (D-23 unchanged).
+  expect(daemon.concludeIdle()).toBe(true);
+  await daemon.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    expect(journal.fold().byKind["daemon.controls.restored"]).toBeUndefined();
+  } finally {
+    journal.close();
+  }
+});
+
+test("concludeIdle() refuses while restored controls sit unapplied, so a probe drives them through (D-24)", async () => {
+  const dataDir = freshDir("control-probe-data");
+  const repoDir = freshDir("control-probe-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": { implementation: "complete" } });
+  const depsOf = () => ({ ...makeDeps({ dataDir, repoDir, dagReader, stageFns: neverCalledStageFns() }), supervised: true });
+
+  const first = new Daemon(depsOf());
+  await first.start();
+  first.forceHumanGate("900-fixture", "cli");
+  await first.shutdown();
+
+  const second = new Daemon(depsOf());
+  await second.start();
+  expect(second.concludeIdle()).toBe(false);
+  expect(await second.drive()).toBe("completed");
+  expect(second.concludeIdle()).toBe(false);
+  await second.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    expect((journal.fold().byKind["control.applied"] ?? []).length).toBe(1);
+  } finally {
+    journal.close();
+  }
+});
+
 // --- 033 FR-003: a project driven across its cost ceiling --------------------
 
 // A build stage that spends money the way a real one does: the driver

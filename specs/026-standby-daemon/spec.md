@@ -236,3 +236,15 @@ and the control that lifts the yield already reports through
 scheduler is unchanged except its citation: a cycle with nothing
 actionable falls through to the standby wait, which is what keeps the
 API serving and the pause liftable.
+
+D-11 (2026-08-06, operator). The scheduler half of 021 D-24: any open of
+a project daemon (a new-run wake, an amendment probe, an
+openForControl) restores that project's journaled-but-unapplied
+controls as part of recovery, and the existing priority half then sees
+them through the same `hasQueuedResume`/`hasQueuedReverify` getters it
+already reads, so a restored resume or retry earns the next drive with
+no new scheduler surface at all. The operator's mental model becomes:
+a control accepted by the API is a durable promise of the project's
+chain, delivered when the next daemon, whichever process that is,
+opens those journals; a daemon death between acceptance and
+application costs a restart, never the control.

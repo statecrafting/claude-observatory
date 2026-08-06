@@ -1106,6 +1106,13 @@ export function createApiServer(deps: ApiDeps): ApiServer {
   const server = Bun.serve({
     hostname: host,
     port: deps.port ?? DEFAULT_API_PORT,
+    // D-9: Bun's default 10 s idle timeout severed every quiet SSE stream
+    // (B-4 holds connections open between journal appends, which can be
+    // minutes apart in standby) and logged "[Bun.serve]: request timed out"
+    // noise on each kill. 0 disables the timeout deliberately: the listener
+    // is loopback-only, every JSON route answers in one fold, and the one
+    // long-lived route is exactly the one this timeout kept breaking.
+    idleTimeout: 0,
     async fetch(request: Request): Promise<Response> {
       try {
         return await route(deps, request, hub, closers, staticHandler);
