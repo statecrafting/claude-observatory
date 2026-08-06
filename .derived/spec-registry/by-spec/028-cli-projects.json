@@ -46,6 +46,6 @@
     "summary": "The orchestrator command group follows the API to v2: a projects subgroup (list, add, arm, disarm, requalify, remove), a --project flag scoping the existing verbs to a named project, a composite status that renders the daemon state plus one row per project, and an offline journal verify that resolves a project's state root through the daemon home's registry chain. Client-not-engine, exit codes, and the X-Control-Source discipline from 023 carry over unchanged.\n",
     "title": "CLI v2: the projects group and project-scoped verbs"
   },
-  "shardHash": "e47efdb18f1de11a33a9a42e58741ae1503a25e90372a0644a5922802e3ba3f3",
+  "shardHash": "8293811739aaa67f70cf023a8b1ce578f954015da6875feb489772b81925494d",
   "specVersion": "1.1.0"
 }

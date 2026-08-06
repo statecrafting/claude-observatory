@@ -1317,7 +1317,7 @@ function ungovernedRepo(): string {
 test("adopt without its subcommand, and preflight without a path, are usage errors", async () => {
   const bare = await run(["adopt"]);
   expect(bare.code).toBe(EXIT_USAGE);
-  expect(bare.err).toContain(`adopt needs the "preflight" or "validate" subcommand`);
+  expect(bare.err).toContain(`adopt needs the "preflight", "validate", or "synthesize" subcommand`);
 
   const noPath = await run(["adopt", "preflight"]);
   expect(noPath.code).toBe(EXIT_USAGE);
@@ -1481,6 +1481,9 @@ function governedHistoryRepo(): string {
   for (const file of ["src/auth/login.ts", "src/auth/token.ts", "src/core/db.ts", "src/util/helper.ts"]) {
     fs.writeFileSync(join(dir, file), "export {};\n");
   }
+  // What every adoptable target needs before anything journals against it
+  // (the tenant-tail lesson): the orchestrator's state root stays out of git.
+  fs.writeFileSync(join(dir, ".gitignore"), "/data/\n");
   gitFor(dir, ["add", "-A"]);
   gitFor(dir, ["commit", "-qm", "init"]);
 
@@ -1612,6 +1615,163 @@ test("adopt validate scores a corpus branch, ranks the omitted hot file first, a
     } finally {
       fs.rmSync(pathCorpus, { recursive: true, force: true });
     }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// --- adopt synthesize (spec 035) ----------------------------------------------
+
+// The scripted session for the CLI seam: it reads the territory's file list
+// out of the prompt it was handed (that list is FR-001's contract), authors a
+// conforming draft spec for it, and never goes near a model.
+function scriptedSynthesisSession(repo: string): (request: { purpose: string; prompt: string }) => Promise<import("../orchestrator/session").SessionResult> {
+  return async (request) => {
+    if (request.purpose === "scaffold") {
+      const init = Bun.spawnSync(["spec-spine", "init"], { cwd: repo });
+      if (init.exitCode !== 0) throw new Error(`spec-spine init failed: ${new TextDecoder().decode(init.stderr)}`);
+      // The scaffold prompt's step 2: the ignores every governed target needs.
+      fs.appendFileSync(join(repo, ".gitignore"), ".derived/**/build-meta.json\n");
+      writeCorpusSpec(repo, "000-bootstrap", "Bootstrap, recorded as found", []);
+    } else {
+      const lines = request.prompt.split("\n");
+      const start = lines.findIndex((line) => line.startsWith("Author exactly one spec"));
+      const files: string[] = [];
+      for (let i = start + 1; i < lines.length && !lines[i]!.startsWith("Requirements:"); i++) {
+        if (lines[i]!.startsWith("- ")) files.push(lines[i]!.slice(2));
+      }
+      writeCorpusSpec(repo, request.purpose, `Territory ${request.purpose}, recorded as found`, files);
+    }
+    return {
+      classification: { kind: "completed", resetAtMs: null, detail: "ok" },
+      exitCode: 0,
+      durationMs: 5,
+      numTurns: 3,
+      costMicroUsd: 50_000,
+      usage: null,
+      sessionId: `s-${request.purpose}`,
+      transcriptPath: null,
+      overflow: { lines: [], truncatedCount: 0 },
+      stderrTail: "",
+    };
+  };
+}
+
+test("adopt synthesize usage: project name, --proposal, and flag ownership are all enforced", async () => {
+  const noProject = await run(["adopt", "synthesize"]);
+  expect(noProject.code).toBe(EXIT_USAGE);
+  expect(noProject.err).toContain("adopt synthesize needs a project name");
+
+  const noProposal = await run(["adopt", "synthesize", "adoptee"]);
+  expect(noProposal.code).toBe(EXIT_USAGE);
+  expect(noProposal.err).toContain("adopt synthesize needs --proposal <path-or-hash>");
+
+  const elsewhere = await run(["status", "--proposal", "x.md"]);
+  expect(elsewhere.code).toBe(EXIT_USAGE);
+  expect(elsewhere.err).toContain(`--proposal is not a flag of "status"`);
+});
+
+test("adopt synthesize refuses an unknown project and a non-adoptable one by name", async () => {
+  const dataDir = freshDataDir("synthesize-refusals");
+  try {
+    const unknown = await run(["adopt", "synthesize", "ghost", "--proposal", "x.md"], { dataDir });
+    expect(unknown.code).toBe(EXIT_FAILURE);
+    expect(unknown.err).toContain(`no registered project named "ghost"`);
+
+    const governedDir = freshDataDir("synthesize-governed-repo");
+    const chain = openProjectsChain(dataDir);
+    registerProject({
+      chain,
+      repoDir: governedDir,
+      name: "governed",
+      qualification: { qualified: true, checks: [], warnings: [] },
+      source: "cli",
+    });
+    chain.close();
+    const governed = await run(["adopt", "synthesize", "governed", "--proposal", "x.md"], { dataDir });
+    expect(governed.code).toBe(EXIT_FAILURE);
+    expect(governed.err).toContain('"governed" is already governed');
+    fs.rmSync(governedDir, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("adopt synthesize drives the fixture sessions from a journaled proposal hash and leaves a compiling draft corpus on a branch (035 AC-2)", async () => {
+  const repo = governedHistoryRepo();
+  const dataDir = freshDataDir("synthesize");
+  const chain = openProjectsChain(dataDir);
+  registerProject({
+    chain,
+    repoDir: repo,
+    name: "adoptee",
+    qualification: { qualified: false, adoptable: true, checks: [], warnings: [] },
+    source: "cli",
+  });
+  chain.close();
+  try {
+    // The operator's read pass: a real preflight, journaled with its hash.
+    const outPath = join(dataDir, "adoptee.preflight.md");
+    const preflight = await run(["adopt", "preflight", repo, "--out", outPath, "--json"], { dataDir });
+    expect(preflight.code).toBe(EXIT_OK);
+    const preflightData = expectData<{ contentHash: string; candidates: number }>(preflight.out);
+    expect(preflightData.candidates).toBeGreaterThan(0);
+
+    // AC-2's path form: the proposal document the operator read, by path.
+    const result = await run(["adopt", "synthesize", "adoptee", "--proposal", outPath], {
+      dataDir,
+      makeSynthesisSession: (project) => scriptedSynthesisSession(project.repoDir),
+    });
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.out).toContain("synthesis: completed");
+    expect(result.out).toContain(`proposal: sha256 ${preflightData.contentHash}`);
+    expect(result.out).toContain("branch:   corpus/synthesis-");
+    expect(result.out).toContain("authored");
+
+    // The branch is checked out in the target and its corpus compiles under
+    // the real gate, drafts included (B-4).
+    const branch = Bun.spawnSync(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: repo });
+    expect(new TextDecoder().decode(branch.stdout).trim()).toContain("corpus/synthesis-");
+    const compile = Bun.spawnSync(["spec-spine", "compile", "--repo", repo]);
+    expect(compile.exitCode).toBe(0);
+
+    // The run is a matter of record in the project's own work journal: the
+    // choice (with the proposal hash), each session, and the report.
+    const kinds = journalViewFromDir(projectStateRoot(repo))
+      .records()
+      .map((record) => record.kind);
+    expect(kinds).toContain("adopt.preflight");
+    expect(kinds).toContain("adopt.synthesis.started");
+    expect(kinds).toContain("adopt.synthesis.session");
+    expect(kinds).toContain("adopt.synthesis");
+
+    // B-1's hash form resolves through the journaled preflight record to the
+    // same document, so it reaches the same provenance-named branch and
+    // refuses on it (D-8, D-9): the resolution worked, the ref is protected.
+    const byHash = await run(["adopt", "synthesize", "adoptee", "--proposal", preflightData.contentHash], {
+      dataDir,
+      makeSynthesisSession: (project) => scriptedSynthesisSession(project.repoDir),
+    });
+    expect(byHash.code).toBe(EXIT_FAILURE);
+    expect(byHash.out).toContain("could not create branch corpus/synthesis-");
+
+    // An unknown hash refuses through the same journal it resolves by.
+    const unknownHash = await run(["adopt", "synthesize", "adoptee", "--proposal", "0".repeat(64)], {
+      dataDir,
+      makeSynthesisSession: (project) => scriptedSynthesisSession(project.repoDir),
+    });
+    expect(unknownHash.code).toBe(EXIT_FAILURE);
+    expect(unknownHash.err).toContain("no journaled adopt.preflight record");
+
+    // A proposal edited since the operator read it refuses by hash (D-9).
+    fs.writeFileSync(outPath, "# tampered\n");
+    const tampered = await run(["adopt", "synthesize", "adoptee", "--proposal", preflightData.contentHash], {
+      dataDir,
+      makeSynthesisSession: (project) => scriptedSynthesisSession(project.repoDir),
+    });
+    expect(tampered.code).toBe(EXIT_FAILURE);
+    expect(tampered.err).toContain("no longer hashes");
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });

@@ -56,7 +56,7 @@ import {
 } from "../orchestrator/api/server";
 import { createProcessInspector, createProductionDaemonDeps, type ProcessInspector } from "../orchestrator/daemon";
 import { StandbyDaemon } from "../orchestrator/standby";
-import { killLiveSession } from "../orchestrator/session";
+import { killLiveSession, runSession } from "../orchestrator/session";
 import { createProcessDagReader } from "../orchestrator/dag";
 import {
   PROJECTS_CHAIN_BASENAME,
@@ -81,6 +81,7 @@ import {
   adoptableDagReader,
   exclusionAdditionsFromFlag,
   journalPreflight,
+  proposalHash,
   runPreflight,
   unknownSurfaces,
   type ExclusionRule,
@@ -95,6 +96,14 @@ import {
   replayHoldback,
   type HoldbackScore,
 } from "../orchestrator/adopt/holdback";
+import {
+  createProcessSynthesisGate,
+  createProcessSynthesisGit,
+  renderSynthesisReport,
+  runSynthesis,
+  type SynthesisReport,
+  type SynthesisSessionFn,
+} from "../orchestrator/adopt/synthesis";
 import {
   ceilingOf,
   ceilingRefusal,
@@ -164,6 +173,8 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
                                an ungoverned target [--out <path>] [--exclude <rules>]
   adopt validate <project>     replay the target's history against a candidate
                                corpus and journal the score (--corpus <ref-or-path>)
+  adopt synthesize <project>   driven sessions author a draft corpus on a feature
+                               branch of an adoptable target (--proposal <path|hash>)
   dag                          every spec with readiness, blockers, drift
   next                         the next ready spec, or why there is none
   start | pause | resume       run controls
@@ -188,6 +199,9 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
                                separated ("dir/" or exact basename); additions only
   --corpus <ref-or-path>       the candidate corpus for adopt validate: a branch or
                                committish of the target, or a corpus checkout path
+  --proposal <path-or-hash>    the 034 proposal adopt synthesize works from: a
+                               document path, or a sha256 resolved through the
+                               project's journaled preflight records
   --name <slug>                project name for projects add
   --disarmed                   register disarmed (projects add)
   --profile <mode>             posture for projects add: bypass | guarded
@@ -227,6 +241,10 @@ export interface OrchestratorCliDeps {
   readonly startTimeoutMs: number;
   readonly stopTimeoutMs: number;
   readonly pollIntervalMs: number;
+  // 035's session seam: absent, `adopt synthesize` drives real spec 014
+  // sessions under the project's execution profile; tests inject scripted
+  // ones so AC-2 runs with no model anywhere near it.
+  readonly makeSynthesisSession?: (project: Project, journal: JournalHandle) => SynthesisSessionFn;
 }
 
 export const ORCHESTRATOR_DATA_DIR = join(DATA_DIR, "orchestrator");
@@ -305,6 +323,8 @@ interface ParsedArgs {
   readonly exclude: string | null;
   // 036's corpus source: a ref of the target or a checkout path (D-5).
   readonly corpus: string | null;
+  // 035's proposal source: a document path or a sha256 content hash (B-1).
+  readonly proposal: string | null;
   readonly rest: readonly string[];
 }
 
@@ -332,6 +352,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let bundle: string | null = null;
   let exclude: string | null = null;
   let corpus: string | null = null;
+  let proposal: string | null = null;
   const rest: string[] = [];
 
   const valued: Readonly<Record<string, (value: string) => void>> = {
@@ -380,6 +401,9 @@ function parseArgs(argv: readonly string[]): ParseResult {
     "--corpus": (v) => {
       corpus = v;
     },
+    "--proposal": (v) => {
+      proposal = v;
+    },
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -411,7 +435,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
 
   return {
     ok: true,
-    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, exclude, corpus, rest },
+    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, exclude, corpus, proposal, rest },
   };
 }
 
@@ -456,6 +480,9 @@ const ADOPT_PREFLIGHT_FLAGS: readonly string[] = ["--out", "--exclude"];
 // alone; the target is the positional project name, so `--project` is as
 // much a stray here as it is on preflight.
 const ADOPT_VALIDATE_FLAGS: readonly string[] = ["--corpus"];
+// 035 B-1: the proposal source is the synthesize verb's one flag; the target
+// is the positional project name, so every other flag is a stray here.
+const ADOPT_SYNTHESIZE_FLAGS: readonly string[] = ["--proposal"];
 
 // The flags a command accepts, subcommand included: three of them carry flag
 // sets of their own, and everything else takes the group's.
@@ -466,6 +493,7 @@ function acceptedFlags(command: string, sub: string | undefined): readonly strin
   if (command === "journal" && sub === "export") return JOURNAL_EXPORT_FLAGS;
   if (command === "adopt" && sub === "preflight") return ADOPT_PREFLIGHT_FLAGS;
   if (command === "adopt" && sub === "validate") return ADOPT_VALIDATE_FLAGS;
+  if (command === "adopt" && sub === "synthesize") return ADOPT_SYNTHESIZE_FLAGS;
   return Object.hasOwn(EXTRA_FLAGS, command) ? EXTRA_FLAGS[command] : undefined;
 }
 
@@ -484,6 +512,7 @@ function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null
     args.bundle !== null ? "--bundle" : null,
     args.exclude !== null ? "--exclude" : null,
     args.corpus !== null ? "--corpus" : null,
+    args.proposal !== null ? "--proposal" : null,
   ].filter((flag): flag is string => flag !== null);
   return present.find((flag) => !accepted.includes(flag)) ?? null;
 }
@@ -1951,6 +1980,157 @@ function cmdAdoptValidate(deps: OrchestratorCliDeps, json: boolean, projectName:
   return EXIT_FAILURE;
 }
 
+// --- adoption synthesize (spec 035) -----------------------------------------
+
+interface AdoptSynthesizeData {
+  readonly project: string | null;
+  readonly resolveError: string | null;
+  readonly proposalPath: string | null;
+  readonly report: (Omit<SynthesisReport, "claimed"> & { readonly claimed: Record<string, readonly string[]> }) | null;
+}
+
+function adoptSynthesizeFailure(deps: OrchestratorCliDeps, json: boolean, project: string | null, resolveError: string): number {
+  const data: AdoptSynthesizeData = { project, resolveError, proposalPath: null, report: null };
+  if (json) {
+    printJson(deps, { ok: true, data } satisfies ApiResponse<AdoptSynthesizeData>);
+    return EXIT_FAILURE;
+  }
+  deps.err(`adopt synthesize: ${resolveError}`);
+  return EXIT_FAILURE;
+}
+
+// B-1: the proposal by path or by content hash. A 64-hex argument resolves
+// through the project's journaled adopt.preflight records to the recorded
+// out path, and the document there must still hash to the requested value: a
+// proposal that moved or was edited since the operator read it refuses
+// rather than synthesizing from something nobody chose (D-9).
+function resolveProposalDocument(project: Project, flag: string): { readonly path: string; readonly document: string } | string {
+  const isHash = /^[0-9a-f]{64}$/.test(flag);
+  let path = flag;
+  if (isHash) {
+    let recordedOut: string | null = null;
+    try {
+      const records = journalViewFromDir(projectStateRoot(project.repoDir)).records();
+      for (const record of records) {
+        if (record.kind !== "adopt.preflight") continue;
+        const payload = record.payload as Record<string, unknown>;
+        if (payload.contentHash === flag && typeof payload.out === "string") recordedOut = payload.out;
+      }
+    } catch (err) {
+      return `the work journal under ${projectStateRoot(project.repoDir)} could not be read: ${(err as Error).message}`;
+    }
+    if (recordedOut === null) {
+      return `no journaled adopt.preflight record of project "${project.name}" carries content hash ${flag}`;
+    }
+    path = recordedOut;
+  }
+  let document: string;
+  try {
+    document = fs.readFileSync(resolve(path), "utf8");
+  } catch (err) {
+    return `the proposal at ${resolve(path)} could not be read: ${(err as Error).message}`;
+  }
+  if (isHash && proposalHash(document) !== flag) {
+    return `the proposal at ${path} no longer hashes to ${flag}; re-run adopt preflight and choose again`;
+  }
+  return { path: resolve(path), document };
+}
+
+// 035's one verb. Offline of any daemon like the rest of the adopt group,
+// but not free: it drives real sessions against the target unless the test
+// seam is injected, journals into the project's work journal for its whole
+// duration (a live daemon driving this project holds that writer and refuses
+// this run cleanly), and applies the project's own ceiling (B-2).
+async function cmdAdoptSynthesize(deps: OrchestratorCliDeps, json: boolean, projectName: string, proposalFlag: string): Promise<number> {
+  let project: Project | null = null;
+  let resolveError: string | null = null;
+  try {
+    const registry = foldProjects(journalViewFromDir(deps.dataDir, PROJECTS_CHAIN_BASENAME).records());
+    const found = registry.get(projectName);
+    if (found !== undefined) project = found;
+    else {
+      const known = [...registry.keys()];
+      resolveError =
+        known.length === 0
+          ? `no registered project named "${projectName}": the registry under ${deps.dataDir} holds none`
+          : `no registered project named "${projectName}" (registered: ${known.join(", ")})`;
+    }
+  } catch (err) {
+    resolveError = `the projects chain under ${deps.dataDir} could not be folded: ${(err as Error).message}`;
+  }
+  if (project === null) return adoptSynthesizeFailure(deps, json, null, resolveError!);
+
+  // B-1: synthesis is for adoptable targets. A governed project's corpus is
+  // driven by the daemon, and an unsound repository cannot take a branch;
+  // both refuse by name rather than authoring over the operator's head.
+  if (project.qualification.adoptable !== true) {
+    const word = project.qualification.qualified ? "already governed" : "not adoptable";
+    return adoptSynthesizeFailure(
+      deps,
+      json,
+      project.name,
+      `"${project.name}" is ${word}: adopt synthesize needs a target whose qualification reads adoptable (a sound repository with no corpus; see projects requalify)`
+    );
+  }
+
+  const resolved = resolveProposalDocument(project, proposalFlag);
+  if (typeof resolved === "string") return adoptSynthesizeFailure(deps, json, project.name, resolved);
+
+  let journal: JournalHandle;
+  try {
+    journal = openJournal(projectStateRoot(project.repoDir));
+  } catch (err) {
+    return adoptSynthesizeFailure(
+      deps,
+      json,
+      project.name,
+      `the work journal could not be opened for writing: ${(err as Error).message}`
+    );
+  }
+
+  let report: SynthesisReport;
+  try {
+    const boundProject = project;
+    const session: SynthesisSessionFn =
+      deps.makeSynthesisSession !== undefined
+        ? deps.makeSynthesisSession(project, journal)
+        : async (request) =>
+            runSession({
+              repo: boundProject.repoDir,
+              prompt: request.prompt,
+              profile: boundProject.profile,
+              journal,
+            });
+    report = await runSynthesis({
+      projectName: project.name,
+      proposalDocument: resolved.document,
+      journal,
+      session,
+      git: createProcessSynthesisGit(project.repoDir),
+      gate: createProcessSynthesisGate(project.repoDir),
+      clock: { now: () => deps.now() },
+      source: CONTROL_SOURCE,
+      ceiling: project.ceiling,
+    });
+  } finally {
+    journal.close();
+  }
+
+  if (json) {
+    const data: AdoptSynthesizeData = {
+      project: project.name,
+      resolveError: null,
+      proposalPath: resolved.path,
+      report: { ...report, claimed: Object.fromEntries(report.claimed) },
+    };
+    printJson(deps, { ok: true, data } satisfies ApiResponse<AdoptSynthesizeData>);
+    return report.outcome === "completed" ? EXIT_OK : EXIT_FAILURE;
+  }
+
+  for (const line of renderSynthesisReport(report)) deps.out(line);
+  return report.outcome === "completed" ? EXIT_OK : EXIT_FAILURE;
+}
+
 // --- daemon lifecycle (B-2) -------------------------------------------------
 
 interface DaemonLockFile {
@@ -2563,7 +2743,16 @@ async function dispatch(
       if (args.corpus === null) return usage(scoped, "adopt validate needs --corpus <branch-or-path>");
       return cmdAdoptValidate(scoped, args.json, projectName, args.corpus);
     }
-    return usage(scoped, `adopt needs the "preflight" or "validate" subcommand`);
+    if (sub === "synthesize") {
+      const projectName = rest[1];
+      if (projectName === undefined || projectName.trim().length === 0) {
+        return usage(scoped, "adopt synthesize needs a project name");
+      }
+      if (rest.length > 2) return usage(scoped, `unexpected argument "${rest[2]}" after adopt synthesize`);
+      if (args.proposal === null) return usage(scoped, "adopt synthesize needs --proposal <path-or-hash>");
+      return cmdAdoptSynthesize(scoped, args.json, projectName, args.proposal);
+    }
+    return usage(scoped, `adopt needs the "preflight", "validate", or "synthesize" subcommand`);
   }
 
   const client = scoped.createClient(url);
