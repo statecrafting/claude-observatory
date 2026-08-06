@@ -4,10 +4,13 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   PROJECT_KINDS,
+  VALIDATION_RECORD_KIND,
   createProcessProjectProbe,
   defaultProjectName,
   foldProjects,
   isValidProjectName,
+  journalValidation,
+  latestValidation,
   openProjectsChain,
   projectStateRoot,
   projectsFromChain,
@@ -21,6 +24,8 @@ import {
   type ProjectProbe,
   type QualificationVerdict,
 } from "./projects";
+import { openJournal, verifyChain } from "./journal";
+import { replayHoldback, type HoldbackScore, type ReplayHistory } from "./adopt/holdback";
 
 // --- fixtures (real git, never a real spec-spine) ---------------------------
 
@@ -524,5 +529,89 @@ test("an unqualified target registers with its reasons and requalifies in place 
     if (verified.ok) expect(verified.count).toBe(3);
   } finally {
     chain.close();
+  }
+});
+
+// --- the ratification-input record (spec 036 B-3, FR-003) --------------------
+
+// A real score from the real replay, so what round-trips is the shape the
+// CLI actually journals, not a hand-flattered stand-in.
+function scoreFixture(): HoldbackScore {
+  const history: ReplayHistory = {
+    mode: "merges",
+    ref: "origin/main",
+    refFallback: null,
+    requested: 200,
+    commits: [
+      { sha: "a".repeat(40), subject: "covered", changes: [{ path: "src/owned.ts", renamedFrom: null }], parseError: null },
+      { sha: "b".repeat(40), subject: "stray", changes: [{ path: "src/rogue.ts", renamedFrom: null }], parseError: null },
+    ],
+    shortfall: "the clone holds only 2 first-parent merge(s) of the 200 requested",
+  };
+  return replayHoldback(history, {
+    specs: [{ id: "001-owned", units: [{ kind: "file", path: "src/owned.ts" }] }],
+    remainderPrefixes: ["docs/"],
+    corpusHash: "c".repeat(64),
+    corpusHead: null,
+  });
+}
+
+test("the ratification-input record round-trips with its pins and score, and the chain verifies (036 FR-003)", () => {
+  const stateRoot = join(freshHome(), "data", "orchestrator");
+  const handle = openJournal(stateRoot);
+  try {
+    const record = journalValidation({
+      handle,
+      project: "adoptee",
+      source: "cli",
+      corpus: { ref: "draft/corpus", hash: "c".repeat(64), specs: 1, head: "d".repeat(40) },
+      target: { headSha: "e".repeat(40), ref: "origin/main", mode: "merges", requested: 200, read: 2 },
+      score: scoreFixture(),
+    });
+    expect(record.kind).toBe(VALIDATION_RECORD_KIND);
+
+    const readBack = latestValidation(handle.fold().records);
+    expect(readBack).not.toBeNull();
+    expect(readBack!.corpus).toEqual({ ref: "draft/corpus", hash: "c".repeat(64), specs: 1, head: "d".repeat(40) });
+    expect(readBack!.target).toEqual({ headSha: "e".repeat(40), ref: "origin/main", mode: "merges", requested: 200, read: 2 });
+    expect(readBack!.seq).toBe(record.seq);
+    expect(readBack!.recordedAt).toBe(record.ts);
+    // The full score travels verbatim (B-3): counters, orphan detail, and
+    // the window's named shortfall all survive the chain.
+    expect(readBack!.score.evaluated).toBe(2);
+    expect(readBack!.score.covered).toBe(1);
+    expect(readBack!.score.orphanPaths).toEqual([{ path: "src/rogue.ts", touches: 1 }]);
+    expect(readBack!.score.failures[0]!.orphans).toEqual(["src/rogue.ts"]);
+    expect(readBack!.score.shortfall).toContain("only 2");
+
+    const verified = verifyChain(stateRoot);
+    expect(verified.ok).toBe(true);
+  } finally {
+    handle.close();
+  }
+});
+
+test("a re-run appends a fresh record and the newest wins; a chain without one answers null (B-3)", () => {
+  const stateRoot = join(freshHome(), "data", "orchestrator");
+  const handle = openJournal(stateRoot);
+  try {
+    expect(latestValidation(handle.fold().records)).toBeNull();
+
+    const base = {
+      handle,
+      project: "adoptee",
+      source: "cli",
+      target: { headSha: null, ref: "HEAD", mode: "commits", requested: 200, read: 1 },
+      score: scoreFixture(),
+    };
+    journalValidation({ ...base, corpus: { ref: "draft/corpus", hash: "1".repeat(64), specs: 1, head: null } });
+    journalValidation({ ...base, corpus: { ref: "draft/corpus", hash: "2".repeat(64), specs: 2, head: null } });
+
+    const latest = latestValidation(handle.fold().records);
+    expect(latest!.corpus.hash).toBe("2".repeat(64));
+    expect(latest!.corpus.specs).toBe(2);
+    expect(handle.fold().records.filter((r) => r.kind === VALIDATION_RECORD_KIND)).toHaveLength(2);
+  } finally {
+    handle.close();
   }
 });

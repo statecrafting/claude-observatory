@@ -169,3 +169,17 @@ reading, and `standbyProjects` swaps an adoptable project's DagReader for
 034's refusing reader, which is what makes `dag` and `next` answer the
 refusal by name (034 AC-3) while every other project's reader is
 untouched.
+
+D-9 (2026-08-06, spec 036's build, per its granted authority). The adopt
+group gains its second offline verb, `adopt validate <project> --corpus
+<ref-or-path>`, dispatched with no client exactly like preflight: it
+folds the registry off disk to resolve the project (B-3's stance),
+materializes the corpus per 036 D-5, prints the 036 B-2 report with a
+denominator beside every number (036 FR-004), and appends the 036 B-3
+record to the project's own state root through a short-lived writer
+handle, a held lock reported as the operational failure it is. `--corpus`
+belongs to this verb alone (D-5's flag discipline). Exit codes carry
+over: usage is 3; an unknown project, an unusable corpus, or a history
+too shallow to evaluate is 1; a completed replay is 0 whatever it
+measured, because a low score is a finding, not a failure.
+orchestrator.test.ts gains the verb's usage and AC-2 coverage.

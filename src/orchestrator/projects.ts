@@ -26,6 +26,7 @@ import * as fs from "fs";
 import { basename, isAbsolute, join, resolve } from "path";
 import type { FoldedState, JournalHandle, JournalRecord, JsonValue, VerifyResult } from "./journal";
 import { openJournal, verifyChain } from "./journal";
+import type { HoldbackScore } from "./adopt/holdback";
 import type { ExecutionProfile, RecordedProfile } from "./profile";
 import { DEFAULT_REGISTRATION_PROFILE, LEGACY_BYPASS_PROFILE, parseProfile, profilePayload } from "./profile";
 import type { CostCeiling } from "./budget";
@@ -703,4 +704,133 @@ export function qualifyProject(probe: ProjectProbe, repoDir: string): Qualificat
   // nothing to compile and does not block the reading.
   const adoptable = !qualified && isRepoRoot && origin !== null && branch !== null && specs === 0;
   return { qualified, checks, warnings, adoptable };
+}
+
+// --- the ratification-input record (spec 036 B-3) ----------------------------
+
+// What a completed holdback replay pins for the operator's later ratification
+// (010 D18): the corpus content it scored, the target history it replayed,
+// and the full score. Appended to the target project's own work journal (036
+// D-4, 034 B-6's precedent: the standby daemon holds the projects chain open,
+// so a registry-chain append from the offline CLI would refuse whenever a
+// daemon runs; the work journal is held for one append). The record grants
+// nothing by itself, and a re-run against a changed corpus appends a fresh
+// record rather than mutating anything; latestValidation() is the fold the
+// projects surfaces and a later arm path read it back through.
+export const VALIDATION_RECORD_KIND = "adopt.validated";
+
+export interface ValidationCorpusPin {
+  // The corpus as the operator named it (a branch of the target, or a path).
+  readonly ref: string;
+  // The compiled registry's own content hashing: spec-spine attest (036 D-6).
+  readonly hash: string;
+  readonly specs: number;
+  readonly head: string | null;
+}
+
+export interface ValidationTargetPin {
+  readonly headSha: string | null;
+  // The ref the replay walked and the window it actually used (036 B-3).
+  readonly ref: string;
+  readonly mode: string;
+  readonly requested: number;
+  readonly read: number;
+}
+
+export interface JournalValidationParams {
+  readonly handle: JournalHandle;
+  readonly project: string;
+  readonly source: string;
+  readonly corpus: ValidationCorpusPin;
+  readonly target: ValidationTargetPin;
+  readonly score: HoldbackScore;
+}
+
+export function journalValidation(params: JournalValidationParams): JournalRecord {
+  return params.handle.append(VALIDATION_RECORD_KIND, {
+    project: params.project,
+    source: params.source,
+    corpus: {
+      ref: params.corpus.ref,
+      hash: params.corpus.hash,
+      specs: params.corpus.specs,
+      head: params.corpus.head,
+    },
+    target: {
+      headSha: params.target.headSha,
+      ref: params.target.ref,
+      mode: params.target.mode,
+      requested: params.target.requested,
+      read: params.target.read,
+    },
+    // The score is journaled verbatim (B-3: "the full score"); it is
+    // JSON-safe by construction (036's HoldbackScore carries no Maps).
+    score: params.score as unknown as JsonValue,
+  });
+}
+
+// A validation as read back out of the chain. `recordedAt` is the record's
+// own envelope timestamp, for the same one-clock reason RecordedQualification
+// takes checkedAt from its record.
+export interface RecordedValidation {
+  readonly corpus: ValidationCorpusPin;
+  readonly target: ValidationTargetPin;
+  readonly score: HoldbackScore;
+  readonly recordedAt: string;
+  readonly seq: number;
+}
+
+function asNumber(o: Record<string, JsonValue>, field: string, kind: string): number {
+  const v = o[field];
+  if (typeof v !== "number") throw new Error(`projects: ${kind} expected number field "${field}"`);
+  return v;
+}
+
+function asNullableString(o: Record<string, JsonValue>, field: string, kind: string): string | null {
+  const v = o[field];
+  if (v === null || v === undefined) return null;
+  if (typeof v !== "string") throw new Error(`projects: ${kind} expected string-or-null field "${field}"`);
+  return v;
+}
+
+// The pins are the citation, so they are checked field by field; the score
+// travels back verbatim after a spot check of its load-bearing counters,
+// because a later surface re-rendering it needs the whole shape, not a
+// re-validated copy that could silently drop a field it did not know.
+export function parseValidation(record: JournalRecord): RecordedValidation {
+  const kind = VALIDATION_RECORD_KIND;
+  const o = asObject(record.payload, kind);
+  const corpus = asObject(o.corpus ?? null, `${kind}.corpus`);
+  const target = asObject(o.target ?? null, `${kind}.target`);
+  const score = asObject(o.score ?? null, `${kind}.score`);
+  asNumber(score, "evaluated", `${kind}.score`);
+  asNumber(score, "covered", `${kind}.score`);
+  return {
+    corpus: {
+      ref: asString(corpus, "ref", `${kind}.corpus`),
+      hash: asString(corpus, "hash", `${kind}.corpus`),
+      specs: asNumber(corpus, "specs", `${kind}.corpus`),
+      head: asNullableString(corpus, "head", `${kind}.corpus`),
+    },
+    target: {
+      headSha: asNullableString(target, "headSha", `${kind}.target`),
+      ref: asString(target, "ref", `${kind}.target`),
+      mode: asString(target, "mode", `${kind}.target`),
+      requested: asNumber(target, "requested", `${kind}.target`),
+      read: asNumber(target, "read", `${kind}.target`),
+    },
+    score: score as unknown as HoldbackScore,
+    recordedAt: record.ts,
+    seq: record.seq,
+  };
+}
+
+// The newest validation in a project's work-journal records, or null when no
+// replay has ever been journaled there. Newest wins by append order: a fresh
+// replay supersedes, never mutates (B-3).
+export function latestValidation(records: readonly JournalRecord[]): RecordedValidation | null {
+  for (let i = records.length - 1; i >= 0; i--) {
+    if (records[i]!.kind === VALIDATION_RECORD_KIND) return parseValidation(records[i]!);
+  }
+  return null;
 }
