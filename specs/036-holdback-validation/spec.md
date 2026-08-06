@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-05"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: in-progress
+implementation: complete
 risk: medium
 depends_on:
   - "025-project-registry"
@@ -33,6 +33,8 @@ extends:
   - { spec: "028-cli-projects", unit: "src/commands/orchestrator.ts", nature: additive }
   # The ratification record: journaled verdict the arm path can cite.
   - { spec: "025-project-registry", unit: "src/orchestrator/projects.ts", nature: additive }
+  # The verb's usage and AC-2 coverage ride in 028's test surface (D-9).
+  - { spec: "028-cli-projects", unit: "src/commands/orchestrator.test.ts", nature: additive }
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---
@@ -147,3 +149,46 @@ coupled authoring edits under the gate, not a defect. The histogram is
 evidence for the operator's judgment about boundary quality; hard
 dispersion limits, if ever wanted, are ratification policy, not replay
 mechanics.
+
+D-3 (2026-08-06, the build). The corpus's explicit ungoverned remainder
+is its own coupling bypass declaration: `[coupling] bypass_prefixes` in
+the corpus's spec-spine.toml, prefix-matched, the same list the gate
+itself exempts from ownership. Only the explicit declaration counts;
+spec-spine's built-in generic bypass floor is not mirrored here, because
+the replay first applies 034's exclusion floor (its D-2 audited rules)
+to the history side, which keeps the same mechanical classes (lockfiles,
+vendored, generated) out of the orphan list without pretending to know
+the gate's internals. Both classes are reported with match counts, and a
+commit left with no governed paths at all is evaluated as neither
+covered nor failing: its own named bucket, outside both numerator and
+denominator.
+
+D-4 (2026-08-06, the build). The ratification-input record (kind
+`adopt.validated`) appends to the target project's own work journal, 034
+B-6's exact precedent, not to the daemon home's projects chain: the
+standby daemon holds that chain's writer open for its whole life, so an
+offline validate would refuse whenever a daemon runs, and B-4 promises
+standalone operation. The kind, payload codec, and the newest-wins
+`latestValidation` fold live in projects.ts (the extends edge), so a
+later arm path and any projects surface read the verdict through one
+module; API and UI columns for it are 027/029 territory when those specs
+take it up.
+
+D-5 (2026-08-06, the build). `--corpus` resolves an existing directory
+as a corpus checkout used as-is; anything else must name a committish of
+the target (the 035 synthesis branch is the expected case) and is
+materialized through a local `git clone --no-checkout` plus a detached
+checkout into a temporary directory, so nothing is ever written inside
+the target. `spec-spine compile` and `attest` then run in that corpus
+checkout under 025's qualification-probe write discipline: deterministic
+derived artifacts refreshed, never an authored file.
+
+D-6 (2026-08-06, the build). The corpus content hash is `spec-spine
+attest`'s attestationHash, which is the compiled registry's own
+reproducible corpus hashing, indifferent to whether the checkout carries
+a .git. Dispersion is the size of a deterministic greedy minimal cover
+of a commit's governed paths by owning specs (largest remaining gain
+first, ties broken lexicographically by id): the gate requires one
+owning spec's authoring edit per changed path, so "how many specs would
+this change have had to touch" is a minimal-cover question, and the
+greedy answer keeps it a pure function of the inputs.

@@ -1317,7 +1317,7 @@ function ungovernedRepo(): string {
 test("adopt without its subcommand, and preflight without a path, are usage errors", async () => {
   const bare = await run(["adopt"]);
   expect(bare.code).toBe(EXIT_USAGE);
-  expect(bare.err).toContain(`adopt needs the "preflight" subcommand`);
+  expect(bare.err).toContain(`adopt needs the "preflight" or "validate" subcommand`);
 
   const noPath = await run(["adopt", "preflight"]);
   expect(noPath.code).toBe(EXIT_USAGE);
@@ -1460,5 +1460,160 @@ test("an adoptable project renders adoptable, and dag/next refuse it by name (03
   } finally {
     await server.stop();
     registry.close();
+  }
+});
+
+// --- adopt validate (spec 036) ------------------------------------------------
+
+// A target with a real merge history whose coupling is known by construction:
+// login.ts ships in two merges, helper.ts in one, db.ts in one. The corpus
+// branches below either cover all of it or deliberately omit the hot file
+// (login.ts) and the cooler one (helper.ts), which is AC-2's orphan-ranking
+// case.
+function governedHistoryRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "cli-validate-repo-"));
+  gitFor(dir, ["init", "-q", "-b", "main"]);
+  gitFor(dir, ["config", "user.email", "test@example.com"]);
+  gitFor(dir, ["config", "user.name", "Test"]);
+  fs.mkdirSync(join(dir, "src", "auth"), { recursive: true });
+  fs.mkdirSync(join(dir, "src", "core"), { recursive: true });
+  fs.mkdirSync(join(dir, "src", "util"), { recursive: true });
+  for (const file of ["src/auth/login.ts", "src/auth/token.ts", "src/core/db.ts", "src/util/helper.ts"]) {
+    fs.writeFileSync(join(dir, file), "export {};\n");
+  }
+  gitFor(dir, ["add", "-A"]);
+  gitFor(dir, ["commit", "-qm", "init"]);
+
+  const merge = (branch: string, subject: string, files: readonly string[]): void => {
+    gitFor(dir, ["checkout", "-qb", branch]);
+    for (const file of files) fs.appendFileSync(join(dir, file), `// ${subject}\n`);
+    gitFor(dir, ["add", "-A"]);
+    gitFor(dir, ["commit", "-qm", subject]);
+    gitFor(dir, ["checkout", "-q", "main"]);
+    gitFor(dir, ["merge", "-q", "--no-ff", branch, "-m", `merge ${subject}`]);
+  };
+  merge("auth-1", "auth round 1", ["src/auth/login.ts", "src/auth/token.ts"]);
+  merge("auth-2", "auth round 2", ["src/auth/login.ts", "src/auth/token.ts", "src/util/helper.ts"]);
+  merge("core-1", "core round", ["src/core/db.ts"]);
+  return dir;
+}
+
+function writeCorpusSpec(repo: string, id: string, title: string, paths: readonly string[]): void {
+  const establishes = paths.map((path) => `  - { kind: file, path: "${path}" }`).join("\n");
+  fs.mkdirSync(join(repo, "specs", id), { recursive: true });
+  fs.writeFileSync(
+    join(repo, "specs", id, "spec.md"),
+    `---\nid: "${id}"\ntitle: "${title}"\nstatus: draft\ncreated: "2026-08-06"\nsummary: >\n  ${title}, recorded as found.\norigin:\n  retroactive: true\nestablishes:\n${establishes}\n---\n\n# ${id}\n\nRecords the territory as found.\n`
+  );
+}
+
+// A candidate corpus authored on a branch of the target, 035's shape: the
+// spec-spine scaffold plus one draft spec per territory.
+function corpusBranch(repo: string, branch: string, specs: readonly { id: string; title: string; paths: readonly string[] }[]): void {
+  gitFor(repo, ["checkout", "-qb", branch]);
+  const init = Bun.spawnSync(["spec-spine", "init"], { cwd: repo });
+  if (init.exitCode !== 0) {
+    throw new Error(`spec-spine init failed: ${new TextDecoder().decode(init.stderr)}`);
+  }
+  for (const spec of specs) writeCorpusSpec(repo, spec.id, spec.title, spec.paths);
+  gitFor(repo, ["add", "-A"]);
+  gitFor(repo, ["commit", "-qm", `draft corpus ${branch}`]);
+  gitFor(repo, ["checkout", "-q", "main"]);
+}
+
+test("adopt validate usage: project name, --corpus, and flag ownership are all enforced", async () => {
+  const noProject = await run(["adopt", "validate"]);
+  expect(noProject.code).toBe(EXIT_USAGE);
+  expect(noProject.err).toContain("adopt validate needs a project name");
+
+  const noCorpus = await run(["adopt", "validate", "adoptee"]);
+  expect(noCorpus.code).toBe(EXIT_USAGE);
+  expect(noCorpus.err).toContain("adopt validate needs --corpus <branch-or-path>");
+
+  const elsewhere = await run(["status", "--corpus", "draft"]);
+  expect(elsewhere.code).toBe(EXIT_USAGE);
+  expect(elsewhere.err).toContain(`--corpus is not a flag of "status"`);
+});
+
+test("adopt validate refuses an unknown project and an unusable corpus with the reason named", async () => {
+  const dataDir = freshDataDir("validate-unknown");
+  try {
+    const unknown = await run(["adopt", "validate", "ghost", "--corpus", "draft"], { dataDir });
+    expect(unknown.code).toBe(EXIT_FAILURE);
+    expect(unknown.err).toContain(`no registered project named "ghost"`);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("adopt validate scores a corpus branch, ranks the omitted hot file first, and journals the record (036 AC-2)", async () => {
+  const repo = governedHistoryRepo();
+  corpusBranch(repo, "corpus-full", [
+    { id: "001-auth", title: "Auth territory", paths: ["src/auth/login.ts", "src/auth/token.ts"] },
+    { id: "002-core", title: "Core territory", paths: ["src/core/db.ts"] },
+    { id: "003-util", title: "Util territory", paths: ["src/util/helper.ts"] },
+  ]);
+  corpusBranch(repo, "corpus-hole", [
+    { id: "001-auth", title: "Auth territory, login omitted", paths: ["src/auth/token.ts"] },
+    { id: "002-core", title: "Core territory", paths: ["src/core/db.ts"] },
+  ]);
+  const dataDir = freshDataDir("validate");
+  const chain = openProjectsChain(dataDir);
+  registerProject({
+    chain,
+    repoDir: repo,
+    name: "adoptee",
+    qualification: { qualified: false, adoptable: true, checks: [], warnings: [] },
+    source: "cli",
+  });
+  chain.close();
+  try {
+    // The full corpus covers every merge: 3 of 3, no orphans, record at seq 0.
+    const full = await run(["adopt", "validate", "adoptee", "--corpus", "corpus-full"], { dataDir });
+    expect(full.code).toBe(EXIT_OK);
+    expect(full.out).toContain("corpus:  corpus-full (4 spec(s), attested ");
+    expect(full.out).toContain("history: 3 first-parent merge(s) on HEAD");
+    expect(full.out).toContain("coverage: 3 of 3 evaluated commit(s) fully covered (100.0%)");
+    expect(full.out).toContain("orphans: none");
+    expect(full.out).toContain("journaled: seq 0  adopt.validated");
+
+    // The hole corpus omits login.ts (hot: 2 merges) and helper.ts (1 merge):
+    // the hot file tops the ranked orphan list (AC-2), and the failing
+    // commits carry their uncovered paths verbatim.
+    const hole = await run(["adopt", "validate", "adoptee", "--corpus", "corpus-hole"], { dataDir });
+    expect(hole.code).toBe(EXIT_OK);
+    expect(hole.out).toContain("coverage: 1 of 3 evaluated commit(s) fully covered (33.3%)");
+    expect(hole.out).toContain("orphans: 2 path(s) no spec owns");
+    expect(hole.out).toContain("src/auth/login.ts (orphan in 2 of 3 evaluated commit(s))");
+    expect(hole.out).toContain("src/util/helper.ts (orphan in 1 of 3 evaluated commit(s))");
+    expect(hole.out.indexOf("src/auth/login.ts (orphan")).toBeLessThan(hole.out.indexOf("src/util/helper.ts (orphan"));
+    expect(hole.out).toContain("orphan: src/auth/login.ts");
+    expect(hole.out).toContain("journaled: seq 1  adopt.validated");
+
+    // Both replays are pinned in the target's own work journal (B-3): the
+    // corpus hashes differ, the target window matches what was reported.
+    const records = journalViewFromDir(projectStateRoot(repo)).records();
+    expect(records).toHaveLength(2);
+    const payloads = records.map((record) => record.payload as Record<string, any>);
+    expect(records.every((record) => record.kind === "adopt.validated")).toBe(true);
+    expect(payloads[0]!.corpus.ref).toBe("corpus-full");
+    expect(payloads[1]!.corpus.ref).toBe("corpus-hole");
+    expect(payloads[0]!.corpus.hash).not.toBe(payloads[1]!.corpus.hash);
+    expect(payloads[1]!.score.orphanPaths[0]).toEqual({ path: "src/auth/login.ts", touches: 2 });
+
+    // D-5's other source: the same corpus handed over as a checkout path.
+    const pathCorpus = mkdtempSync(join(tmpdir(), "cli-validate-corpus-"));
+    try {
+      gitFor(pathCorpus, ["clone", "-q", "--branch", "corpus-full", repo, join(pathCorpus, "co")]);
+      const byPath = await run(["adopt", "validate", "adoptee", "--corpus", join(pathCorpus, "co")], { dataDir });
+      expect(byPath.code).toBe(EXIT_OK);
+      expect(byPath.out).toContain("coverage: 3 of 3 evaluated commit(s) fully covered (100.0%)");
+      expect(byPath.out).toContain("journaled: seq 2  adopt.validated");
+    } finally {
+      fs.rmSync(pathCorpus, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
   }
 });

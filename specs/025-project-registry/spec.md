@@ -118,3 +118,17 @@ optional on the type so hand-built verdicts (fixtures, older callers) stay
 constructible and can never claim adoptability by accident. Scheduling is
 untouched: adoptable implies unqualified, which spec 026 already refuses
 to drive.
+
+D-8 (2026-08-06, spec 036's build, per its granted authority). The module
+gains the ratification-input record vocabulary (036 B-3): the
+`adopt.validated` kind, `journalValidation()` writing the corpus pin,
+target window, and full score, and `parseValidation()` with
+`latestValidation()` reading the newest verdict back out of a project's
+work-journal records. The record lives in the target's own work journal
+rather than this registry's chain (036 D-4 names why: the standby daemon
+holds the projects chain's writer open for its whole life, and validate
+is offline); this module still owns the codec, so the arm path and every
+projects surface read the verdict through one place. The registry fold
+is untouched: no projects-chain kind is added, and foldProjects ignores
+the new kind as it ignores every kind it does not own.
+projects.test.ts gains the 036 FR-003 round-trip coverage.

@@ -33,6 +33,7 @@
 // process-exiting wrapper `cmdOrchestrator` is the only thing index.ts sees.
 import { spawn } from "child_process";
 import * as fs from "fs";
+import { tmpdir } from "os";
 import { basename, dirname, join, resolve } from "path";
 import { DATA_DIR, PROJECT_DIR } from "../paths";
 import { openJournal, verifyChain, type JournalHandle, type JournalRecord } from "../orchestrator/journal";
@@ -61,6 +62,7 @@ import {
   PROJECTS_CHAIN_BASENAME,
   createProcessProjectProbe,
   foldProjects,
+  journalValidation,
   projectStateRoot,
   qualifyProject,
   registerProject,
@@ -84,6 +86,15 @@ import {
   type ExclusionRule,
   type HistoryMode,
 } from "../orchestrator/adopt/preflight";
+import {
+  createProcessHoldbackCorpusReader,
+  createProcessHoldbackGitReader,
+  extractReplayHistory,
+  loadCorpusOwnership,
+  renderHoldbackReport,
+  replayHoldback,
+  type HoldbackScore,
+} from "../orchestrator/adopt/holdback";
 import {
   ceilingOf,
   ceilingRefusal,
@@ -151,6 +162,8 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   projects remove <name>       drop it from the registry (a tombstone)
   adopt preflight <path>       read-only cartography: propose spec territories for
                                an ungoverned target [--out <path>] [--exclude <rules>]
+  adopt validate <project>     replay the target's history against a candidate
+                               corpus and journal the score (--corpus <ref-or-path>)
   dag                          every spec with readiness, blockers, drift
   next                         the next ready spec, or why there is none
   start | pause | resume       run controls
@@ -173,6 +186,8 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
                                preflight its proposal (default under the daemon home)
   --exclude <rules>            extra exclusion rules for adopt preflight, comma-
                                separated ("dir/" or exact basename); additions only
+  --corpus <ref-or-path>       the candidate corpus for adopt validate: a branch or
+                               committish of the target, or a corpus checkout path
   --name <slug>                project name for projects add
   --disarmed                   register disarmed (projects add)
   --profile <mode>             posture for projects add: bypass | guarded
@@ -288,6 +303,8 @@ interface ParsedArgs {
   readonly bundle: string | null;
   // 034 D-2's additions flag: extra exclusion rules for adopt preflight.
   readonly exclude: string | null;
+  // 036's corpus source: a ref of the target or a checkout path (D-5).
+  readonly corpus: string | null;
   readonly rest: readonly string[];
 }
 
@@ -314,6 +331,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let out: string | null = null;
   let bundle: string | null = null;
   let exclude: string | null = null;
+  let corpus: string | null = null;
   const rest: string[] = [];
 
   const valued: Readonly<Record<string, (value: string) => void>> = {
@@ -359,6 +377,9 @@ function parseArgs(argv: readonly string[]): ParseResult {
     "--exclude": (v) => {
       exclude = v;
     },
+    "--corpus": (v) => {
+      corpus = v;
+    },
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -390,7 +411,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
 
   return {
     ok: true,
-    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, exclude, rest },
+    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, exclude, corpus, rest },
   };
 }
 
@@ -431,6 +452,10 @@ const JOURNAL_EXPORT_FLAGS: readonly string[] = ["--project", "--out"];
 // floor. Nothing else: the preflight is offline and addresses its target by
 // path, so `--project` means nothing to it and is refused like any stray.
 const ADOPT_PREFLIGHT_FLAGS: readonly string[] = ["--out", "--exclude"];
+// 036: the corpus source is the validate verb's one flag and belongs to it
+// alone; the target is the positional project name, so `--project` is as
+// much a stray here as it is on preflight.
+const ADOPT_VALIDATE_FLAGS: readonly string[] = ["--corpus"];
 
 // The flags a command accepts, subcommand included: three of them carry flag
 // sets of their own, and everything else takes the group's.
@@ -440,6 +465,7 @@ function acceptedFlags(command: string, sub: string | undefined): readonly strin
   if (command === "projects" && sub === "ceiling") return PROJECTS_CEILING_FLAGS;
   if (command === "journal" && sub === "export") return JOURNAL_EXPORT_FLAGS;
   if (command === "adopt" && sub === "preflight") return ADOPT_PREFLIGHT_FLAGS;
+  if (command === "adopt" && sub === "validate") return ADOPT_VALIDATE_FLAGS;
   return Object.hasOwn(EXTRA_FLAGS, command) ? EXTRA_FLAGS[command] : undefined;
 }
 
@@ -457,6 +483,7 @@ function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null
     args.out !== null ? "--out" : null,
     args.bundle !== null ? "--bundle" : null,
     args.exclude !== null ? "--exclude" : null,
+    args.corpus !== null ? "--corpus" : null,
   ].filter((flag): flag is string => flag !== null);
   return present.find((flag) => !accepted.includes(flag)) ?? null;
 }
@@ -1702,6 +1729,228 @@ function cmdAdoptPreflight(
   return EXIT_OK;
 }
 
+// --- adoption validate (spec 036) -------------------------------------------
+
+interface AdoptValidateCorpusData {
+  readonly ref: string;
+  readonly hash: string;
+  readonly specs: number;
+  readonly head: string | null;
+}
+
+interface AdoptValidateData {
+  readonly project: string | null;
+  // Why nothing was scored, when nothing was: an unknown project, an
+  // unusable corpus, or a history too shallow to evaluate (036 B-5).
+  readonly resolveError: string | null;
+  readonly corpus: AdoptValidateCorpusData | null;
+  readonly targetHead: string | null;
+  readonly score: HoldbackScore | null;
+  readonly journaled: { readonly seq: number; readonly kind: string; readonly ts: string } | null;
+  readonly journalError: string | null;
+}
+
+function adoptValidateFailure(
+  deps: OrchestratorCliDeps,
+  json: boolean,
+  project: string | null,
+  resolveError: string,
+  corpus: AdoptValidateCorpusData | null = null
+): number {
+  const data: AdoptValidateData = {
+    project,
+    resolveError,
+    corpus,
+    targetHead: null,
+    score: null,
+    journaled: null,
+    journalError: null,
+  };
+  if (json) {
+    printJson(deps, { ok: true, data } satisfies ApiResponse<AdoptValidateData>);
+    return EXIT_FAILURE;
+  }
+  deps.err(`adopt validate: ${resolveError}`);
+  return EXIT_FAILURE;
+}
+
+interface MaterializedCorpus {
+  readonly dir: string;
+  readonly cleanup: () => void;
+}
+
+function gitInTarget(repoDir: string, args: readonly string[]): { readonly exitCode: number; readonly stdout: string; readonly stderr: string } {
+  const result = Bun.spawnSync(["git", ...args], { cwd: repoDir });
+  return {
+    exitCode: result.exitCode,
+    stdout: new TextDecoder().decode(result.stdout).trim(),
+    stderr: new TextDecoder().decode(result.stderr).trim(),
+  };
+}
+
+// 036 D-5: an existing directory is a corpus checkout used as-is; anything
+// else names a committish of the target (the synthesis branch is the
+// expected case), materialized through a local clone into a temp directory
+// and checked out detached there. Nothing is ever written inside the target
+// (034 B-1's stance carried forward): the clone only reads its object store,
+// and compile/attest later run in the temp checkout.
+function materializeCorpus(repoDir: string, corpusFlag: string): MaterializedCorpus {
+  const asPath = resolve(corpusFlag);
+  try {
+    if (fs.statSync(asPath).isDirectory()) return { dir: asPath, cleanup: () => {} };
+  } catch {
+    // not a directory: read it as a ref of the target below
+  }
+
+  const rev = gitInTarget(repoDir, ["rev-parse", "--verify", "--quiet", `${corpusFlag}^{commit}`]);
+  if (rev.exitCode !== 0) {
+    throw new Error(`--corpus "${corpusFlag}" is neither a readable directory nor a committish of ${repoDir}`);
+  }
+  const sha = rev.stdout;
+
+  const dir = fs.mkdtempSync(join(tmpdir(), "observatory-corpus-"));
+  const cleanup = (): void => fs.rmSync(dir, { recursive: true, force: true });
+  const clone = gitInTarget(repoDir, ["clone", "--quiet", "--no-checkout", repoDir, dir]);
+  if (clone.exitCode !== 0) {
+    cleanup();
+    throw new Error(`cloning ${repoDir} to read the corpus failed: ${clone.stderr}`);
+  }
+  const checkout = gitInTarget(dir, ["checkout", "--quiet", "--detach", sha]);
+  if (checkout.exitCode !== 0) {
+    cleanup();
+    throw new Error(`checking out ${corpusFlag} (${sha.slice(0, 12)}) in the corpus clone failed: ${checkout.stderr}`);
+  }
+  return { dir, cleanup };
+}
+
+// 036's one verb, offline like preflight (B-4: a compiling corpus and a git
+// history, nothing else; no daemon is asked anything). The replay reads the
+// corpus through spec-spine and the target through git, prints the B-2
+// report with a denominator beside every number (FR-004), and journals the
+// B-3 ratification-input record into the project's own work journal.
+function cmdAdoptValidate(deps: OrchestratorCliDeps, json: boolean, projectName: string, corpusFlag: string): number {
+  // Resolved offline exactly as journal verify resolves its root (028 B-3's
+  // stance): validate must work with no daemon anywhere, and the registered
+  // project is what makes the record citable and addressable.
+  let project: Project | null = null;
+  let resolveError: string | null = null;
+  try {
+    const registry = foldProjects(journalViewFromDir(deps.dataDir, PROJECTS_CHAIN_BASENAME).records());
+    const found = registry.get(projectName);
+    if (found !== undefined) project = found;
+    else {
+      const known = [...registry.keys()];
+      resolveError =
+        known.length === 0
+          ? `no registered project named "${projectName}": the registry under ${deps.dataDir} holds none`
+          : `no registered project named "${projectName}" (registered: ${known.join(", ")})`;
+    }
+  } catch (err) {
+    resolveError = `the projects chain under ${deps.dataDir} could not be folded: ${(err as Error).message}`;
+  }
+  if (project === null) return adoptValidateFailure(deps, json, null, resolveError!);
+
+  let corpus: MaterializedCorpus;
+  try {
+    corpus = materializeCorpus(project.repoDir, corpusFlag);
+  } catch (err) {
+    return adoptValidateFailure(deps, json, project.name, (err as Error).message);
+  }
+
+  let corpusData: AdoptValidateCorpusData;
+  let score: HoldbackScore;
+  let targetHead: string | null;
+  try {
+    let ownership;
+    try {
+      ownership = loadCorpusOwnership(createProcessHoldbackCorpusReader(), corpus.dir);
+    } catch (err) {
+      return adoptValidateFailure(deps, json, project.name, (err as Error).message);
+    }
+    corpusData = {
+      ref: corpusFlag,
+      hash: ownership.corpusHash,
+      specs: ownership.specs.length,
+      head: ownership.corpusHead,
+    };
+
+    const gitReader = createProcessHoldbackGitReader();
+    const history = extractReplayHistory(gitReader, project.repoDir);
+    if (history.mode === "empty") {
+      // B-5: too shallow to evaluate says so and scores nothing; no record
+      // is journaled, because nothing was measured.
+      return adoptValidateFailure(
+        deps,
+        json,
+        project.name,
+        `the target's history is too shallow to evaluate: no readable first-parent commits on ${history.ref}; nothing was scored and nothing was journaled`,
+        corpusData
+      );
+    }
+    score = replayHoldback(history, ownership);
+    targetHead = gitReader.headSha(project.repoDir);
+  } finally {
+    corpus.cleanup();
+  }
+
+  // B-3: the ratification-input record, appended through a short-lived
+  // writer handle exactly as the preflight record is (034 B-6); a lock held
+  // by something driving this project refuses cleanly and is reported as
+  // the operational failure it is, with the report already printed.
+  let journaled: AdoptValidateData["journaled"] = null;
+  let journalError: string | null = null;
+  try {
+    const handle = openJournal(projectStateRoot(project.repoDir));
+    try {
+      const record = journalValidation({
+        handle,
+        project: project.name,
+        source: CONTROL_SOURCE,
+        corpus: corpusData,
+        target: { headSha: targetHead, ref: score.ref, mode: score.mode, requested: score.requested, read: score.read },
+        score,
+      });
+      journaled = { seq: record.seq, kind: record.kind, ts: record.ts };
+    } finally {
+      handle.close();
+    }
+  } catch (err) {
+    journalError = `the ratification-input record could not be journaled: ${(err as Error).message}`;
+  }
+
+  const data: AdoptValidateData = {
+    project: project.name,
+    resolveError: null,
+    corpus: corpusData,
+    targetHead,
+    score,
+    journaled,
+    journalError,
+  };
+
+  if (json) {
+    printJson(deps, { ok: true, data } satisfies ApiResponse<AdoptValidateData>);
+    return journalError === null ? EXIT_OK : EXIT_FAILURE;
+  }
+
+  for (const line of renderHoldbackReport(score, {
+    corpusRef: corpusFlag,
+    corpusHash: corpusData.hash,
+    corpusSpecs: corpusData.specs,
+    corpusHead: corpusData.head,
+    targetDir: project.repoDir,
+    targetHead,
+  })) {
+    deps.out(line);
+  }
+  if (journaled !== null) {
+    deps.out(`journaled: seq ${journaled.seq}  ${journaled.kind}  ${journaled.ts} (project ${project.name})`);
+    return EXIT_OK;
+  }
+  deps.err(`adopt validate: ${journalError}`);
+  return EXIT_FAILURE;
+}
+
 // --- daemon lifecycle (B-2) -------------------------------------------------
 
 interface DaemonLockFile {
@@ -2292,17 +2541,29 @@ async function dispatch(
   }
   if (command === "daemon") return cmdDaemon(scoped, url, args.json, rest);
 
-  // 034's read verb is offline too: it must work against a repository no
-  // daemon has ever heard of, so no client is created for it.
+  // The adopt group is offline too: preflight must work against a repository
+  // no daemon has ever heard of, and validate (036 B-4) needs a compiling
+  // corpus and a git history, nothing else; no client is created for either.
   if (command === "adopt") {
     const sub = rest[0];
-    if (sub !== "preflight") return usage(scoped, `adopt needs the "preflight" subcommand`);
-    const path = rest[1];
-    if (path === undefined || path.trim().length === 0) return usage(scoped, "adopt preflight needs a repository path");
-    if (rest.length > 2) return usage(scoped, `unexpected argument "${rest[2]}" after adopt preflight`);
-    const extras = exclusionAdditionsFromFlag(args.exclude);
-    if (typeof extras === "string") return usage(scoped, extras);
-    return cmdAdoptPreflight(scoped, args.json, path, args.out, extras);
+    if (sub === "preflight") {
+      const path = rest[1];
+      if (path === undefined || path.trim().length === 0) return usage(scoped, "adopt preflight needs a repository path");
+      if (rest.length > 2) return usage(scoped, `unexpected argument "${rest[2]}" after adopt preflight`);
+      const extras = exclusionAdditionsFromFlag(args.exclude);
+      if (typeof extras === "string") return usage(scoped, extras);
+      return cmdAdoptPreflight(scoped, args.json, path, args.out, extras);
+    }
+    if (sub === "validate") {
+      const projectName = rest[1];
+      if (projectName === undefined || projectName.trim().length === 0) {
+        return usage(scoped, "adopt validate needs a project name");
+      }
+      if (rest.length > 2) return usage(scoped, `unexpected argument "${rest[2]}" after adopt validate`);
+      if (args.corpus === null) return usage(scoped, "adopt validate needs --corpus <branch-or-path>");
+      return cmdAdoptValidate(scoped, args.json, projectName, args.corpus);
+    }
+    return usage(scoped, `adopt needs the "preflight" or "validate" subcommand`);
   }
 
   const client = scoped.createClient(url);

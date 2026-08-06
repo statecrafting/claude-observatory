@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [
-      {
-        "code": "I-004",
-        "message": "spec '036-holdback-validation' file unit 'src/orchestrator/adopt/holdback.ts' does not exist",
-        "path": "src/orchestrator/adopt/holdback.ts"
-      },
-      {
-        "code": "I-004",
-        "message": "spec '036-holdback-validation' file unit 'src/orchestrator/adopt/holdback.test.ts' does not exist",
-        "path": "src/orchestrator/adopt/holdback.test.ts"
-      }
-    ],
-    "warnings": []
-  },
   "mapping": {
     "dependsOn": [
       "025-project-registry",
@@ -25,7 +10,19 @@
         "source": "spec-edge"
       },
       {
+        "path": "src/commands/orchestrator.test.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/commands/orchestrator.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/adopt/holdback.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/adopt/holdback.ts",
         "source": "spec-edge"
       },
       {
@@ -35,7 +32,11 @@
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/adopt/holdback.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -44,12 +45,29 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/adopt/holdback.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/adopt/holdback.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
         }
       },
       {
@@ -96,5 +114,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "e1cd2f1b5cb79dc0fbdae6a7c436e6fa25384ca6656cb3bb3a678041a5dbce6f"
+  "shardHash": "80a805e400679cdf17f62a6b152e9d092a90a7c91f62866e72b288c8a9054f1d"
 }
