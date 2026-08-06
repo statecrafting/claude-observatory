@@ -209,3 +209,12 @@ the operator chose it refuses rather than synthesizing from something
 nobody read. The parse targets 034 FR-003's deterministic markdown
 exactly, and a document that does not parse refuses with the reason
 named.
+
+D-10 (spec 037's build, per this spec's §2 seam clause). The
+shape-checker seam defaults to 037's `checkAdoptedCorpus` (through its
+`synthesisShapeChecker` adapter); a test may still inject a stub, which
+is what keeps the seam a seam (037 FR-002). The import is one-way at
+runtime (defects.ts takes only types from synthesis.ts), and the B-3
+minimum this module checks natively keeps running beside the checker:
+the two guards report the same wound in their own words, defense in
+depth over deduplication.
