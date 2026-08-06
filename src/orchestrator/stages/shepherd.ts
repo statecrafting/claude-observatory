@@ -23,7 +23,7 @@
 // convention.
 import type { JournalHandle, JsonValue } from "../journal";
 import { sha256Hex } from "../journal";
-import { GATE_COMMANDS, DEFAULT_BASE_BRANCH, type Runner } from "./build";
+import { GATE_COMMANDS, DEFAULT_BASE_BRANCH, gateCommandsFor, type Runner } from "./build";
 import type { GitHubClient, CheckRun, MergeMethod } from "./ship";
 
 // --- clock seam (B-1: no real sleeps in unit tests) --------------------------
@@ -188,11 +188,14 @@ export interface ShepherdRemediationPromptParams {
   readonly attemptNumber: number;
   readonly maxRemediations: number;
   readonly failing: readonly ShepherdFailureDetail[];
+  // 016 D-10 carried through (D-8): the target's own gate program, so a
+  // remediation session on a non-TypeScript target is not told to run bun.
+  readonly gateCommands?: readonly (readonly string[])[];
 }
 
 export function buildRemediationPrompt(params: ShepherdRemediationPromptParams): string {
   const { specBody, branch, attemptNumber, maxRemediations, failing } = params;
-  const gateList = GATE_COMMANDS.map((cmd) => `  - \`${cmd.join(" ")}\``).join("\n");
+  const gateList = (params.gateCommands ?? GATE_COMMANDS).map((cmd) => `  - \`${cmd.join(" ")}\``).join("\n");
   const failureSection = failing
     .map((f) => `### \`${f.name}\` (conclusion: ${f.conclusion ?? "none"})\n\nlog tail:\n${f.logTail}`)
     .join("\n\n");
@@ -458,7 +461,14 @@ export async function runShepherdStage(options: RunShepherdStageOptions): Promis
     });
 
     const specBody = runner.readFile(specPath);
-    const prompt = buildRemediationPrompt({ specBody, branch, attemptNumber, maxRemediations, failing: failureDetails });
+    const prompt = buildRemediationPrompt({
+      specBody,
+      branch,
+      attemptNumber,
+      maxRemediations,
+      failing: failureDetails,
+      gateCommands: gateCommandsFor(runner),
+    });
     journal.append("stage.shepherd.prompt", { specId, attempt: attemptNumber, promptVersion: SHEPHERD_PROMPT_VERSION });
 
     const session = await runner.runSession({

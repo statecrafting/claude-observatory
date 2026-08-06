@@ -224,6 +224,23 @@ export const GATE_COMMANDS: readonly (readonly string[])[] = [
   ["bun", "test"],
 ];
 
+// D-10: the four spec-spine commands are the universal governance gate; the
+// two bun commands are this repo's Bun + TypeScript conventions and run only
+// where a root tsconfig.json says the target shares them. Found live on the
+// first driven family-repo build (tenant-tail, a Rust workspace): "bun run
+// typecheck" exited 1 at a clean base and the preflight refused a target
+// whose language verification lives in its own CI, which shepherd (018)
+// already watches. The probe is the Runner's own readFile, so fixtures and
+// production answer it the same way.
+export function gateCommandsFor(runner: Runner): readonly (readonly string[])[] {
+  try {
+    runner.readFile("tsconfig.json");
+    return GATE_COMMANDS;
+  } catch {
+    return GATE_COMMANDS.filter((cmd) => cmd[0] === "spec-spine");
+  }
+}
+
 // The bracket's index REGENERATION (D-8): distinct from GATE_COMMANDS[1],
 // which only checks staleness. The gate list stays read-only; only the
 // bracket, which just changed a hashed input (the spec's frontmatter),
@@ -235,7 +252,7 @@ export interface GateEvidence extends GateResult {
 }
 
 function runGateSuite(runner: Runner): GateEvidence[] {
-  return GATE_COMMANDS.map((cmd) => ({ cmd, ...runner.runGate(cmd) }));
+  return gateCommandsFor(runner).map((cmd) => ({ cmd, ...runner.runGate(cmd) }));
 }
 
 function preflightRefusal(
@@ -389,12 +406,15 @@ export interface BuildPromptParams {
   readonly backlogStep: string;
   readonly decisions: DecisionsForResult;
   readonly dropboxDir: string;
+  // D-10: the target's own gate program, so the prompt never promises the
+  // session a command the evaluation will not run. Defaults to the full list.
+  readonly gateCommands?: readonly (readonly string[])[];
 }
 
 export function buildPrompt(params: BuildPromptParams): string {
   const { specBody, backlogStep, decisions, dropboxDir } = params;
 
-  const gateList = GATE_COMMANDS.map((cmd) => `  - \`${cmd.join(" ")}\``).join("\n");
+  const gateList = (params.gateCommands ?? GATE_COMMANDS).map((cmd) => `  - \`${cmd.join(" ")}\``).join("\n");
 
   const decisionLines =
     decisions.included.length === 0
@@ -653,7 +673,13 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     territoryPaths,
     budgetChars: DECISION_BUDGET_CHARS,
   });
-  const promptBase = buildPrompt({ specBody, backlogStep, decisions: decisionSelection, dropboxDir });
+  const promptBase = buildPrompt({
+    specBody,
+    backlogStep,
+    decisions: decisionSelection,
+    dropboxDir,
+    gateCommands: gateCommandsFor(runner),
+  });
 
   const promptPayload: Record<string, JsonValue> = {
     specId,

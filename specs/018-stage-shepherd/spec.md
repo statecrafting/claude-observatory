@@ -137,3 +137,10 @@ zero watch attempts, rather than waiting on a PR that does not exist. The
 spec is silent on this input; treating "no PR" as a needsHuman failure
 matches every other unresolvable state above rather than inventing a
 `"refused"` outcome the stage's own vocabulary does not carry.
+
+D-8 (2026-08-06, operator). The remediation prompt lists the target's
+own gate program (016 D-10's `gateCommandsFor`), not the six-command
+constant: a remediation session on a non-TypeScript target is not told
+to run bun commands its repository does not define. The prompt builder
+stays pure; the computed list arrives as a parameter defaulting to the
+full constant.

@@ -36,6 +36,6 @@
     "summary": "From open PR to merged. Polls the PR's checks by head sha with the watch-loop discipline (backoff, change-only journaling, statusless abort, deadline), remediates a red run with at most N fresh sessions fed the failing log tail, re-enters the loop after each push, and merges when green with the repo's default merge method. Every remediation is a new attempt with evidence; flapping CI and exhausted attempts fail honestly to needsHuman.\n",
     "title": "Shepherd stage: watch CI, remediate, merge when green"
   },
-  "shardHash": "6a884e12bcbc832eb3e8c9defc8bd168b98e2dccb3d5cbc8962faf96dce3c53b",
+  "shardHash": "bc172216ea5218e2931437b76962cad7f3cb5c76393bcfc665d960f27e91539e",
   "specVersion": "1.1.0"
 }
