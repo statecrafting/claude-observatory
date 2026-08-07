@@ -13,6 +13,12 @@
 // the scoped sub-client is built from that selection and handed down, which is
 // what stops any panel from addressing a project the header does not name.
 //
+// Spec 038 adds the seventh: economics, the panel spec 030 named and left to
+// a later spec. It is routed and degraded exactly like the five scoped views
+// beside it, and it is read on demand (038 D-3) the way the fleet view's
+// backlogs are, which is why `refresh` has to ask for it when it is what is
+// open.
+//
 // Spec 029 adds the second banner and the sixth view. The banner carries the
 // two facts that are the account's rather than a project's (B-4): the flight
 // slot and the quota pool. Rendering either inside a project's panel would say
@@ -26,6 +32,7 @@ import type { ReactNode } from "react";
 import type { ApiClient, ApiMeta, DecisionQueryParams, ProjectView, QuotaView } from "./api";
 import { useObservatory } from "./store";
 import type { EventSourceLike } from "./store";
+import type { EconomicsReader } from "./economics";
 import { countdownMs, formatAgo, formatCount, formatDuration, formatTimestamp } from "./format";
 import { Badge } from "./components/bits";
 import { StandbyPanel } from "./views/StandbyPanel";
@@ -34,8 +41,9 @@ import { RunPanel } from "./views/RunPanel";
 import { QuotaPanel } from "./views/QuotaPanel";
 import { DecisionsPanel } from "./views/DecisionsPanel";
 import { HistoryPanel } from "./views/HistoryPanel";
+import { EconomicsPanel } from "./views/EconomicsPanel";
 
-const VIEWS = ["standby", "run", "dag", "quota", "decisions", "history"] as const;
+const VIEWS = ["standby", "run", "dag", "quota", "economics", "decisions", "history"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 function viewFromHash(hash: string): ViewName {
@@ -59,15 +67,19 @@ export interface AppProps {
   readonly client: ApiClient;
   readonly eventsUrl?: string;
   readonly openStream?: ((url: string) => EventSourceLike) | null;
+  // Absent means the real reader over the client's own origin; the store
+  // documents why this one route is reached without the typed client.
+  readonly readEconomics?: EconomicsReader;
 }
 
-export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
+export function App({ client, eventsUrl, openStream, readEconomics }: AppProps): ReactNode {
   const { state, actions } = useObservatory({
     // The stream is subscribed unfiltered (029 D-2): it is this page's refetch
     // trigger for every project's row, not only the selected one's tail.
     client,
     eventsUrl: eventsUrl ?? client.eventsUrl(),
     ...(openStream === undefined ? {} : { openStream }),
+    ...(readEconomics === undefined ? {} : { readEconomics }),
   });
   const now = useNow();
 
@@ -91,10 +103,11 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
 
   const refresh = useCallback((): void => {
     void actions.refresh();
-    // The fleet view's own reads are on demand (029 D-1), so a refetch while it
-    // is open has to ask for them too, or the button would refresh everything
-    // except the thing on screen.
+    // The fleet view's own reads are on demand (029 D-1, 038 D-3), so a refetch
+    // while one is open has to ask for it too, or the button would refresh
+    // everything except the thing on screen.
     if (view === "standby") void actions.refreshBacklogs();
+    if (view === "economics") void actions.refreshEconomics();
   }, [actions, view]);
 
   // Fold every project's backlog when the standby view is what is open, and
@@ -103,6 +116,15 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
     if (view !== "standby" || registeredNames.length === 0) return;
     void actions.refreshBacklogs();
   }, [actions, registeredNames, view]);
+
+  // The same shape for the rollup: read when its view opens, and again when
+  // the selection moves underneath it, because a rollup belongs to the project
+  // it was read from. With no project resolved yet there is nothing to read,
+  // and the panel says that itself rather than being handed an error about it.
+  useEffect(() => {
+    if (view !== "economics" || state.project === null) return;
+    void actions.refreshEconomics();
+  }, [actions, state.project, view]);
 
   const search = useCallback(
     (query: DecisionQueryParams): void => {
@@ -240,6 +262,15 @@ export function App({ client, eventsUrl, openStream }: AppProps): ReactNode {
           />
         ) : null}
 
+        {view === "economics" ? (
+          <EconomicsPanel
+            economics={state.economics.data}
+            error={state.economics.error}
+            project={state.project}
+            stale={stale}
+          />
+        ) : null}
+
         {view === "decisions" ? (
           <DecisionsPanel
             decisions={state.decisions.data}
@@ -278,6 +309,8 @@ function resourceLoadedAt(state: ReturnType<typeof useObservatory>["state"], vie
       return state.dag.loadedAtMs;
     case "quota":
       return state.quota.loadedAtMs;
+    case "economics":
+      return state.economics.loadedAtMs;
     case "decisions":
       return state.decisions.loadedAtMs;
     case "history":

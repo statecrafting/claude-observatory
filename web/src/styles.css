@@ -850,3 +850,80 @@ input:not([type]) {
   font-family: var(--mono);
   font-size: 0.8rem;
 }
+
+/* --- economics (spec 038) ------------------------------------------------ */
+
+.econ-heading {
+  margin: 1.1rem 0 0.4rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+
+.econ-cost {
+  font-family: var(--mono);
+}
+
+.econ-runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.econ-run {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  padding: 0.5rem 0.7rem;
+}
+
+.econ-run-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.econ-run-id {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.econ-run-body {
+  margin: 0.35rem 0 0;
+  font-size: 0.87rem;
+  color: var(--fg-muted);
+}
+
+/* A table, not a chart (038 D-1): the columns are the denominators, and they
+   are what a chart would have had to drop. */
+.econ-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.87rem;
+}
+
+.econ-table th,
+.econ-table td {
+  text-align: left;
+  padding: 0.35rem 0.6rem 0.35rem 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.econ-table thead th {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+
+.econ-table tbody th {
+  font-weight: 400;
+}
