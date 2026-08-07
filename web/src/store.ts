@@ -36,6 +36,8 @@ import type {
   QuotaView,
   RunView,
 } from "./api";
+import { economicsReader } from "./economics";
+import type { EconomicsReader, ServedEconomicsView } from "./economics";
 
 // --- resources --------------------------------------------------------------
 
@@ -146,6 +148,10 @@ export interface ObservatoryState {
   readonly quota: Resource<QuotaView>;
   readonly history: Resource<HistoryView>;
   readonly decisions: Resource<DecisionsView>;
+  // The selected project's cost and rework rollup (038 B-1). Read on demand
+  // rather than with every refresh, for the reason the backlogs are (038 D-3),
+  // and dropped on a project switch like every other scoped fold.
+  readonly economics: Resource<ServedEconomicsView>;
   // One DAG fold per registered project, for the standby view's backlog
   // summaries (029 B-2). Keyed by name and rebuilt from the registry on every
   // refold, so a project that was removed cannot leave a backlog behind. A
@@ -173,6 +179,7 @@ export function initialState(): ObservatoryState {
     quota: emptyResource<QuotaView>(),
     history: emptyResource<HistoryView>(),
     decisions: emptyResource<DecisionsView>(),
+    economics: emptyResource<ServedEconomicsView>(),
     backlogs: new Map(),
     events: [],
     stream: "connecting",
@@ -188,6 +195,8 @@ export interface ObservatoryActions {
   selectProject(name: string): Promise<void>;
   // Refold every registered project's DAG, for the standby view (029 B-2).
   refreshBacklogs(): Promise<void>;
+  // Re-read the selected project's economics rollup (038 B-1).
+  refreshEconomics(): Promise<void>;
   searchDecisions(query: DecisionQueryParams): Promise<void>;
   clearEvents(): void;
 }
@@ -198,6 +207,12 @@ export interface ObservatoryOptions {
   // Absent disables streaming entirely (the store still probes and refetches),
   // which is what the component tests use.
   readonly openStream?: ((url: string) => EventSourceLike) | null;
+  // The economics route is served by spec 030 and reached without the typed
+  // client (038 D-2), so it is injectable the way the stream is: a test can
+  // drive the whole shell without a daemon. Absent means the real reader,
+  // pointed at the client's own base url, which is the only origin this page
+  // ever talks to (024 B-1).
+  readonly readEconomics?: EconomicsReader;
   readonly probeIntervalMs?: number;
   readonly maxScrollback?: number;
   readonly now?: () => number;
@@ -243,6 +258,11 @@ export function useObservatory(options: ObservatoryOptions): {
   const probeIntervalMs = options.probeIntervalMs ?? PROBE_INTERVAL_MS;
   const maxScrollback = options.maxScrollback ?? MAX_SCROLLBACK;
   const openStream = options.openStream;
+  const injectedEconomics = options.readEconomics;
+  const readEconomics = useMemo<EconomicsReader>(
+    () => injectedEconomics ?? economicsReader(client.baseUrl),
+    [client, injectedEconomics]
+  );
 
   const [state, setState] = useState<ObservatoryState>(initialState);
 
@@ -309,6 +329,7 @@ export function useObservatory(options: ObservatoryOptions): {
         run: kept ? prev.run : emptyResource<RunView>(),
         history: kept ? prev.history : emptyResource<HistoryView>(),
         decisions: kept ? prev.decisions : emptyResource<DecisionsView>(),
+        economics: kept ? prev.economics : emptyResource<ServedEconomicsView>(),
       };
       return {
         ...prev,
@@ -320,6 +341,7 @@ export function useObservatory(options: ObservatoryOptions): {
         run: scoped === null ? before.run : settle(before.run, scoped[1], atMs),
         history: scoped === null ? before.history : settle(before.history, scoped[2], atMs),
         decisions: before.decisions,
+        economics: before.economics,
         reach,
         lastContactMs: answered ? atMs : prev.lastContactMs,
         serverSkewMs: quota.ok ? quota.data.nowMs - atMs : prev.serverSkewMs,
@@ -359,6 +381,29 @@ export function useObservatory(options: ObservatoryOptions): {
       return { ...prev, backlogs };
     });
   }, [client, now]);
+
+  // The economics rollup (038 B-1), read the way the backlogs are and for the
+  // same reason (038 D-3): it re-folds the whole journal server-side, and the
+  // panel is usually not on screen, so it is read when the view asks rather
+  // than on every event burst. With no project selected there is no journal to
+  // roll up, which is said rather than answered with an empty rollup.
+  const refreshEconomics = useCallback(async (): Promise<void> => {
+    const name = selection.current;
+    const result: ApiResponse<ServedEconomicsView> =
+      name === null
+        ? {
+            ok: false,
+            error: { kind: "unavailable", message: "no project is selected, so there is no journal to roll up" },
+          }
+        : await readEconomics(name);
+    const atMs = now();
+    setState((prev) => {
+      // A read that landed after the operator switched projects belongs to the
+      // project it was issued for, not to the one now on screen.
+      if (name !== prev.project) return prev;
+      return { ...prev, economics: settle(prev.economics, result, atMs) };
+    });
+  }, [now, readEconomics]);
 
   const searchDecisions = useCallback(
     async (query: DecisionQueryParams): Promise<void> => {
@@ -472,8 +517,8 @@ export function useObservatory(options: ObservatoryOptions): {
   );
 
   const actions = useMemo<ObservatoryActions>(
-    () => ({ refresh, selectProject, refreshBacklogs, searchDecisions, clearEvents }),
-    [refresh, selectProject, refreshBacklogs, searchDecisions, clearEvents]
+    () => ({ refresh, selectProject, refreshBacklogs, refreshEconomics, searchDecisions, clearEvents }),
+    [refresh, selectProject, refreshBacklogs, refreshEconomics, searchDecisions, clearEvents]
   );
 
   return { state, actions };

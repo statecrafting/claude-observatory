@@ -10,6 +10,7 @@
 export {
   API_ROUTES,
   API_VERSION,
+  API_VERSION_HEADER,
   PROJECT_CONTROL_VERBS,
   PROJECT_ROUTES,
   SPEC_CONTROL_VERBS,
@@ -46,7 +47,7 @@ export type {
 } from "../../src/orchestrator/api/types";
 
 export { createApiClient } from "../../src/orchestrator/api/api-client";
-export type { ApiClient, ProjectClient } from "../../src/orchestrator/api/api-client";
+export type { ApiClient, FetchLike, ProjectClient } from "../../src/orchestrator/api/api-client";
 
 import { createApiClient } from "../../src/orchestrator/api/api-client";
 import type { ApiClient } from "../../src/orchestrator/api/api-client";

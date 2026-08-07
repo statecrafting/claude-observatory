@@ -66,6 +66,33 @@ beforeAll(() => {
   registry = freshRegistry("web-e2e");
   world = registry.add(PROJECT);
   ({ betaSpecExecId } = seedRun(world));
+
+  // Two sessions for the economics rollup to be about (spec 038), one
+  // reporting what it cost and one not, which is the mixed case the panel's
+  // denominators exist for. They credit to the most recently created SpecExec
+  // (030 D-2), which is 003-gamma, so 002-beta stays a spec whose cost is
+  // genuinely unknown rather than zero.
+  const session = (costMicroUsd: number | null): void => {
+    world.journal.append("session.result", {
+      classification: "completed",
+      resetAtMs: null,
+      detail: "fixture",
+      exitCode: 0,
+      durationMs: 1000,
+      numTurns: 3,
+      costMicroUsd,
+      usage: null,
+      sessionId: "web-e2e-session",
+      transcriptPath: null,
+      overflowLineCount: 0,
+      overflowTruncatedCount: 0,
+      stderrTail: "",
+      resultTextTail: null,
+    });
+  };
+  session(2_500_000);
+  session(null);
+
   seedPark(world, PARK_TARGET_MS, 3, true);
 
   // One sealed decision, so the ledger browser has something real to match.
@@ -175,6 +202,29 @@ test("the history view carries the evidence trail for the shipped spec", async (
     // The PR and the verify verdict seedRun journaled (B-5).
     expect(entry).toContain("#7");
     expect(entry).toContain("passed");
+  } finally {
+    view.unmount();
+  }
+});
+
+// Spec 038 AC-2's assertion, against the real route rather than a fixture: the
+// panel reaches /api/projects/<name>/economics on a live daemon and renders
+// the rollup it serves, denominators included.
+test("the economics view renders the rollup the daemon folds from this journal", async () => {
+  const view = await open("economics");
+  try {
+    await waitFor(() => view.query("economics-totals") !== null, "the economics view to load");
+
+    // Two sessions were journaled and one of them reported nothing.
+    expect(view.text("economics-totals-denominator")).toBe("2 sessions, 1 with no reported cost");
+    expect(view.text("economics-totals")).toContain("$2.5000");
+
+    // 003-gamma holds both sessions (030 D-2), so it carries the known cost;
+    // 002-beta shipped without one being journaled, which is unknown rather
+    // than free.
+    expect(view.text("economics-spec-003-gamma")).toContain("$2.5000");
+    expect(view.text("economics-spec-002-beta")).toContain("unknown");
+    expect(view.text("economics-spec-002-beta")).not.toContain("0.00");
   } finally {
     view.unmount();
   }
