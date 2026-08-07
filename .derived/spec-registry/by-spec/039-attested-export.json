@@ -42,7 +42,7 @@
       }
     ],
     "id": "039-attested-export",
-    "implementation": "in-progress",
+    "implementation": "complete",
     "kind": "feature",
     "references": [
       {
@@ -68,6 +68,6 @@
     "summary": "The integration spec 031 deliberately deferred: at export time the bundle gains a spec-spine corpus attestation, so the evidence a skeptic verifies offline binds not only the journal chains but the exact corpus content the gate was adjudicating when the export was cut. The attestation is spec-spine's own reproducible document (attest --with-coupling), embedded verbatim with its hash; offline verification reports it as carried provenance with its internal hash recomputed, and never claims corpus verification it cannot perform without the repository. Ed25519 sealing stays out of scope: key custody is an operator decision no export path should default.\n",
     "title": "Attested export: the bundle carries a corpus attestation"
   },
-  "shardHash": "bd8622bdfb6c184fcee132de477b8f37b01fac7b0963bb9e97dfc27ed69c763b",
+  "shardHash": "0454f5dd0874b7087c98ef5ce1ab3078d78fd849bae250f27b9f97ea7321d50a",
   "specVersion": "1.1.0"
 }

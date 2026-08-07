@@ -13,16 +13,21 @@ import { join } from "path";
 import { appendIntent, appendOutcome, openJournal, sha256Hex, stableStringify, type JournalRecord, type JsonValue } from "./journal";
 import { openDecisionsChain } from "./decisions";
 import {
+  ATTEST_ABSENT,
   BUNDLE_FORMAT_VERSION,
+  NO_ATTESTATION_BLOCK,
   REDACTION_POLICY,
+  attestationAbsent,
   buildBundle,
   exportBundleFromRoot,
   isPrivatePathString,
   parseBundle,
   redactPayload,
   serializeBundle,
+  verifyAttestation,
   verifyBundle,
   writeBundle,
+  type BundleAttestation,
   type BundleRecord,
   type JournalBundle,
 } from "./export";
@@ -366,6 +371,159 @@ test("two exports of the same journals produce byte-identical bundles", () => {
   }
 });
 
+// --- the carried corpus attestation (039 FR-001, FR-002) ---------------------
+
+test("an embedded attestation carries the document verbatim beside a matching hash", () => {
+  const root = freshRoot("attest-embed");
+  try {
+    seedFixtureChains(root);
+    const result = exportBundleFromRoot(root, null, REDACTION_POLICY, FIXTURE_ATTESTATION);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const attestation = result.bundle.attestation!;
+    expect(attestation.attested).toBe(true);
+    // Verbatim means byte for byte: the bundle never reformats a document it
+    // does not parse, or the hash spec-spine minted would stop meaning it.
+    expect(attestation.document).toBe(FIXTURE_ATTESTATION_DOCUMENT);
+    expect(attestation.attestationHash).toBe(sha256Hex(FIXTURE_ATTESTATION_DOCUMENT));
+
+    // It survives the serialize/parse round trip the skeptic actually walks.
+    const parsed = parseBundle(serializeBundle(result.bundle));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.bundle.attestation).toEqual(attestation);
+    expect(verifyAttestation(parsed.bundle)).toEqual({ state: "intact", attestationHash: attestation.attestationHash! });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed attest is recorded as an absence with its reason, and never blocks the export", () => {
+  const root = freshRoot("attest-failed");
+  try {
+    seedFixtureChains(root);
+    const failed = attestationAbsent(`${ATTEST_ABSENT.toolFailed} (exit 2)`);
+    const result = exportBundleFromRoot(root, null, REDACTION_POLICY, failed);
+    // The journals are evidence without the attestation (039 B-1): the
+    // export succeeds and the bundle states why nothing is carried.
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.bundle.attestation).toEqual({ attested: false, reason: "spec-spine attest --with-coupling failed (exit 2)" });
+    expect(result.bundle.attestation!.document).toBeUndefined();
+    expect(chainOf(result.bundle, "work").records.length).toBeGreaterThan(0);
+
+    const parsed = parseBundle(serializeBundle(result.bundle));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(verifyAttestation(parsed.bundle)).toEqual({ state: "absent", reason: "spec-spine attest --with-coupling failed (exit 2)" });
+    // The chains verify on their own terms regardless.
+    expect(verifyBundle(parsed.bundle).ok).toBe(true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("no absence reason carries a filesystem path", () => {
+  // 039 D-5: reasons ride in the bundle, so they answer to the same rule the
+  // payload policy does. The vocabulary is fixed precisely so no tool output
+  // or errno string can smuggle a path into evidence.
+  for (const reason of Object.values(ATTEST_ABSENT)) {
+    expect(isPrivatePathString(reason)).toBe(false);
+  }
+  expect(isPrivatePathString(NO_ATTESTATION_BLOCK)).toBe(false);
+});
+
+test("two exports of the same journals and the same attestation are byte-identical", () => {
+  const root = freshRoot("attest-determinism");
+  try {
+    seedFixtureChains(root);
+    const export1 = exportBundleFromRoot(root, null, REDACTION_POLICY, FIXTURE_ATTESTATION);
+    const export2 = exportBundleFromRoot(root, null, REDACTION_POLICY, FIXTURE_ATTESTATION);
+    expect(export1.ok && export2.ok).toBe(true);
+    if (!export1.ok || !export2.ok) return;
+    expect(serializeBundle(export2.bundle)).toBe(serializeBundle(export1.bundle));
+
+    // And a different attestation is a different bundle: the block is an
+    // input to the bytes, not decoration beside them (039 FR-001).
+    const absent = exportBundleFromRoot(root, null, REDACTION_POLICY, attestationAbsent(ATTEST_ABSENT.toolMissing));
+    expect(absent.ok).toBe(true);
+    if (!absent.ok) return;
+    expect(serializeBundle(absent.bundle)).not.toBe(serializeBundle(export1.bundle));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a tampered attestation document is reported by hash while the chains still verify", () => {
+  const root = freshRoot("attest-tamper");
+  try {
+    seedFixtureChains(root);
+    const result = exportBundleFromRoot(root, null, REDACTION_POLICY, FIXTURE_ATTESTATION);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const tampered = clone(result.bundle);
+    (tampered.attestation as { document: string }).document = FIXTURE_ATTESTATION_DOCUMENT.replace('"ok": true', '"ok": false');
+    const verdict = verifyAttestation(tampered);
+    expect(verdict.state).toBe("mismatch");
+    if (verdict.state !== "mismatch") return;
+    expect(verdict.attestationHash).toBe(FIXTURE_ATTESTATION.attestationHash!);
+    expect(verdict.computedHash).not.toBe(verdict.attestationHash);
+
+    // 039 B-2 and FR-002: the chains are the bundle's own claim, and a
+    // mangled document beside them cannot make them read as broken.
+    expect(verifyBundle(tampered).ok).toBe(true);
+
+    // A hash edited to agree with the tampered document is still not a
+    // corpus verification, only a self-consistent carry: it says the
+    // document travelled intact, which is exactly what "intact" claims.
+    const relabelled = clone(tampered);
+    (relabelled.attestation as { attestationHash: string }).attestationHash = verdict.computedHash;
+    expect(verifyAttestation(relabelled).state).toBe("intact");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a bundle carrying no attestation block at all is named as its own absence", () => {
+  const root = freshRoot("attest-none");
+  try {
+    seedFixtureChains(root);
+    const result = exportBundleFromRoot(root, null, REDACTION_POLICY, FIXTURE_ATTESTATION);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // A pre-039 bundle: format version 1 still reads, because the block is
+    // additive and refusing older evidence would buy nothing (039 D-2).
+    const older = clone(result.bundle);
+    delete (older as { attestation?: BundleAttestation }).attestation;
+    const parsed = parseBundle(serializeBundle(older));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(verifyBundle(parsed.bundle).ok).toBe(true);
+    expect(verifyAttestation(parsed.bundle)).toEqual({ state: "absent", reason: NO_ATTESTATION_BLOCK });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a block that claims an attestation it does not carry is refused, not coerced", () => {
+  const empty = { anchorHash: "a", records: [] };
+  const bundle = buildBundle({ project: null, work: empty, decisions: { anchorHash: "b", records: [] }, attestation: FIXTURE_ATTESTATION });
+
+  const hollow = clone(bundle);
+  delete (hollow.attestation as { document?: string }).document;
+  // parseBundle refuses the shape outright, so the CLI never meets one.
+  expect(parseBundle(serializeBundle(hollow))).toMatchObject({ ok: false, reason: expect.stringContaining("attestation block") });
+  // Reached directly, it is named rather than silently treated as absent.
+  expect(verifyAttestation(hollow)).toEqual({ state: "malformed", reason: "the block claims an attestation it does not carry" });
+
+  const reasonless = clone(bundle);
+  (reasonless.attestation as { attested: boolean }).attested = false;
+  expect(parseBundle(serializeBundle(reasonless)).ok).toBe(false);
+});
+
 // --- tamper detection (B-3, FR-001) ------------------------------------------
 
 test("flipping one byte in an included payload fails with a named reason", () => {
@@ -502,16 +660,30 @@ interface Captured {
   readonly err: string;
 }
 
-async function runCli(argv: readonly string[]): Promise<Captured> {
+// 039 B-1's seam is always injected here: an export under test must never
+// shell out to spec-spine, both because the gate cannot depend on a tool being
+// installed and because the real attest rewrites this repository's derived
+// attestation, which a test has no business touching.
+async function runCli(argv: readonly string[], attest: (repoDir: string) => BundleAttestation = () => FIXTURE_ATTESTATION): Promise<Captured> {
   const out: string[] = [];
   const err: string[] = [];
   const code = await runOrchestratorCli(argv, {
     out: (line) => out.push(line),
     err: (line) => err.push(line),
+    attest,
     env: {},
   });
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
+
+// A stand-in for spec-spine's document: the bundle never parses it, so what
+// matters is only that the carried bytes and the carried hash agree.
+const FIXTURE_ATTESTATION_DOCUMENT = '{\n  "registryHash": "9f0c",\n  "verdicts": {\n    "couple": { "ok": true }\n  }\n}\n';
+const FIXTURE_ATTESTATION: BundleAttestation = {
+  attested: true,
+  document: FIXTURE_ATTESTATION_DOCUMENT,
+  attestationHash: sha256Hex(FIXTURE_ATTESTATION_DOCUMENT),
+};
 
 test("journal export writes a bundle that journal verify --bundle then checks offline", async () => {
   const root = freshRoot("cli");
@@ -535,6 +707,86 @@ test("journal export writes a bundle that journal verify --bundle then checks of
     expect(envelope.ok).toBe(true);
     expect(envelope.data.verified).toBe(true);
     expect(envelope.data.policyVersion).toBe(REDACTION_POLICY.version);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("journal export prints the attestation it embedded and journal verify --bundle reports it intact", async () => {
+  const root = freshRoot("cli-attest");
+  const outPath = join(root, "attested.json");
+  try {
+    seedFixtureChains(root);
+    const hash = FIXTURE_ATTESTATION.attestationHash!;
+
+    const exported = await runCli(["journal", "export", "--out", outPath, "--data-dir", root]);
+    expect(exported.code).toBe(EXIT_OK);
+    expect(exported.out).toContain(`corpus attestation ${hash} (spec-spine, with coupling)`);
+
+    const verified = await runCli(["journal", "verify", "--bundle", outPath]);
+    expect(verified.code).toBe(EXIT_OK);
+    expect(verified.out).toContain("chains intact");
+    // 039 B-2: carried provenance, stated as such. Nothing here claims the
+    // corpus was verified, which would need the repository.
+    expect(verified.out).toContain(`attested corpus ${hash}, document intact`);
+    expect(verified.out).not.toContain("corpus verified");
+
+    // B-3: --json carries the block verbatim, document included.
+    const asJson = await runCli(["journal", "verify", "--bundle", outPath, "--json"]);
+    const envelope = JSON.parse(asJson.out) as {
+      data: { attestation: { attested: boolean; document: string; attestationHash: string }; attestationCheck: { state: string } };
+    };
+    expect(envelope.data.attestation).toEqual({ attested: true, attestationHash: hash, document: FIXTURE_ATTESTATION_DOCUMENT });
+    expect(envelope.data.attestationCheck.state).toBe("intact");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an export whose attest failed still writes a bundle, and verify names the absence", async () => {
+  const root = freshRoot("cli-attest-failed");
+  const outPath = join(root, "unattested.json");
+  try {
+    seedFixtureChains(root);
+    const exported = await runCli(["journal", "export", "--out", outPath, "--data-dir", root], () =>
+      attestationAbsent(ATTEST_ABSENT.toolMissing)
+    );
+    // 039 B-1: an attest that cannot run does not block the export.
+    expect(exported.code).toBe(EXIT_OK);
+    expect(exported.out).toContain("no corpus attestation: spec-spine is not on PATH");
+
+    const verified = await runCli(["journal", "verify", "--bundle", outPath]);
+    expect(verified.code).toBe(EXIT_OK);
+    expect(verified.out).toContain("chains intact");
+    expect(verified.out).toContain("no attestation carried (spec-spine is not on PATH)");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("journal verify --bundle names a tampered attestation while still reporting the chains intact", async () => {
+  const root = freshRoot("cli-attest-tamper");
+  const outPath = join(root, "tampered.json");
+  try {
+    seedFixtureChains(root);
+    expect((await runCli(["journal", "export", "--out", outPath, "--data-dir", root])).code).toBe(EXIT_OK);
+    const bundle = clone(JSON.parse(fs.readFileSync(outPath, "utf8")) as JournalBundle);
+    (bundle.attestation as { document: string }).document = `${FIXTURE_ATTESTATION_DOCUMENT}trailing\n`;
+    fs.writeFileSync(outPath, serializeBundle(bundle));
+
+    const verdict = await runCli(["journal", "verify", "--bundle", outPath]);
+    // 039 D-4: the chains verify on their own terms and say so, and the
+    // command still fails, because something in the bundle was altered.
+    expect(verdict.code).toBe(EXIT_FAILURE);
+    expect(verdict.out).toContain("chains intact");
+    expect(verdict.err).toContain("attestation document does not match its hash");
+    expect(verdict.err).toContain(`carried ${FIXTURE_ATTESTATION.attestationHash}`);
+
+    const asJson = await runCli(["journal", "verify", "--bundle", outPath, "--json"]);
+    expect(asJson.code).toBe(EXIT_FAILURE);
+    const envelope = JSON.parse(asJson.out) as { data: { verified: boolean; attestationCheck: { state: string } } };
+    expect(envelope.data.verified).toBe(true);
+    expect(envelope.data.attestationCheck.state).toBe("mismatch");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
