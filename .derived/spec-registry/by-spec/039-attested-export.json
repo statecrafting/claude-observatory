@@ -1,0 +1,73 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-08-06",
+    "dependsOn": [
+      "031-journal-export"
+    ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "031-journal-export",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/export.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "031-journal-export",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/export.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "028-cli-projects",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
+        }
+      }
+    ],
+    "id": "039-attested-export",
+    "implementation": "pending",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "risk": "low",
+    "sectionHeadings": [
+      "039: Attested export",
+      "1. Purpose",
+      "2. Behavior",
+      "3. Functional requirements",
+      "4. Acceptance criteria",
+      "5. Out of scope",
+      "6. Resolved decisions"
+    ],
+    "specPath": "specs/039-attested-export/spec.md",
+    "status": "approved",
+    "summary": "The integration spec 031 deliberately deferred: at export time the bundle gains a spec-spine corpus attestation, so the evidence a skeptic verifies offline binds not only the journal chains but the exact corpus content the gate was adjudicating when the export was cut. The attestation is spec-spine's own reproducible document (attest --with-coupling), embedded verbatim with its hash; offline verification reports it as carried provenance with its internal hash recomputed, and never claims corpus verification it cannot perform without the repository. Ed25519 sealing stays out of scope: key custody is an operator decision no export path should default.\n",
+    "title": "Attested export: the bundle carries a corpus attestation"
+  },
+  "shardHash": "99de12d7ca182030fef9e029c1b801379a884070f89e8ff073ed09f396d52a16",
+  "specVersion": "1.1.0"
+}
