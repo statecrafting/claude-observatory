@@ -19,7 +19,7 @@
       }
     ],
     "id": "038-ui-economics",
-    "implementation": "pending",
+    "implementation": "in-progress",
     "kind": "surface",
     "references": [
       {
@@ -46,6 +46,6 @@
     "summary": "The dashboard grows the panel spec 030 deliberately left out: a per-project economics view over the served rollup, per-spec cost and rework beside run totals, every number carrying its denominator and every unknown shown as unknown. No new API surface and no new capability the CLI lacks: the panel renders exactly what /api/projects/<name>/economics already serves, under the same honesty rules the rest of the SPA lives by (029: never-loaded is null, an unreachable daemon is a named state, estimates say estimate).\n",
     "title": "Web UI: the economics panel"
   },
-  "shardHash": "64f93a7c2f739dd1b25c2658a35bb0b4093439db69a77ea039c24a27b645aff1",
+  "shardHash": "ab4eff7d49a5082a6de5e2dbb1d2062c055bd99b14824ba064f20e0b845799a0",
   "specVersion": "1.1.0"
 }

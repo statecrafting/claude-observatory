@@ -5,7 +5,7 @@ status: approved
 created: "2026-08-06"
 authors: ["Bartek Kus"]
 kind: surface
-implementation: pending
+implementation: in-progress
 risk: low
 depends_on:
   - "029-ui-projects"
