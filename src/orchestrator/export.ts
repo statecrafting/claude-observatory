@@ -171,9 +171,100 @@ export function redactPayload(kind: string, payload: JsonValue, policy: Redactio
   return { payload: scrubbed.value, withheldPayload: false, withheldFields: [...removed].sort() };
 }
 
+// --- the carried corpus attestation (spec 039) -------------------------------
+
+// The chains prove they were not rewritten; they say nothing about which
+// corpus the gate was adjudicating when they were written. `spec-spine attest
+// --with-coupling` already emits a reproducible document over exactly that,
+// so the export carries it whole (039 B-1). The bundle never interprets the
+// document: the exporter copies the bytes spec-spine wrote and the hash
+// spec-spine minted over them, and offline verification recomputes that hash
+// and claims nothing further (039 B-2). Reproducing an attestation from a
+// corpus needs the repository, which is precisely what the skeptic holding a
+// bundle does not have.
+export interface BundleAttestation {
+  readonly attested: boolean;
+  // Present exactly when attested: the document verbatim, and sha256 over
+  // exactly those bytes (spec-spine's own attestationHash).
+  readonly document?: string;
+  readonly attestationHash?: string;
+  // Present exactly when not attested: the recorded reason. A failed attest
+  // never blocks an export, so absence is a state the bundle states rather
+  // than a field it omits (039 B-1).
+  readonly reason?: string;
+}
+
+// The fixed vocabulary of recorded absences (039 D-5). A reason travels in
+// the bundle, so none of these interpolates tool output or a filesystem path:
+// what a third party gets is the class of failure, and an operator who wants
+// the detail runs `spec-spine attest --with-coupling` themselves and reads it
+// on their own terminal. The one interpolated value is an exit code.
+export const ATTEST_ABSENT = {
+  notRun: "the export ran no attest",
+  notSelfHosted: "the export ran outside the exported project's checkout",
+  toolMissing: "spec-spine is not on PATH",
+  toolFailed: "spec-spine attest --with-coupling failed",
+  unparsedOutput: "spec-spine attest --with-coupling named no attestation path and hash",
+  unreadable: "the attestation document spec-spine named could not be read",
+  hashMismatch: "the attestation document did not match the hash spec-spine minted",
+} as const;
+
+export function attestationAbsent(reason: string): BundleAttestation {
+  return { attested: false, reason };
+}
+
+// spec-spine reports both where it wrote the attestation and the hash it
+// minted; both are read from that output rather than assumed, so the derived
+// layout stays spec-spine's to change. The document itself is copied as
+// opaque bytes and never parsed, which is what keeps this a carry rather than
+// an ad-hoc read of a compiled artifact.
+const ATTEST_PATH_LINE = /->\s*(\S.*?)\s*$/;
+const ATTEST_HASH_LINE = /^\s*attestationHash:\s*([0-9a-f]{64})\s*$/;
+
+function firstMatch(lines: readonly string[], pattern: RegExp): string | null {
+  for (const line of lines) {
+    const found = pattern.exec(line);
+    if (found !== null) return found[1]!;
+  }
+  return null;
+}
+
+// 039 B-1: attest the checkout, and answer with a recorded absence for every
+// way that can fail. Nothing here throws, because a bundle whose export died
+// on a missing tool would be worse evidence than one that says so.
+export function runCorpusAttest(repoDir: string): BundleAttestation {
+  let result: ReturnType<typeof Bun.spawnSync>;
+  try {
+    result = Bun.spawnSync(["spec-spine", "attest", "--with-coupling", "--repo", repoDir]);
+  } catch {
+    return attestationAbsent(ATTEST_ABSENT.toolMissing);
+  }
+  if (result.exitCode !== 0) return attestationAbsent(`${ATTEST_ABSENT.toolFailed} (exit ${result.exitCode})`);
+
+  const lines = new TextDecoder().decode(result.stdout).split("\n");
+  const documentPath = firstMatch(lines, ATTEST_PATH_LINE);
+  const attestationHash = firstMatch(lines, ATTEST_HASH_LINE);
+  if (documentPath === null || attestationHash === null) return attestationAbsent(ATTEST_ABSENT.unparsedOutput);
+
+  let document: string;
+  try {
+    document = fs.readFileSync(documentPath, "utf8");
+  } catch {
+    return attestationAbsent(ATTEST_ABSENT.unreadable);
+  }
+  // The hash carried into the bundle is spec-spine's claim, checked against
+  // the bytes at export time: a bundle never ships a pairing this side has
+  // not already seen hold.
+  if (sha256Hex(document) !== attestationHash) return attestationAbsent(ATTEST_ABSENT.hashMismatch);
+  return { attested: true, document, attestationHash };
+}
+
 // --- bundle shape (B-1, B-5) -------------------------------------------------
 
 export const BUNDLE_FORMAT = "observatory-journal-export";
+// Unchanged by 039: the attestation is an additive member a reader that does
+// not know it simply ignores, and refusing every bundle written before it
+// (the committed evidence bundle included) would buy nothing (039 D-2).
 export const BUNDLE_FORMAT_VERSION = 1;
 
 export interface BundleRecord {
@@ -208,6 +299,10 @@ export interface JournalBundle {
   readonly formatVersion: number;
   readonly policyVersion: number;
   readonly project: string | null;
+  // 039 B-1: the corpus the gate was adjudicating, carried whole or recorded
+  // absent. Optional only because bundles written before 039 have none, and
+  // verification names that case as its own kind of absence (039 D-2).
+  readonly attestation?: BundleAttestation;
   readonly chains: readonly BundleChain[];
 }
 
@@ -244,14 +339,16 @@ function toBundleChain(chain: "work" | "decisions", file: string, source: ChainS
   };
 }
 
-// Pure assembly: same inputs, same bundle (B-5). Nothing here reads a clock
-// or the filesystem, which is what makes two exports of the same journals
-// byte-identical once serialized.
+// Pure assembly: same inputs, same bundle (B-5, 039 FR-001). Nothing here
+// reads a clock or the filesystem, which is what makes two exports of the
+// same journals and the same attestation byte-identical once serialized;
+// running the attest is the caller's impure business, kept outside.
 export function buildBundle(params: {
   readonly project: string | null;
   readonly work: ChainSource;
   readonly decisions: ChainSource;
   readonly policy?: RedactionPolicy;
+  readonly attestation?: BundleAttestation;
 }): JournalBundle {
   const policy = params.policy ?? REDACTION_POLICY;
   return {
@@ -259,6 +356,7 @@ export function buildBundle(params: {
     formatVersion: BUNDLE_FORMAT_VERSION,
     policyVersion: policy.version,
     project: params.project,
+    attestation: params.attestation ?? attestationAbsent(ATTEST_ABSENT.notRun),
     chains: [
       toBundleChain("work", "journal.jsonl", params.work, policy),
       toBundleChain("decisions", "decisions.jsonl", params.decisions, policy),
@@ -323,13 +421,19 @@ function readChainSource(stateRoot: string, chain: keyof typeof CHAIN_FILES): { 
 
 // Reads both chains of one state root and assembles the bundle. Export is
 // read-only with respect to both chains (B-4); everything that can go wrong
-// answers as a named reason, never a throw.
-export function exportBundleFromRoot(stateRoot: string, project: string | null, policy: RedactionPolicy = REDACTION_POLICY): ExportResult {
+// answers as a named reason, never a throw. The attestation arrives already
+// run (or already recorded absent), so this stays a read of two chains.
+export function exportBundleFromRoot(
+  stateRoot: string,
+  project: string | null,
+  policy: RedactionPolicy = REDACTION_POLICY,
+  attestation: BundleAttestation = attestationAbsent(ATTEST_ABSENT.notRun)
+): ExportResult {
   const work = readChainSource(stateRoot, "work");
   if (!work.ok) return work;
   const decisions = readChainSource(stateRoot, "decisions");
   if (!decisions.ok) return decisions;
-  return { ok: true, bundle: buildBundle({ project, work: work.source, decisions: decisions.source, policy }) };
+  return { ok: true, bundle: buildBundle({ project, work: work.source, decisions: decisions.source, policy, attestation }) };
 }
 
 // Writes the serialized bundle to a single file, creating parent directories
@@ -380,6 +484,18 @@ function isBundleChainShape(value: unknown): value is BundleChain {
   );
 }
 
+// An attested block must carry both halves and an absent one its reason:
+// a block that claims an attestation it does not carry is structurally
+// unusable, not merely unverified. Whether the two halves agree is
+// verifyAttestation()'s question, so a tampered document still parses.
+function isBundleAttestationShape(value: unknown): value is BundleAttestation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const attestation = value as Record<string, unknown>;
+  if (typeof attestation.attested !== "boolean") return false;
+  if (attestation.attested) return typeof attestation.document === "string" && typeof attestation.attestationHash === "string";
+  return typeof attestation.reason === "string";
+}
+
 // Structural validation only: whether the well-shaped content is intact is
 // verifyBundle()'s question, and keeping the two apart is what lets a tamper
 // answer with a named verification failure instead of a parse complaint.
@@ -403,6 +519,11 @@ export function parseBundle(text: string): ParseBundleResult {
   }
   if (bundle.project !== null && typeof bundle.project !== "string") {
     return { ok: false, reason: "the bundle's project is neither a string nor null" };
+  }
+  // Absent is the pre-039 bundle, and verification names it as such; present
+  // and malformed is a bundle this binary cannot vouch for at all.
+  if (bundle.attestation !== undefined && !isBundleAttestationShape(bundle.attestation)) {
+    return { ok: false, reason: "the bundle's attestation block is neither an attestation nor a recorded absence" };
   }
   const chains = bundle.chains;
   if (!Array.isArray(chains) || chains.length !== 2 || !chains.every(isBundleChainShape)) {
@@ -430,6 +551,38 @@ export interface ChainVerification {
 export type BundleVerifyResult =
   | { readonly ok: true; readonly chains: readonly ChainVerification[] }
   | { readonly ok: false; readonly chain: string; readonly seq: number | null; readonly reason: string };
+
+// What recomputing the carried attestation's hash shows, and nothing wider
+// (039 B-2). "intact" says the document travelled unaltered and stays
+// spec-spine's to check against a checkout; it is never a claim that the
+// corpus was verified here, which would need the repository the reader of a
+// bundle does not have.
+export type AttestationVerification =
+  | { readonly state: "intact"; readonly attestationHash: string }
+  | { readonly state: "mismatch"; readonly attestationHash: string; readonly computedHash: string }
+  | { readonly state: "malformed"; readonly reason: string }
+  | { readonly state: "absent"; readonly reason: string };
+
+export const NO_ATTESTATION_BLOCK = "the bundle predates the attestation block";
+
+// Deliberately not folded into verifyBundle: the chains are the bundle's
+// claim and the attestation is provenance riding beside them, so a mangled
+// document must not be able to make an intact chain read as broken (039
+// FR-002). The caller combines the two verdicts; here they stay separable.
+export function verifyAttestation(bundle: JournalBundle): AttestationVerification {
+  const attestation = bundle.attestation;
+  if (attestation === undefined) return { state: "absent", reason: NO_ATTESTATION_BLOCK };
+  if (!attestation.attested) {
+    return { state: "absent", reason: attestation.reason ?? "no reason recorded" };
+  }
+  const { document, attestationHash } = attestation;
+  if (typeof document !== "string" || typeof attestationHash !== "string") {
+    return { state: "malformed", reason: "the block claims an attestation it does not carry" };
+  }
+  const computedHash = sha256Hex(document);
+  if (computedHash !== attestationHash) return { state: "mismatch", attestationHash, computedHash };
+  return { state: "intact", attestationHash };
+}
 
 function fail(chain: string, seq: number | null, reason: string): BundleVerifyResult {
   return { ok: false, chain, seq, reason };

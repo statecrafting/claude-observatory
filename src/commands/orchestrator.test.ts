@@ -78,6 +78,12 @@ async function run(argv: readonly string[], overrides: Partial<OrchestratorCliDe
     kill: () => {
       throw new Error("kill was not expected in this test");
     },
+    // 039 B-1: the attest shells out to spec-spine over a real checkout, so
+    // it belongs with spawn and kill among the seams a test must ask for
+    // explicitly rather than reach by default.
+    attest: () => {
+      throw new Error("attest was not expected in this test");
+    },
     sleep: () => Promise.resolve(),
     env: {},
     startTimeoutMs: 50,
@@ -1029,6 +1035,36 @@ test("journal verify answers rather than throwing when there is no chain at all"
     expect(result.err).toContain("nothing to verify");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("journal export --project records the absent attestation rather than attesting this checkout", async () => {
+  const home = freshDataDir("export-project");
+  const repoDir = seedRegisteredProject(home, "gamma");
+  const outPath = join(home, "gamma-bundle.json");
+
+  try {
+    // 039 D-3: the export attests the checkout it runs in, and a project
+    // export is the one case where that checkout is not the corpus behind
+    // the exported chains. Carrying this one's attestation beside gamma's
+    // journals would be exactly the laundering B-2 refuses, so the attest
+    // is not even reached: `run`'s seam throws if it is.
+    const human = await run(["journal", "export", "--project", "gamma", "--out", outPath, "--data-dir", home]);
+    expect(human.code).toBe(EXIT_OK);
+    expect(human.out).toContain("no corpus attestation: the export ran outside the exported project's checkout");
+
+    const asJson = await run(["journal", "export", "--project", "gamma", "--out", outPath, "--data-dir", home, "--json"]);
+    const data = expectData<{ attestation: { attested: boolean; reason: string; document?: string } }>(asJson.out);
+    expect(data.attestation.attested).toBe(false);
+    expect(data.attestation.reason).toBe("the export ran outside the exported project's checkout");
+    expect(data.attestation.document).toBeUndefined();
+
+    const verified = await run(["journal", "verify", "--bundle", outPath]);
+    expect(verified.code).toBe(EXIT_OK);
+    expect(verified.out).toContain("no attestation carried (the export ran outside the exported project's checkout)");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(repoDir, { recursive: true, force: true });
   }
 });
 

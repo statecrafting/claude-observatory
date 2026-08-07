@@ -38,10 +38,17 @@ import { basename, dirname, join, resolve } from "path";
 import { DATA_DIR, PROJECT_DIR } from "../paths";
 import { openJournal, verifyChain, type JournalHandle, type JournalRecord } from "../orchestrator/journal";
 import {
+  ATTEST_ABSENT,
+  REDACTION_POLICY,
+  attestationAbsent,
   exportBundleFromRoot,
   parseBundle,
+  runCorpusAttest,
+  verifyAttestation,
   verifyBundle,
   writeBundle,
+  type AttestationVerification,
+  type BundleAttestation,
   type ChainVerification,
   type JournalBundle,
 } from "../orchestrator/export";
@@ -245,6 +252,11 @@ export interface OrchestratorCliDeps {
   // sessions under the project's execution profile; tests inject scripted
   // ones so AC-2 runs with no model anywhere near it.
   readonly makeSynthesisSession?: (project: Project, journal: JournalHandle) => SynthesisSessionFn;
+  // 039 B-1's seam: `journal export` shells out to `spec-spine attest
+  // --with-coupling` over the checkout it runs in. Tests supply the outcome
+  // directly, so an export under test neither needs spec-spine on PATH nor
+  // rewrites the real repository's derived attestation.
+  attest(repoDir: string): BundleAttestation;
 }
 
 export const ORCHESTRATOR_DATA_DIR = join(DATA_DIR, "orchestrator");
@@ -281,6 +293,7 @@ export function defaultOrchestratorCliDeps(): OrchestratorCliDeps {
     dataDir: ORCHESTRATOR_DATA_DIR,
     repoDir: PROJECT_DIR,
     inspector: createProcessInspector(),
+    attest: runCorpusAttest,
     spawnDaemon: spawnDetachedDaemon,
     kill: (pid: number, signal: NodeJS.Signals) => {
       process.kill(pid, signal);
@@ -1480,6 +1493,8 @@ interface JournalExportData {
   readonly exportError: string | null;
   readonly exported: boolean;
   readonly policyVersion: number | null;
+  // 039 B-3: the block verbatim, exactly as the bundle carries it.
+  readonly attestation: BundleAttestation | null;
   readonly chains: readonly ChainExportSummary[];
 }
 
@@ -1490,7 +1505,13 @@ interface JournalExportData {
 function cmdJournalExport(deps: OrchestratorCliDeps, json: boolean, project: string | null, out: string): number {
   const root = verifyRoot(deps, project, null);
   const outPath = resolve(out);
-  const result = root.dir === null ? null : exportBundleFromRoot(root.dir, project);
+  // 039 B-1 attests the checkout the export runs in, which is the corpus
+  // behind the self-hosted journals and no others. A `--project` export is
+  // the one case where those two come apart, and it records the absence
+  // rather than carrying this checkout's attestation beside another
+  // project's chains, which is the laundering B-2 refuses (039 D-3).
+  const attestation = project === null ? deps.attest(deps.repoDir) : attestationAbsent(ATTEST_ABSENT.notSelfHosted);
+  const result = root.dir === null ? null : exportBundleFromRoot(root.dir, project, REDACTION_POLICY, attestation);
   const bundle = result?.ok === true ? result.bundle : null;
   if (bundle !== null) writeBundle(bundle, outPath);
 
@@ -1502,6 +1523,7 @@ function cmdJournalExport(deps: OrchestratorCliDeps, json: boolean, project: str
     exportError: result !== null && !result.ok ? result.reason : null,
     exported: bundle !== null,
     policyVersion: bundle?.policyVersion ?? null,
+    attestation: bundle?.attestation ?? null,
     chains: bundle === null ? [] : summarizeBundle(bundle),
   };
 
@@ -1519,6 +1541,13 @@ function cmdJournalExport(deps: OrchestratorCliDeps, json: boolean, project: str
   }
   deps.out(`bundle written to ${outPath} (policy v${data.policyVersion}${project === null ? "" : `, project ${project}`})`);
   deps.out(`source chains under ${data.dir}`);
+  // 039 B-3: one line for what the bundle now carries about the corpus.
+  const attested = data.attestation;
+  deps.out(
+    attested?.attested === true
+      ? `corpus attestation ${attested.attestationHash} (spec-spine, with coupling)`
+      : `no corpus attestation: ${attested?.reason ?? ATTEST_ABSENT.notRun}`
+  );
   for (const chain of data.chains) {
     const redacted = chain.payloadsRedacted > 0 ? ` (${chain.payloadsRedacted} with fields withheld)` : "";
     deps.out(
@@ -1536,8 +1565,16 @@ interface BundleVerifyData {
   readonly policyVersion: number | null;
   readonly project: string | null;
   readonly failure: { readonly chain: string; readonly seq: number | null; readonly reason: string } | null;
+  // 039 B-3: the carried block verbatim, and what recomputing its hash showed.
+  readonly attestation: BundleAttestation | null;
+  readonly attestationCheck: AttestationVerification | null;
   readonly chains: readonly ChainVerification[];
 }
+
+const NO_ATTESTATION_CHECK = {
+  attestation: null,
+  attestationCheck: null,
+} satisfies Pick<BundleVerifyData, "attestation" | "attestationCheck">;
 
 // 031 B-3 behind B-4's verb: check a bundle with no daemon, no original
 // journal, and no network, and map the verdict onto 023's exit codes (0 the
@@ -1556,11 +1593,11 @@ function cmdBundleVerify(deps: OrchestratorCliDeps, json: boolean, bundleArg: st
   }
 
   if (text === null) {
-    data = { bundle: bundlePath, readError, verified: false, policyVersion: null, project: null, failure: null, chains: [] };
+    data = { bundle: bundlePath, readError, verified: false, policyVersion: null, project: null, failure: null, ...NO_ATTESTATION_CHECK, chains: [] };
   } else {
     const parsed = parseBundle(text);
     if (!parsed.ok) {
-      data = { bundle: bundlePath, readError: parsed.reason, verified: false, policyVersion: null, project: null, failure: null, chains: [] };
+      data = { bundle: bundlePath, readError: parsed.reason, verified: false, policyVersion: null, project: null, failure: null, ...NO_ATTESTATION_CHECK, chains: [] };
     } else {
       const verdict = verifyBundle(parsed.bundle);
       data = {
@@ -1570,14 +1607,22 @@ function cmdBundleVerify(deps: OrchestratorCliDeps, json: boolean, bundleArg: st
         policyVersion: parsed.bundle.policyVersion,
         project: parsed.bundle.project,
         failure: verdict.ok ? null : { chain: verdict.chain, seq: verdict.seq, reason: verdict.reason },
+        attestation: parsed.bundle.attestation ?? null,
+        attestationCheck: verifyAttestation(parsed.bundle),
         chains: verdict.ok ? verdict.chains : [],
       };
     }
   }
 
+  // 039 B-2: the chains and the carried provenance are two verdicts, and a
+  // mangled attestation must not be able to make intact chains read as
+  // broken. Both must hold for the command to succeed (039 D-4).
+  const attestationBroken = data.attestationCheck !== null && (data.attestationCheck.state === "mismatch" || data.attestationCheck.state === "malformed");
+  const exit = data.verified && !attestationBroken ? EXIT_OK : EXIT_FAILURE;
+
   if (json) {
     printJson(deps, { ok: true, data } satisfies ApiResponse<BundleVerifyData>);
-    return data.verified ? EXIT_OK : EXIT_FAILURE;
+    return exit;
   }
   if (data.readError !== null) {
     deps.err(`journal verify: ${data.readError}`);
@@ -1598,7 +1643,30 @@ function cmdBundleVerify(deps: OrchestratorCliDeps, json: boolean, bundleArg: st
         `${chain.payloadsRedacted} redacted, ${chain.payloadsWithheld} withheld`
     );
   }
-  return EXIT_OK;
+  reportAttestation(deps, data.attestationCheck);
+  return exit;
+}
+
+// 039 B-2 and B-3 in one line. "Intact" is a statement about the document,
+// never about the corpus: verifying that the attestation reproduces would
+// need the repository, and a bundle exists for the reader who has none.
+function reportAttestation(deps: OrchestratorCliDeps, check: AttestationVerification | null): void {
+  if (check === null) return;
+  switch (check.state) {
+    case "intact":
+      deps.out(`attested corpus ${check.attestationHash}, document intact`);
+      return;
+    case "absent":
+      deps.out(`no attestation carried (${check.reason})`);
+      return;
+    case "mismatch":
+      deps.err(
+        `attestation document does not match its hash (carried ${check.attestationHash}, recomputed ${check.computedHash})`
+      );
+      return;
+    case "malformed":
+      deps.err(`attestation unusable: ${check.reason}`);
+  }
 }
 
 // --- adoption preflight (spec 034) ------------------------------------------
