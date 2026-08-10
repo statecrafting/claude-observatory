@@ -180,3 +180,24 @@ and every JSON route answers within one fold, so the timeout's only
 observed effect was breaking the one route built to stay open. A
 client that vanishes without closing costs a lingering socket on
 localhost, accepted and recorded here.
+
+D-10 (2026-08-10, operator). `stop()` yields one event-loop tick between
+closing the SSE controllers and awaiting `Bun.serve`'s `stop(true)`.
+Found live as the intermittent 026 B-7 violation of 2026-08-06 (SIGTERM
+in standby ignored, SIGKILL needed; distinct from 2026-08-05's
+starved-event-loop violation, which 026 D-10 fixed): on Bun 1.3.11,
+closing two or more stream controllers and calling `stop(true)` in the
+same event-loop turn leaves that promise forever pending, even though
+every socket and the listener are torn down at the OS level. The daemon's
+signal handler awaits this `stop()` before anything else and latches its
+re-entry guard, so the leaked promise made the process deaf to every
+later TERM while the scheduler loop kept running; the operator's web
+dashboard tab held one reconnecting SSE stream open, so any second
+client (a curl, a second tab) at stop time crossed the two-stream
+threshold, which is what made the hang look intermittent. One client,
+or force-stop without the pre-close, or a tick between the closes and
+the stop, all resolve; five-of-five reproduction each way. The pre-close
+stays (it is what ends the heartbeat timers and unsubscribes the hub);
+the tick is the fix. Residual risk accepted: a future Bun regression of
+the same class would hang the same await again, and the signal path
+deliberately stays simple rather than growing a watchdog for it.
