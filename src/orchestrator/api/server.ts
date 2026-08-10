@@ -1140,6 +1140,14 @@ export function createApiServer(deps: ApiDeps): ApiServer {
       pump.stop();
       for (const close of [...closers]) close();
       closers.clear();
+      // D-10: closing two or more stream controllers and calling stop(true)
+      // in the same event-loop turn leaves its promise forever pending on
+      // Bun 1.3.11 (the sockets still tear down; only the promise leaks).
+      // One yielded tick lets the closes settle first. Without it the
+      // daemon's SIGTERM path awaits this forever with every later TERM
+      // swallowed, which is how 026 B-7 died by SIGKILL whenever two SSE
+      // clients (a dashboard tab plus anything else) were connected.
+      await Bun.sleep(0);
       await server.stop(true);
     },
   };

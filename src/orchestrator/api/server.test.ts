@@ -934,6 +934,39 @@ test("stopping the server tears down the pump and every open stream", async () =
   }
 });
 
+// D-10's regression: on Bun 1.3.11, closing two or more stream controllers
+// and force-stopping in the same event-loop turn leaves stop(true)'s promise
+// forever pending, which held the daemon's whole SIGTERM path hostage. One
+// stream never triggered it, so this is the two-stream sibling of the test
+// above, raced against a bound so a regression fails instead of wedging the
+// suite.
+test("stop() resolves with two streams open at once", async () => {
+  const registry = freshRegistry("sse-stop-two");
+  registry.add("alpha");
+  const server = createApiServer(fixtureApiDeps(registry, { heartbeatMs: 10_000, pumpIntervalMs: 1_000_000 }));
+  const aborts: AbortController[] = [];
+  const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+  try {
+    for (let i = 0; i < 2; i++) {
+      const abort = new AbortController();
+      aborts.push(abort);
+      const response = await fetch(`${server.url}${API_ROUTES.events}`, { signal: abort.signal });
+      const reader = response.body!.getReader();
+      await reader.read(); // the retry directive: the stream is established
+      readers.push(reader);
+    }
+    expect(server.hub.listenerCount).toBe(2);
+
+    const outcome = await Promise.race([server.stop().then(() => "stopped"), Bun.sleep(2_000).then(() => "hung")]);
+    expect(outcome).toBe("stopped");
+    expect(server.hub.listenerCount).toBe(0);
+  } finally {
+    for (const reader of readers) await reader.cancel().catch(() => {});
+    for (const abort of aborts) abort.abort();
+    registry.close();
+  }
+});
+
 test("the hub is the server's own, so a caller can publish alongside the pump", async () => {
   await withServer("sse-hub", async ({ server }) => {
     expect(server.hub).toBeInstanceOf(EventHub);
