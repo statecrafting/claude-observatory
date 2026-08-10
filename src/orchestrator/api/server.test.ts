@@ -945,7 +945,9 @@ test("stop() resolves with two streams open at once", async () => {
   registry.add("alpha");
   const server = createApiServer(fixtureApiDeps(registry, { heartbeatMs: 10_000, pumpIntervalMs: 1_000_000 }));
   const aborts: AbortController[] = [];
-  const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+  // getReader() types as ReadableStreamDefaultReader<any> under bun-types, so
+  // the element type is left to inference rather than pinned to Uint8Array.
+  const readers: ReturnType<NonNullable<Response["body"]>["getReader"]>[] = [];
   try {
     for (let i = 0; i < 2; i++) {
       const abort = new AbortController();
