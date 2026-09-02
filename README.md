@@ -114,6 +114,16 @@ synthesis, holdback replay scoring against the target's own merge
 history, and defect capture so adopted specs record behavior rather than
 bless it).
 
+## Operating
+
+`./start.sh` boots the checkout: dependencies, the dashboard build, the
+orchestrator daemon (API and web UI), and the `~/.claude` watcher; it ends
+with both status views and the dashboard address. `./stop.sh` reverses it
+with SIGTERM only and reports anything still alive. After a merge into
+this repository the daemon announces code-stale and idles until it is
+restarted (spec 026 D-7): `./start.sh --restart` is that restart.
+`--skip-build` and `--no-watcher` skip those halves.
+
 ## Governance
 
 `spec-spine compile | index | lint | couple` must stay green. Derived
