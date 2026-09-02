@@ -38,6 +38,6 @@
     "summary": "The first pipeline stage: assemble the context a fresh session needs (the target spec verbatim, the backlog protocol, relevant decision-ledger entries, dependency pins), flip the spec to in-progress on a fresh feature branch, drive one session to implement exactly that spec's territory, and judge completion from evidence (gate commands green, spec acceptance criteria addressed, working tree state) rather than the session's own claim.\n",
     "title": "Build stage: implement one spec in one fresh session"
   },
-  "shardHash": "8fd46fdd8e81e1648ac535f38b9ce4609a1d679b81f66d1ebe90ea36b6beadf6",
+  "shardHash": "0a80e3e32416bb461f913740551c3be27e5c34556518446adc63445971f96d63",
   "specVersion": "1.1.0"
 }

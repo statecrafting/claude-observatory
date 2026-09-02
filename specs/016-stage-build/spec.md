@@ -195,3 +195,24 @@ per PR. The session prompts carry the computed program rather than the
 constant, so a session is never promised a command the evaluation will
 not run; the earlier family corpus (tenant-emit) never noticed because
 it was wholly adopted, never built.
+
+D-11 (2026-09-02, operator). B-3's drop-box instruction states the record's
+field types, not just its field names. The prompt named the shape as
+`{id, specId, scope, title, decision, rationale, alternatives?,
+supersedes?}` and left every type to be guessed; spec 020 B-1 defines
+`scope` as a list, and `validateDecisionRecord` enforces `string[]`. Found
+live on butler-ai: 25 of 25 decisions written across four sessions and two
+stages used `"scope": "reducer"`, every one was rejected, and the project's
+`decisions.jsonl` was still 0 bytes after a full spec had been built. The
+loss is silent to the session and compounding, because B-4's injection then
+has nothing to inject: a later session cannot read what an earlier one
+decided, and rediscovers the same wall at full session cost (four sessions
+and $17.44 spent re-deriving one unresolvable coupling violation that the
+first session had already recorded correctly). The prompt now gives the
+type of every field, states that `scope` is an array and never a bare
+string, says that a rejected record reaches neither the ledger nor a later
+session, and carries a complete copyable example built from the spec's own
+id, which is why `buildPrompt` now takes `specId`. `BUILD_PROMPT_VERSION`
+goes to 2 in the same change: the version is journaled with every use, so
+holding it at 1 across a changed template would leave
+`stage.build.prompt` unable to answer which text a session actually saw.

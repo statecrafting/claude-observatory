@@ -399,9 +399,13 @@ function safeReadAgentsMd(runner: Runner): string {
 // template has no callers outside this stage, so a second file would only
 // add a coupling surface with nothing to couple to (see Resolved decisions).
 
-export const BUILD_PROMPT_VERSION = 1;
+// Bumped to 2 with D-11's typed drop-box contract: the version is journaled
+// with every use, so a prompt whose text changed under a frozen version
+// would make `stage.build.prompt` unable to answer which text a session saw.
+export const BUILD_PROMPT_VERSION = 2;
 
 export interface BuildPromptParams {
+  readonly specId: string;
   readonly specBody: string;
   readonly backlogStep: string;
   readonly decisions: DecisionsForResult;
@@ -412,7 +416,7 @@ export interface BuildPromptParams {
 }
 
 export function buildPrompt(params: BuildPromptParams): string {
-  const { specBody, backlogStep, decisions, dropboxDir } = params;
+  const { specId, specBody, backlogStep, decisions, dropboxDir } = params;
 
   const gateList = (params.gateCommands ?? GATE_COMMANDS).map((cmd) => `  - \`${cmd.join(" ")}\``).join("\n");
 
@@ -451,9 +455,33 @@ decision into the decision drop-box at:
 
   ${dropboxDir}
 
-Each file holds one DecisionRecord: {id, specId, scope, title, decision,
-rationale, alternatives?, supersedes?}. Do not append to the decision ledger
-directly; the orchestrator seals the drop-box after this session ends.
+Each file holds one DecisionRecord. The field types are exact and are
+validated; a record that fails validation is quarantined, never sealed, so
+it reaches neither the ledger nor any later session.
+
+  id            string, unique, conventionally "<specId>-d<n>"
+  specId        string, this spec's id
+  scope         ARRAY of strings, never a bare string: the spec ids and/or
+                repo path prefixes this decision touches
+  title         string
+  decision      string
+  rationale     string
+  alternatives  array of strings (optional)
+  supersedes    string, the id of the decision this one replaces (optional)
+
+No other fields are accepted, and no non-integer numbers anywhere. An
+optional field you are not using is left out entirely; writing it as null
+is accepted but says nothing. A complete example:
+
+  {"id": "${specId}-d1",
+   "specId": "${specId}",
+   "scope": ["${specId}", "src/some/territory/"],
+   "title": "one line naming the choice",
+   "decision": "what was chosen, in full",
+   "rationale": "why, and what it costs"}
+
+Do not append to the decision ledger directly; the orchestrator seals the
+drop-box after this session ends.
 
 ## House style
 
@@ -674,6 +702,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     budgetChars: DECISION_BUDGET_CHARS,
   });
   const promptBase = buildPrompt({
+    specId,
     specBody,
     backlogStep,
     decisions: decisionSelection,

@@ -13,6 +13,7 @@ import {
   sealDropbox,
   decisionsFor,
   queryDecisions,
+  QUARANTINE_DIRNAME,
 } from "./decisions";
 
 function freshDir(): string {
@@ -236,7 +237,9 @@ test("sealDropbox seals a valid decision, preserves a malformed file, and journa
   expect(result.invalid[0]!.file).toBe("b-malformed.json");
 
   expect(fs.existsSync(validPath)).toBe(false);
-  expect(fs.existsSync(malformedPath)).toBe(true);
+  // D-6: preserved, but in quarantine rather than in place.
+  expect(fs.existsSync(malformedPath)).toBe(false);
+  expect(fs.readFileSync(join(dropboxDir, QUARANTINE_DIRNAME, "b-malformed.json"), "utf8")).toBe("{ not json");
 
   const sealedRecords = decisionRecordsFromChain(chain.fold());
   expect(sealedRecords.length).toBe(1);
@@ -346,4 +349,62 @@ test("queryDecisions filters by specId, path, and case-insensitive full-text, ne
   expect(queryDecisions(records, { path: "src/orchestrator/journal.ts" }).map((r) => r.id)).toEqual(["d-1"]);
   expect(queryDecisions(records, { text: "IDEMPOTENT" }).map((r) => r.id)).toEqual(["d-2"]);
   expect(queryDecisions(records, {}).map((r) => r.id)).toEqual(["d-2", "d-1"]);
+});
+
+// D-6: the bug this fixes is not the rejection, it is the rejection being
+// re-reported forever. Found live on butler-ai, where files rejected on one
+// day were still in every sweep's report two days later.
+test("sealDropbox reports an invalid file once: a second sweep no longer sees it (D-6)", () => {
+  const dir = freshDir();
+  const dropboxDir = join(dir, "decision-dropbox");
+  fs.mkdirSync(dropboxDir, { recursive: true });
+
+  // The exact shape every butler-ai session wrote: scope as a bare string.
+  const stringScope = { ...validDecisionRaw(), scope: "reducer" };
+  fs.writeFileSync(join(dropboxDir, "string-scope.json"), JSON.stringify(stringScope));
+
+  const chain = openDecisionsChain(dir);
+  const journal = openJournal(dir);
+  const knownSpecIds = new Set(["020-decision-ledger"]);
+
+  const first = sealDropbox({ dropboxDir, chain, knownSpecIds, journal });
+  expect(first.sealed.length).toBe(0);
+  expect(first.invalid.length).toBe(1);
+  expect(first.invalid[0]!.reason).toContain("array of strings");
+
+  const second = sealDropbox({ dropboxDir, chain, knownSpecIds, journal });
+  expect(second.invalid.length).toBe(0);
+
+  // Preserved, not deleted: the operator can still repair it.
+  expect(fs.existsSync(join(dropboxDir, QUARANTINE_DIRNAME, "string-scope.json"))).toBe(true);
+
+  // The sweep that found nothing says so without naming a directory it did
+  // not create this time.
+  const outcomes = journal.fold().byKind["decision.sealed.outcome"]!;
+  expect(outcomes.length).toBe(2);
+  expect(outcomes[0]!.payload).toHaveProperty("quarantineDir");
+  expect(outcomes[1]!.payload).not.toHaveProperty("quarantineDir");
+
+  chain.close();
+  journal.close();
+});
+
+// D-7: null on an optional field is how JSON writers often spell "unused".
+test("validateDecisionRecord reads an explicit null on an optional field as absent (D-7)", () => {
+  const raw = { ...validDecisionRaw(), alternatives: null, supersedes: null };
+  const result = validateDecisionRecord(raw, new Set(["020-decision-ledger"]));
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    // Normalized away, not carried: the canonical payload contentHashOf
+    // hashes must never contain a null.
+    expect("alternatives" in result.record).toBe(false);
+    expect("supersedes" in result.record).toBe(false);
+    expect(contentHashOf(result.record)).toBe(contentHashOf({ ...validDecisionRaw() } as unknown as DecisionRecord));
+  }
+});
+
+test("validateDecisionRecord still rejects a present, non-null optional field of the wrong type (D-7)", () => {
+  const result = validateDecisionRecord({ ...validDecisionRaw(), alternatives: "not a list" }, new Set(["020-decision-ledger"]));
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.reason).toMatch(/alternatives/);
 });

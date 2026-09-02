@@ -36,6 +36,6 @@
     "summary": "The coherence mechanism across sessions: an append-only, hash-linked ledger of decisions made where a spec was silent, written during sessions through a validated drop-box, sealed by the orchestrator at stage end, and injected into future sessions whose spec or dependencies match the decision's scope. Decisions are never edited; they are superseded by later decisions that name them.\n",
     "title": "Decision ledger: append-only choices, injected forward"
   },
-  "shardHash": "acda14f6b21a938dc8c47ef4c23867a6e25dd7dc3e3fd7a75681aeae04323de4",
+  "shardHash": "3cffe4f7e396cfea99ecae388a94b9cf3588a09cd14f2574b979b1189770ee12",
   "specVersion": "1.1.0"
 }

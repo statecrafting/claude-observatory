@@ -126,3 +126,34 @@ Resolved: `budgetChars` measures the `stableStringify` length of each
 record's chain payload (the same canonical JSON `contentHashOf` hashes), a
 deterministic stand-in for prompt characters that needs no tokenizer
 dependency (the zero-runtime-dependency convention).
+
+D-6. B-3 says an invalid drop-box file is surfaced as a stage warning "with
+the file preserved", without saying where. Preserved in place, it is re-read,
+re-rejected and re-reported by every later sweep in the same project,
+without bound and with no path to resolution: found live on butler-ai, where
+eight files rejected on 2026-09-01 were still being re-reported in every
+build two days later, and the sweep's report had become a growing list of
+the project's whole rejection history rather than an account of this sweep.
+Resolved: preserved means moved into a quarantine subdirectory of the
+drop-box (`invalid/`, `QUARANTINE_DIRNAME`), created lazily so a project
+that never writes a bad record never grows an empty directory. B-3's
+substance is kept, since nothing the session wrote is deleted and an
+operator can repair a file and move it back, while each sweep reports only
+what it found. The `decision.sealed.outcome` record names `quarantineDir`
+when, and only when, something was quarantined, so the record points at the
+files without asserting a directory that was never created.
+
+D-7. B-1 marks `alternatives` and `supersedes` optional without saying how a
+writer spells "not used". The validator accepted only an absent key, so an
+explicit `null` was read as a present-but-malformed value and rejected the
+whole record. Found live on butler-ai: three 009 decisions, among them the
+two that had correctly diagnosed an unresolvable coupling violation, were
+discarded over `"supersedes": null`. Resolved: on an optional field, null
+reads as absent. FR-001's rejection classes are missing fields, unknown
+fields, floats and bad scope entries; this was never one of them, and the
+strictness bought nothing while costing whole records for an encoding choice
+that loses no meaning. Null is normalized away at construction rather than
+carried, so it can never reach the canonical payload that `contentHashOf`
+hashes; a present, non-null value of the wrong type is still rejected as
+before. The build prompt states the convention as well, since a session that
+omits the key is clearer than one that nulls it.

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import { openJournal } from "../journal";
-import { openDecisionsChain } from "../decisions";
+import { openDecisionsChain, validateDecisionRecord } from "../decisions";
 import type { SessionResult } from "../session";
 import {
   runBuildStage,
@@ -195,6 +195,7 @@ test("extractBacklogStep falls back to a built-in summary when AGENTS.md has no 
 
 test("buildPrompt embeds the spec body, backlog step, gate commands, drop-box path, and the house style rules", () => {
   const prompt = buildPrompt({
+    specId: "900-x",
     specBody: "SPEC BODY MARKER",
     backlogStep: "BACKLOG STEP MARKER",
     decisions: { included: [], overflowCount: 0 },
@@ -215,6 +216,7 @@ test("buildPrompt embeds the spec body, backlog step, gate commands, drop-box pa
 
 test("buildPrompt lists included decisions and states the overflow count, never silently dropping either", () => {
   const prompt = buildPrompt({
+    specId: "900-x",
     specBody: "body",
     backlogStep: "step",
     decisions: {
@@ -256,6 +258,7 @@ test("gateCommandsFor: a target without tsconfig.json runs only the spec-spine f
 
 test("the build prompt lists the target's own gate program, not the constant (D-10)", () => {
   const prompt = buildPrompt({
+    specId: "900-x",
     specBody: "# spec body",
     backlogStep: "1. step",
     decisions: { included: [], overflowCount: 0 },
@@ -755,4 +758,37 @@ test("B-1 normalization: a clean tree on a stale feature branch checks out an up
 
   journal.close();
   decisionsChain.close();
+});
+
+// D-11: the drop-box contract in the prompt is typed. Untyped, every session
+// on butler-ai guessed `scope` as a bare string and all 25 of its decisions
+// were rejected, leaving the project's ledger empty after a full spec build.
+test("buildPrompt states the drop-box field types and gives a copyable example with an array scope (D-11)", () => {
+  const prompt = buildPrompt({
+    specId: "016-stage-build",
+    specBody: "body",
+    backlogStep: "step",
+    decisions: { included: [], overflowCount: 0 },
+    dropboxDir: "/tmp/dropbox",
+  });
+
+  // The field that was actually getting guessed wrong, named as an array.
+  expect(prompt).toContain("ARRAY of strings, never a bare string");
+  // The example is built from this spec's own id, so it is copyable as-is.
+  expect(prompt).toContain('"specId": "016-stage-build"');
+  expect(prompt).toContain('"scope": ["016-stage-build"');
+  // The consequence is stated, so a session knows silence is not success.
+  expect(prompt).toContain("neither the ledger nor any later session");
+
+  // The example must itself pass the validator it is teaching.
+  const example = {
+    id: "016-stage-build-d1",
+    specId: "016-stage-build",
+    scope: ["016-stage-build", "src/some/territory/"],
+    title: "one line naming the choice",
+    decision: "what was chosen, in full",
+    rationale: "why, and what it costs",
+  };
+  const result = validateDecisionRecord(example, new Set(["016-stage-build"]));
+  expect(result.ok).toBe(true);
 });
