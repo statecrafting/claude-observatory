@@ -1,0 +1,186 @@
+{
+  "mapping": {
+    "dependsOn": [
+      "014-session-driver",
+      "032-execution-profiles"
+    ],
+    "implementingPaths": [
+      {
+        "path": "docs/design/00-ecosystem-analysis.md",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/commands/orchestrator.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/commands/orchestrator.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/daemon.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/daemon.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/models.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/models.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/profile.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/profile.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/stages/verify.ts",
+        "source": "spec-edge"
+      }
+    ],
+    "resolvedUnits": [
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/models.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/models.test.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/models.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/models.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/commands/orchestrator.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/daemon.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.test.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/daemon.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/profile.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/profile.test.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/profile.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/profile.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/stages/verify.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/verify.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "docs/design/00-ecosystem-analysis.md"
+          }
+        ],
+        "ownership": false,
+        "sourceField": "references",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/00-ecosystem-analysis.md"
+        }
+      }
+    ],
+    "specId": "040-session-models",
+    "specStatus": "approved"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "0535488b4befaccce8cb681d67c819cdf3830c576f2f552e8496351258c84dba"
+}

@@ -127,6 +127,7 @@ import {
   renderProfile,
   type ExecutionProfile,
 } from "../orchestrator/profile";
+import { renderSessionModels, sessionModelsRefusal, type SessionModels } from "../orchestrator/models";
 import { API_VERSION, API_VERSION_HEADER, projectRoute } from "../orchestrator/api/types";
 import { ECONOMICS_ROUTE, type RunEconomics, type SpecEconomics } from "../orchestrator/economics";
 import type { ServedEconomicsView } from "../orchestrator/api/state";
@@ -173,6 +174,7 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   projects add <path>          register a project [--name <slug>] [--disarmed]
   projects arm|disarm <name>   let the scheduler drive it, or hold it back
   projects profile <name> <mode>  set the execution posture: bypass | guarded
+                                  and, with both model flags, the model pair
   projects ceiling <name>      spend limits: --per-run/--per-day <usd>, or "none"
   projects requalify <name>    re-run the preflight and journal the verdict
   projects remove <name>       drop it from the registry (a tombstone)
@@ -212,6 +214,8 @@ export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--
   --name <slug>                project name for projects add
   --disarmed                   register disarmed (projects add)
   --profile <mode>             posture for projects add: bypass | guarded
+  --model-strong <id>          build and ship model (both model flags or neither)
+  --model-fast <id>            shepherd and verify model
   --allow <tools>              comma-separated allowlist for a guarded posture
   --deny <tools>               comma-separated disallowlist for a guarded posture
   --per-run <usd>              cost ceiling for one run (projects ceiling)
@@ -326,6 +330,10 @@ interface ParsedArgs {
   readonly profile: string | null;
   readonly allow: string | null;
   readonly deny: string | null;
+  // 040 B-4's model pair. Both halves or neither; the refusal names which one
+  // is missing rather than defaulting it.
+  readonly modelStrong: string | null;
+  readonly modelFast: string | null;
   // 033 B-1's spend limits, in dollars as typed (see `ceilingFromFlags`).
   readonly perRun: string | null;
   readonly perDay: string | null;
@@ -359,6 +367,8 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let profile: string | null = null;
   let allow: string | null = null;
   let deny: string | null = null;
+  let modelStrong: string | null = null;
+  let modelFast: string | null = null;
   let perRun: string | null = null;
   let perDay: string | null = null;
   let out: string | null = null;
@@ -395,6 +405,12 @@ function parseArgs(argv: readonly string[]): ParseResult {
     },
     "--deny": (v) => {
       deny = v;
+    },
+    "--model-strong": (v) => {
+      modelStrong = v;
+    },
+    "--model-fast": (v) => {
+      modelFast = v;
     },
     "--per-run": (v) => {
       perRun = v;
@@ -448,7 +464,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
 
   return {
     ok: true,
-    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, perRun, perDay, out, bundle, exclude, corpus, proposal, rest },
+    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, modelStrong, modelFast, perRun, perDay, out, bundle, exclude, corpus, proposal, rest },
   };
 }
 
@@ -474,11 +490,19 @@ const EXTRA_FLAGS: Readonly<Record<string, readonly string[] | undefined>> = {
   daemon: [],
 };
 
-const PROJECTS_ADD_FLAGS: readonly string[] = ["--name", "--disarmed", "--profile", "--allow", "--deny"];
+const PROJECTS_ADD_FLAGS: readonly string[] = [
+  "--name",
+  "--disarmed",
+  "--profile",
+  "--allow",
+  "--deny",
+  "--model-strong",
+  "--model-fast",
+];
 // 032 B-2: the posture verb takes its mode as a positional, so only the two
 // list flags belong to it; `--profile` is registration's way of saying the
 // same thing and is refused here rather than silently outranked.
-const PROJECTS_PROFILE_FLAGS: readonly string[] = ["--allow", "--deny"];
+const PROJECTS_PROFILE_FLAGS: readonly string[] = ["--allow", "--deny", "--model-strong", "--model-fast"];
 // 033 B-1: the ceiling verb's two limits. Neither belongs to any other verb,
 // and the posture flags do not belong to this one.
 const PROJECTS_CEILING_FLAGS: readonly string[] = ["--per-run", "--per-day"];
@@ -519,6 +543,8 @@ function strayFlag(args: ParsedArgs, accepted: readonly string[]): string | null
     args.profile !== null ? "--profile" : null,
     args.allow !== null ? "--allow" : null,
     args.deny !== null ? "--deny" : null,
+    args.modelStrong !== null ? "--model-strong" : null,
+    args.modelFast !== null ? "--model-fast" : null,
     args.perRun !== null ? "--per-run" : null,
     args.perDay !== null ? "--per-day" : null,
     args.out !== null ? "--out" : null,
@@ -709,6 +735,7 @@ function renderProjectDetail(view: ProjectView): string[] {
   const lines = [...renderProjectRows([view])];
   const profile = view.profile;
   lines.push(`posture: ${renderProfile(profile)}`);
+  lines.push(`models:  ${renderSessionModels(profile.models)}`);
   if (profile.mode === "bypass") {
     lines.push(
       profile.legacy
@@ -1126,10 +1153,28 @@ function toolList(value: string | null): readonly string[] | undefined {
     .filter((entry) => entry.length > 0);
 }
 
-function profileFromFlags(mode: string | null, allow: string | null, deny: string | null): ProfileFromFlags {
+function profileFromFlags(
+  mode: string | null,
+  allow: string | null,
+  deny: string | null,
+  modelStrong: string | null,
+  modelFast: string | null
+): ProfileFromFlags {
+  // 040 B-4: half a pair is refused before anything else is assembled, so the
+  // operator reads which half rather than a downstream mode complaint.
+  const modelsRefusal = sessionModelsRefusal(modelStrong, modelFast);
+  if (modelsRefusal !== null) return { ok: false, reason: modelsRefusal };
+  const models: SessionModels | undefined =
+    modelStrong === null || modelFast === null ? undefined : { strong: modelStrong, fast: modelFast };
   if (mode === null) {
     if (allow !== null || deny !== null) {
       return { ok: false, reason: `--allow and --deny need a guarded posture; name one with --profile guarded` };
+    }
+    // A pair without a mode is still a posture change: it needs a mode to ride
+    // on, and silently inventing one would pick a permission posture nobody
+    // typed.
+    if (models !== undefined) {
+      return { ok: false, reason: `--model-strong and --model-fast need a posture; name one with --profile bypass` };
     }
     return { ok: true, profile: undefined };
   }
@@ -1142,6 +1187,7 @@ function profileFromFlags(mode: string | null, allow: string | null, deny: strin
     mode,
     ...(allowed === undefined ? {} : { allowedTools: allowed }),
     ...(disallowed === undefined ? {} : { disallowedTools: disallowed }),
+    ...(models === undefined ? {} : { models }),
   };
   const refusal = profileRefusal(profile);
   return refusal === null ? { ok: true, profile } : { ok: false, reason: refusal };
@@ -1272,7 +1318,7 @@ async function cmdProjects(
       return usage(deps, "projects add needs a repository path");
     }
     if (rest.length > 2) return usage(deps, `unexpected argument "${rest[2]}" after projects add`);
-    const posture = profileFromFlags(args.profile, args.allow, args.deny);
+    const posture = profileFromFlags(args.profile, args.allow, args.deny, args.modelStrong, args.modelFast);
     if (!posture.ok) return usage(deps, posture.reason);
     return cmdProjectsAdd(deps, client, args.json, path, args.name, args.disarmed, posture.profile);
   }
@@ -1286,7 +1332,7 @@ async function cmdProjects(
     const mode = rest[2];
     if (mode === undefined) return usage(deps, "projects profile needs a mode (bypass or guarded)");
     if (rest.length > 3) return usage(deps, `unexpected argument "${rest[3]}" after projects profile`);
-    const posture = profileFromFlags(mode, args.allow, args.deny);
+    const posture = profileFromFlags(mode, args.allow, args.deny, args.modelStrong, args.modelFast);
     if (!posture.ok) return usage(deps, posture.reason);
     // profileFromFlags only answers undefined for a null mode, which the
     // check above has already refused.

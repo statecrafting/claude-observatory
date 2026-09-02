@@ -3,6 +3,8 @@ import * as fs from "fs";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { DEFAULT_SESSION_MODELS, type SessionModels } from "./models";
+import type { ProfileSource } from "./profile";
 import { openJournal, verifyChain, appendIntent, type JsonValue } from "./journal";
 import { createRun, createSpecExec, createStageExec, transition } from "./state";
 import type { DagReader } from "./dag";
@@ -247,6 +249,9 @@ interface MakeDepsParams {
   // 033 B-2: this project's spend limits, read at every spawn boundary.
   // Absent is no ceiling, which is how every test above is driven.
   readonly ceiling?: CeilingSource;
+  // 040 B-1: the project's profile, which callStage reads for the model pair.
+  // Absent resolves to the default pair, which is how every test above spawns.
+  readonly profile?: ProfileSource;
 }
 
 // Real clock and real (small-chunk) sleep by default: most tests exercise
@@ -283,6 +288,7 @@ function makeDeps(p: MakeDepsParams): DaemonDeps {
     readHeadSha: p.readHeadSha,
     killLiveSession: p.killLiveSession,
     ceiling: p.ceiling,
+    profile: p.profile,
   };
 }
 
@@ -1894,3 +1900,66 @@ test("FR-003: a per-day ceiling parks to next UTC midnight, and a restart recove
     journal.close();
   }
 }, 15_000);
+
+// --- spec 040: the model a stage spawns under -------------------------------
+
+// AC-1's daemon half. The verify stage spawns no session of its own (its only
+// model session is the browser verifier's, resolved at that seam, 040 D-6), so
+// the three stages that do take a model are the three asserted here.
+async function recordStageModels(profile?: ProfileSource): Promise<Record<string, string | undefined>> {
+  const dataDir = freshDir("models-data");
+  const repoDir = freshDir("models-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+  const seen: Record<string, string | undefined> = {};
+
+  const stageFns: DaemonStageFns = {
+    build: async (options) => {
+      seen.build = options.model;
+      return buildResult(options.specId, "passed");
+    },
+    ship: async (options) => {
+      seen.ship = options.model;
+      return shipResult(options.specId, "passed");
+    },
+    shepherd: async (options) => {
+      seen.shepherd = options.model;
+      return shepherdResult(options.specId, "passed", `${options.specId}-merge`);
+    },
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const daemon = new Daemon(makeDeps({ dataDir, repoDir, dagReader, stageFns, profile }));
+  await daemon.start();
+  await daemon.join();
+  expect(daemon.runStatus).toBe("completed");
+  await daemon.shutdown();
+  return seen;
+}
+
+test("040 AC-1: every stage spawn carries an explicit model, tiered by stage", async () => {
+  const seen = await recordStageModels();
+  // Not merely non-null: the exact tier each stage is assigned. A regression
+  // that passed the fast model to build would still be "explicit".
+  expect(seen.build).toBe(DEFAULT_SESSION_MODELS.strong);
+  expect(seen.ship).toBe(DEFAULT_SESSION_MODELS.strong);
+  expect(seen.shepherd).toBe(DEFAULT_SESSION_MODELS.fast);
+  // B-1 admits no spawn without one, which is the whole difference from the
+  // pre-040 behavior where this field was undefined at every stage.
+  expect(seen.build).toBeDefined();
+  expect(seen.ship).toBeDefined();
+  expect(seen.shepherd).toBeDefined();
+});
+
+test("040 B-4: a project's pair overrides the default at the spawn, read per call", async () => {
+  let pair: SessionModels | undefined = { strong: "over-strong", fast: "over-fast" };
+  // Late-bound exactly as the posture is (032 B-4): the daemon reads the
+  // profile at each stage, so a pair set mid-run reaches the next stage.
+  const seen = await recordStageModels(() => ({ mode: "bypass", ...(pair === undefined ? {} : { models: pair }) }));
+  expect(seen.build).toBe("over-strong");
+  expect(seen.ship).toBe("over-strong");
+  expect(seen.shepherd).toBe("over-fast");
+
+  pair = undefined;
+  const defaults = await recordStageModels(() => ({ mode: "bypass" }));
+  expect(defaults.build).toBe(DEFAULT_SESSION_MODELS.strong);
+});

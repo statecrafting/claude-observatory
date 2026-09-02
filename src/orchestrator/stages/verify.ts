@@ -35,6 +35,7 @@ import { tmpdir } from "os";
 import { randomUUID, createHash } from "crypto";
 import type { JournalHandle, JsonValue } from "../journal";
 import { runSession as driveClaudeSession } from "../session";
+import { modelForStage } from "../models";
 import { resolveProfileSource, type ProfileSource } from "../profile";
 
 // --- Verification-section parser (B-1, FR-001) ------------------------------
@@ -389,6 +390,9 @@ export const BROWSER_MCP_PACKAGE = "@playwright/mcp@0.0.78";
 export interface CreateBrowserMcpVerifierParams {
   readonly repo: string;
   readonly claudeBin?: string;
+  // 040 B-1: an explicit override for a caller that has one (tests do). Absent
+  // resolves the verify tier off the same profile the posture comes from, at
+  // spawn time, so a pair set mid-run reaches the next assertion.
   readonly model?: string;
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
@@ -460,14 +464,15 @@ export function createBrowserMcpVerifier(params: CreateBrowserMcpVerifierParams)
         );
 
         let resultText: string | null = null;
+        const profile = resolveProfileSource(params.profile);
         const session = await driveClaudeSession({
           repo: params.repo,
           claudeBin,
-          model: params.model,
+          model: params.model ?? modelForStage("verify", profile.models),
           maxTurns: params.maxTurns ?? DEFAULT_BROWSER_MAX_TURNS,
           timeoutMs: params.timeoutMs ?? DEFAULT_BROWSER_TIMEOUT_MS,
           mcpConfigPath,
-          profile: resolveProfileSource(params.profile),
+          profile,
           prompt: buildBrowserVerifyPrompt({ url, assertion }),
           sink: (event) => {
             const text = extractResultText(event);

@@ -14,6 +14,7 @@ import * as fs from "fs";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { DEFAULT_SESSION_MODELS } from "../orchestrator/models";
 import { openJournal } from "../orchestrator/journal";
 import { foldOrchestratorState, transition } from "../orchestrator/state";
 import { openDecisionsChain } from "../orchestrator/decisions";
@@ -1836,4 +1837,63 @@ test("adopt synthesize drives the fixture sessions from a journaled proposal has
     fs.rmSync(dataDir, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });
   }
+});
+
+// --- spec 040: the model pair on the posture verb ---------------------------
+
+test("040 AC-3/AC-4: the profile verb records a model pair, and every detail names it", async () => {
+  await withFixtureDaemon("projects-models", async ({ registry, url, dataDir }) => {
+    // AC-3's negative half: a project that never set a pair shows the default
+    // pair marked as such, rather than a blank that would read as "unknown".
+    const newcomer = registry.world("newcomer");
+    const added = await run(["projects", "add", newcomer.repoDir, "--name", "gamma", "--url", url], { dataDir });
+    expect(added.code).toBe(EXIT_OK);
+    expect(added.out).toContain(`models:  ${DEFAULT_SESSION_MODELS.strong} / ${DEFAULT_SESSION_MODELS.fast} (default)`);
+
+    // AC-4: the pair travels on the posture verb, whole.
+    const set = await run(
+      [
+        "projects",
+        "profile",
+        "alpha",
+        "bypass",
+        "--model-strong",
+        "pinned-strong",
+        "--model-fast",
+        "pinned-fast",
+        "--url",
+        url,
+      ],
+      { dataDir }
+    );
+    expect(set.code).toBe(EXIT_OK);
+    expect(set.out).toContain("models:  pinned-strong / pinned-fast");
+    expect(registry.projects().get("alpha")!.profile.models).toEqual({ strong: "pinned-strong", fast: "pinned-fast" });
+
+    // And it folds back on the next read, not just in the write's own echo:
+    // an unrelated control verb reprints the detail off the chain.
+    const armed = await run(["projects", "arm", "alpha", "--url", url], { dataDir });
+    expect(armed.out).toContain("models:  pinned-strong / pinned-fast");
+  });
+});
+
+test("040 FR-005: half a pair is a usage error naming the missing half, before the chain moves", async () => {
+  await withFixtureDaemon("projects-models-half", async ({ registry, url, dataDir }) => {
+    const half = await run(["projects", "profile", "alpha", "bypass", "--model-strong", "only", "--url", url], {
+      dataDir,
+    });
+    expect(half.code).toBe(EXIT_USAGE);
+    expect(half.err).toContain("--model-fast is missing");
+    // Refused before anything was appended: the posture is untouched.
+    expect(registry.projects().get("alpha")!.profile.models).toBeUndefined();
+
+    // A pair with no posture to ride on is refused too, rather than inventing
+    // a permission mode nobody typed.
+    const modeless = await run(
+      ["projects", "add", registry.world("newcomer").repoDir, "--name", "gamma", "--model-strong", "a", "--model-fast", "b", "--url", url],
+      { dataDir }
+    );
+    expect(modeless.code).toBe(EXIT_USAGE);
+    expect(modeless.err).toContain("need a posture");
+  });
 });
