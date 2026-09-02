@@ -11,6 +11,14 @@
       {
         "path": "src/index.ts",
         "source": "spec-edge"
+      },
+      {
+        "path": "start.sh",
+        "source": "spec-edge"
+      },
+      {
+        "path": "stop.sh",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
@@ -25,6 +33,32 @@
         "unit": {
           "kind": "file",
           "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "start.sh"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "start.sh"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "stop.sh"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "stop.sh"
         }
       },
       {
@@ -45,5 +79,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "670e3ed4b381102e461b80e9d1ded4b4fe8a989cc8dc35e000476f74109d57e7"
+  "shardHash": "a124373fee3dd86b6f55ae01e9bd724a13a3c22b06c3f92e949a7250cacc8c57"
 }

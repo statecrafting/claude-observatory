@@ -19,6 +19,8 @@ summary: >
   only the CLI does.
 establishes:
   - "src/commands/orchestrator.ts"
+  - "start.sh"
+  - "stop.sh"
 extends:
   - { spec: "005-cli-surface", unit: "src/index.ts", nature: additive }
 ---
@@ -34,7 +36,8 @@ automation and tests.
 ## 2. Territory
 
 `src/commands/orchestrator.ts`; one additive dispatch case in
-`src/index.ts` (owned by spec 005, extended here).
+`src/index.ts` (owned by spec 005, extended here); and the two operator
+scripts at the repository root, `start.sh` and `stop.sh` (B-5, D-11).
 
 ## 3. Behavior
 
@@ -58,6 +61,19 @@ automation and tests.
 - **B-4 (offline verify).** `journal verify` walks both chains (011, 020)
   directly and works with no daemon running; it is the operator's
   independent check, so it must not depend on the API.
+
+- **B-5 (operator scripts).** `./start.sh` boots the checkout in one
+  command: preflight (bun, spec-spine, git on PATH), `bun install
+  --frozen-lockfile`, `bun run web:build` (the dashboard is served from
+  the gitignored `web/dist`, spec 024), `orchestrator daemon start`, the
+  observatory watcher's `daemon start` (spec 007 B-1), then both status
+  views and the dashboard address. `./stop.sh` reverses it: `orchestrator
+  daemon stop` (one SIGTERM and a wait for the lock, 021 B-6) and the
+  watcher's `daemon stop` (007 B-2), polling the watcher's old pid so
+  "stopped" is observed rather than assumed. `start.sh --restart` runs
+  stop first; `--skip-build` and `--no-watcher` skip those steps. Neither
+  script escalates to SIGKILL or adds a verb: each step is one of the CLI
+  verbs above, and the exit code is the first failing step's.
 
 ## 4. Functional requirements
 
@@ -204,3 +220,18 @@ with a process-local git HEAD read rooted at the code checkout this
 module was loaded from (two levels above the commands directory), never
 at `--repo`: the two coincide for the self-hosted daemon, but only the
 former names the running modules.
+
+D-11 (operator, 2026-09-01). The scripts exist because the operational
+rule spec 026 D-7 encodes (after a self-repo merge the daemon announces
+code-stale and idles until an operator restarts it) had no one-command
+answer: a restart meant remembering the dashboard build, two daemons, and
+their order. They compose the existing verbs rather than adding any (B-1's
+point: everything is already reachable from a terminal), so they can never
+do what the CLI cannot, and `stop.sh` inherits `daemon stop`'s refusal to
+escalate to SIGKILL: a daemon that ignores SIGTERM is reported with its pid
+and lock path, and the operator decides. The watcher half is opt-out rather
+than opt-in because the README names both layers as the product;
+`--no-watcher` is for a machine that only drives builds. They are owned
+here rather than by 007 or 021 because they are a composition over this
+file's lifecycle verbs, the same layer B-1 places `daemon start|stop|status`
+in; 007 and 021 keep owning what the signals do once delivered.

@@ -11,6 +11,14 @@
       {
         "kind": "file",
         "path": "src/commands/orchestrator.ts"
+      },
+      {
+        "kind": "file",
+        "path": "start.sh"
+      },
+      {
+        "kind": "file",
+        "path": "stop.sh"
       }
     ],
     "extends": [
@@ -43,6 +51,6 @@
     "summary": "The observatory binary gains an `orchestrator` command group that is a pure client of the HTTP API: status, dag, next, start/pause/resume, spec controls (skip, retry-stage, reverify, force-gate, approve), decisions search, history, journal verify (offline, direct), and daemon start/stop/status with the identity-checked lock. Anything the UI can do, the CLI can do; several things (journal verify, daemon lifecycle) only the CLI does.\n",
     "title": "Orchestrator CLI: the primary control plane"
   },
-  "shardHash": "8a5bfbfabfe2b70482ac94beae2ccefaf43f09704e506987f6cd7c1fa17a1a33",
+  "shardHash": "4db512fbb8f17f2a3f93828dc7b8e5f3dfe1741353a493c13369cdb7690d8b54",
   "specVersion": "1.1.0"
 }
