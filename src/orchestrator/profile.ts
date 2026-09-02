@@ -25,6 +25,8 @@
 //   B-3: sessionArgsForProfile() is the only source of permission-related
 //   argv in this codebase. Nothing composes a permission flag by hand.
 import type { JsonValue } from "./journal";
+import type { SessionModels } from "./models";
+import { parseSessionModels, sessionModelsPayload } from "./models";
 
 // --- the model (B-1) --------------------------------------------------------
 
@@ -44,6 +46,12 @@ export interface ExecutionProfile {
   // verbatim into argv and into the journal.
   readonly allowedTools?: readonly string[];
   readonly disallowedTools?: readonly string[];
+  // 040 B-4: the project's model pair, or absent for the default pair. It
+  // rides here rather than on a record of its own because it answers the same
+  // question the mode does, "under what posture does this project's session
+  // run", and folds, sets and renders in the same places (040 D-2). It is
+  // orthogonal to the mode: either mode may carry a pair.
+  readonly models?: SessionModels;
 }
 
 // A profile as read back off the projects chain. `legacy` is the honest
@@ -159,6 +167,7 @@ export function profilePayload(profile: ExecutionProfile): Record<string, JsonVa
     mode: profile.mode,
     allowedTools: profile.allowedTools === undefined ? null : [...profile.allowedTools],
     disallowedTools: profile.disallowedTools === undefined ? null : [...profile.disallowedTools],
+    models: sessionModelsPayload(profile.models),
   };
 }
 
@@ -184,10 +193,14 @@ export function parseProfile(value: JsonValue | undefined, label: string): Execu
   }
   const allowedTools = stringList(o.allowedTools, "allowedTools", label);
   const disallowedTools = stringList(o.disallowedTools, "disallowedTools", label);
+  // A pre-040 record has no `models` key at all, which parses to undefined and
+  // folds to the default pair. A half-written one throws (040 FR-004).
+  const models = parseSessionModels(o.models, label);
   return {
     mode,
     ...(allowedTools === undefined ? {} : { allowedTools }),
     ...(disallowedTools === undefined ? {} : { disallowedTools }),
+    ...(models === undefined ? {} : { models }),
   };
 }
 
@@ -199,6 +212,9 @@ export function parseProfile(value: JsonValue | undefined, label: string): Execu
 // argv indistinguishable from "no allowlist at all". Returns null when the
 // profile is recordable, the operator-facing reason when it is not.
 export function profileRefusal(profile: ExecutionProfile): string | null {
+  // Note the model pair is not checked here: it is orthogonal to the mode,
+  // and its own half-a-pair refusal is 040's sessionModelsRefusal, applied by
+  // the write surface before it ever assembles a profile.
   if (profile.mode === "bypass") {
     if (profile.allowedTools !== undefined || profile.disallowedTools !== undefined) {
       return "a bypass profile carries no tool lists (bypass skips permissions entirely); use guarded to constrain tools";

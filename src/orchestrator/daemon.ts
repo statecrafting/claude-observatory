@@ -70,6 +70,8 @@ import {
 } from "./dag";
 import { killLiveSession, runSession } from "./session";
 import type { ProfileSource } from "./profile";
+import { resolveProfileSource } from "./profile";
+import { modelForStage } from "./models";
 import type {
   BuildResult,
   ReadinessCheck,
@@ -245,6 +247,13 @@ export interface DaemonDeps {
   readonly sleep: (ms: number) => Promise<void>;
   readonly rng: () => number;
   readonly stageFns: DaemonStageFns;
+  // 040 B-1: the same late-bound profile the runner was built with, kept here
+  // because callStage is the only place that knows which stage is about to
+  // spawn, and the tier-to-id resolution needs both. Absent resolves to 032
+  // D-1's default profile, which carries no pair, which is 040 B-3's default
+  // pair: a fixture dep that never set a profile keeps working and still
+  // spawns under an explicit model.
+  readonly profile?: ProfileSource;
   // Defaults to process.pid; injectable so a test can exercise identity
   // logic without needing a second real OS process.
   readonly pid?: number;
@@ -323,6 +332,7 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
   return {
     dataDir,
     repoDir,
+    profile,
     supervised: params.supervised,
     ceiling: params.ceiling,
     dagReader: createProcessDagReader(),
@@ -1622,10 +1632,16 @@ export class Daemon {
     pinOf: PinLookup,
     isReVerification: boolean
   ): Promise<TaggedStageResult> {
+    // 040 B-1: the one place a `--model` value is produced for a stage spawn.
+    // Read per call rather than per daemon, for the reason 032 B-4 reads the
+    // profile per spawn: a pair an operator set mid-run reaches the next
+    // stage, not the next daemon.
+    const model = modelForStage(stage, resolveProfileSource(this.deps.profile).models);
     switch (stage) {
       case "build": {
         const options: RunBuildStageOptions = {
           runner: this.deps.runner,
+          model,
           specId: specExec.specId,
           journal: this.workJournal,
           decisionsChain: this.decisionsChain,
@@ -1640,6 +1656,7 @@ export class Daemon {
       case "ship": {
         const options: RunShipStageOptions = {
           runner: this.deps.runner,
+          model,
           gh: this.deps.gh,
           specId: specExec.specId,
           journal: this.workJournal,
@@ -1650,6 +1667,7 @@ export class Daemon {
       case "shepherd": {
         const options: RunShepherdStageOptions = {
           runner: this.deps.runner,
+          model,
           gh: this.deps.gh,
           specId: specExec.specId,
           journal: this.workJournal,
