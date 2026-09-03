@@ -7,11 +7,23 @@
     ],
     "implementingPaths": [
       {
+        "path": "src/orchestrator/daemon.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/daemon.ts",
+        "source": "spec-edge"
+      },
+      {
         "path": "src/orchestrator/stages/build.test.ts",
         "source": "spec-edge"
       },
       {
         "path": "src/orchestrator/stages/build.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/standby.test.ts",
         "source": "spec-edge"
       }
     ],
@@ -41,11 +53,50 @@
           "kind": "file",
           "path": "src/orchestrator/stages/build.ts"
         }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/daemon.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.test.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/daemon.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/standby.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/standby.test.ts"
+        }
       }
     ],
     "specId": "016-stage-build",
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "465ff4c7fda034214dc497fcd3b751210d64dd2c064ff9aee3525c9de44adb97"
+  "shardHash": "394fda8276d5fccfbe91849862064a0ae2a6632b152e985a88b129fabc5da9ce"
 }

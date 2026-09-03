@@ -160,6 +160,7 @@ function buildResult(specId: string, outcome: BuildResult["outcome"], opts: { qu
       gates: [],
       frontmatterComplete: outcome === "passed",
       decisions: null,
+      stalled: null,
     },
   };
 }
@@ -1962,4 +1963,74 @@ test("040 B-4: a project's pair overrides the default at the spawn, read per cal
   pair = undefined;
   const defaults = await recordStageModels(() => ({ mode: "bypass" }));
   expect(defaults.build).toBe(DEFAULT_SESSION_MODELS.strong);
+});
+
+// 016 D-13: the retry budget is for a flaky or partial failure, not a
+// deterministic one. Found live on butler-ai, where attempt 2 spent $3.16
+// and two sessions re-deriving one coupling violation verbatim.
+test("a build that reports itself stalled pauses without spending the retry budget (016 D-13)", async () => {
+  const dataDir = freshDir("stalled-data");
+  const repoDir = freshDir("stalled-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+
+  let buildAttempts = 0;
+  const stageFns: DaemonStageFns = {
+    build: async (options) => {
+      buildAttempts++;
+      const base = buildResult(options.specId, "failed");
+      return { ...base, evidence: { ...base.evidence, stalled: true } };
+    },
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const deps = makeDeps({ dataDir, repoDir, dagReader, stageFns });
+  const daemon = new Daemon(deps);
+  await daemon.start();
+
+  await Bun.sleep(80);
+  expect(daemon.runStatus).toBe("paused");
+  // The default budget would have allowed a second attempt; the stall signal
+  // stops it at one.
+  expect(buildAttempts).toBe(1);
+  await daemon.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const reason = (journal.fold().byKind["run.pause-reason"] ?? []).at(-1)?.payload as Record<string, JsonValue>;
+    expect(String(reason?.reason)).toContain("stalled");
+    expect(String(reason?.reason)).toContain("gate answered identically");
+  } finally {
+    journal.close();
+  }
+});
+
+// The signal must not fire on an ordinary failure, or every flaky stage
+// would lose its retry.
+test("a build that fails without the stall signal still spends its retry budget (016 D-13)", async () => {
+  const dataDir = freshDir("unstalled-data");
+  const repoDir = freshDir("unstalled-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+
+  let buildAttempts = 0;
+  const stageFns: DaemonStageFns = {
+    build: async (options) => {
+      buildAttempts++;
+      if (buildAttempts <= 1) return buildResult(options.specId, "failed");
+      return buildResult(options.specId, "passed");
+    },
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const deps = makeDeps({ dataDir, repoDir, dagReader, stageFns });
+  const daemon = new Daemon(deps);
+  await daemon.start();
+  await daemon.join();
+
+  expect(daemon.runStatus).toBe("completed");
+  expect(buildAttempts).toBe(2);
+  await daemon.shutdown();
 });

@@ -255,6 +255,23 @@ function runGateSuite(runner: Runner): GateEvidence[] {
   return gateCommandsFor(runner).map((cmd) => ({ cmd, ...runner.runGate(cmd) }));
 }
 
+// D-13: whether two gate sweeps are the same answer, tails included. The
+// tails are what makes this a statement about the diagnostic rather than
+// just the shape of the failure: two different coupling violations both
+// exit 1 on the same command, and only one of them is the same wall.
+function sameGateAnswer(a: readonly GateEvidence[], b: readonly GateEvidence[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((g, i) => {
+    const h = b[i]!;
+    return (
+      g.cmd.join(" ") === h.cmd.join(" ") &&
+      g.exitCode === h.exitCode &&
+      g.stdoutTail === h.stdoutTail &&
+      g.stderrTail === h.stderrTail
+    );
+  });
+}
+
 function preflightRefusal(
   runner: Runner,
   specId: string,
@@ -448,6 +465,25 @@ ${decisionLines}${overflowLine}
 
 ${gateList}
 
+## When the coupling gate fails on a path this spec does not own
+
+\`couple\` requires every changed path to have an authoring edit to a spec
+that owns it. If your implementation must touch a unit another spec owns,
+declare that in THIS spec's own frontmatter and recompile:
+
+  extends:
+    - { spec: "<the owning spec id>", unit: "<the path>", nature: additive }
+
+That is an authoring edit to the spec you are building, which is what the
+gate asks for, and it is permanent and self-documenting. Do NOT amend the
+other spec to match code you just wrote: that is the coherence guard, and
+it is forbidden. A \`Spec-Drift-Waiver:\` line is not available to you
+either; it is read only from a PR body, which does not exist yet.
+
+If the owning spec actually contradicts the change, \`extends\` is the wrong
+answer: stop, leave the branch inspectable, and report the contradiction
+for a human.
+
 ## Recording new decisions
 
 Where this spec is silent and you must choose, write one JSON file per
@@ -555,6 +591,10 @@ export interface BuildEvidence {
   readonly gates: readonly GateEvidence[];
   readonly frontmatterComplete: boolean | null;
   readonly decisions: SealDropboxResult | null;
+  // D-13: true when the remediation session left the branch head untouched
+  // and the gate answered identically, so another attempt would re-ask a
+  // question already answered twice. Null when no remediation session ran.
+  readonly stalled: boolean | null;
 }
 
 export interface BuildResult {
@@ -628,6 +668,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
         gates: [],
         frontmatterComplete: null,
         decisions: null,
+        stalled: null,
       },
     };
   }
@@ -684,6 +725,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
         gates: bracketEvidence,
         frontmatterComplete: false,
         decisions: null,
+        stalled: null,
       },
     };
   }
@@ -739,7 +781,14 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     journal.append("stage.build.gate", gatePayload);
   }
 
+  // D-13: what the remediation session was given, and what it changed, so a
+  // stage that cannot move can say so instead of being retried blind.
+  let stalled: boolean | null = null;
+
   if (!blocked && !completion.passing) {
+    const beforeSha = runner.headSha();
+    const beforeGates = completion.gates;
+
     const secondPrompt = remediationPrompt(promptBase, completion);
     const second = await runner.runSession({
       prompt: secondPrompt,
@@ -753,6 +802,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     blocked = second.classification.kind === "hook-blocked";
     if (!blocked) {
       completion = evaluateCompletion(runner, specPath);
+      stalled = !completion.passing && runner.headSha() === beforeSha && sameGateAnswer(beforeGates, completion.gates);
       const gatePayload: Record<string, JsonValue> = {
         specId,
         round: 2,
@@ -779,6 +829,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     gates: completion.gates,
     frontmatterComplete: completion.frontmatterComplete,
     decisions: sealResult,
+    stalled,
   };
 
   const resultPayload: Record<string, JsonValue> = {
@@ -790,6 +841,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     sessionIds: sessions.map((s) => s.sessionId),
     decisionsSealed: sealResult.sealed.map((d) => d.id),
     decisionsInvalid: sealResult.invalid.map((i) => i.file),
+    stalled,
   };
   journal.append("stage.build.result", resultPayload);
 

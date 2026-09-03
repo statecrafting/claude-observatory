@@ -513,6 +513,13 @@ function isPassOutcome(tagged: TaggedStageResult): boolean {
   return tagged.result.outcome === "passed";
 }
 
+// 016 D-13: only build carries the stall signal, because only build runs a
+// remediation session inside the stage and can therefore observe the same
+// question being asked twice.
+function isStalledOutcome(tagged: TaggedStageResult): boolean {
+  return tagged.stage === "build" && tagged.result.evidence.stalled === true;
+}
+
 function isBlockedOutcome(tagged: TaggedStageResult): boolean {
   if (tagged.stage === "build") return tagged.result.outcome === "blocked" || tagged.result.outcome === "refused";
   if (tagged.stage === "ship") return tagged.result.outcome === "blocked";
@@ -1586,6 +1593,19 @@ export class Daemon {
 
       // failed
       transition(this.workJournal, stageExec, "failed");
+
+      // 016 D-13: a stage that reports itself stalled has already asked the
+      // same question twice and got the same answer, against a branch its
+      // remediation session did not touch. Spending the retry budget on a
+      // third and fourth session cannot change the answer; it only delays
+      // the human this needs. Found live on butler-ai, where attempt 2 cost
+      // $3.16 to re-derive an unresolvable coupling violation verbatim.
+      if (isStalledOutcome(tagged)) {
+        transition(this.workJournal, specExec, "failed");
+        this.pauseRun(`${specExec.specId}: ${stage} stalled (remediation changed nothing, gate answered identically)`);
+        return { kind: "paused" };
+      }
+
       budgetUsed++;
       if (budgetUsed > maxBudget) {
         transition(this.workJournal, specExec, "failed");

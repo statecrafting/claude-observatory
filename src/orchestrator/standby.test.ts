@@ -160,6 +160,7 @@ function buildResult(specId: string, outcome: BuildResult["outcome"]): BuildResu
       gates: [],
       frontmatterComplete: outcome === "passed",
       decisions: null,
+      stalled: null,
     },
   };
 }
