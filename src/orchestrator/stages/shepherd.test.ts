@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { openJournal } from "../journal";
 import { createProcessRunner, type Runner, type RunnerSessionOptions } from "./build";
+import { GATE_COMMANDS, gateSuiteFor, type GateContract } from "../gate-contract";
 import type { SessionResult } from "../session";
 import type { GitHubClient, GitHubPr, GitHubCommit, CheckRun, MergeMethod, MergeOutcome } from "./ship";
 import {
@@ -208,6 +209,41 @@ test("buildRemediationPrompt embeds the spec body, the failure evidence, the gat
   expect(prompt).toContain("No em dashes");
   expect(prompt).toContain("No AI attribution");
   expect(prompt.indexOf(String.fromCharCode(0x2014))).toBe(-1);
+});
+
+test("041 B-4: the remediation prompt lists the project's gate suite, not this repo's", () => {
+  const rust: GateContract = {
+    commands: [
+      ["cargo", "fmt", "--all", "--check"],
+      ["cargo", "test", "--workspace", "--locked"],
+    ],
+    source: "probe",
+    rule: "rust",
+  };
+  const prompt = buildRemediationPrompt({
+    specBody: "# 900-fixture: Fixture",
+    branch: "900-fixture-shepherd",
+    attemptNumber: 1,
+    maxRemediations: 2,
+    failing: [{ name: "ci", conclusion: "failure", logTail: "error[E0308]: mismatched types" }],
+    gateCommands: gateSuiteFor(rust),
+  });
+  for (const cmd of gateSuiteFor(rust)) expect(prompt).toContain(cmd.join(" "));
+  // A Rust target's remediation session is never told to run this repo's bun.
+  expect(prompt).not.toContain("bun run typecheck");
+  expect(prompt).not.toContain("bun test");
+});
+
+test("041 B-3: a remediation prompt with no contract promises only the governance floor", () => {
+  const prompt = buildRemediationPrompt({
+    specBody: "# 900-fixture: Fixture",
+    branch: "900-fixture-shepherd",
+    attemptNumber: 1,
+    maxRemediations: 2,
+    failing: [{ name: "ci", conclusion: "failure", logTail: "boom" }],
+  });
+  for (const cmd of GATE_COMMANDS) expect(prompt).toContain(cmd.join(" "));
+  expect(prompt).not.toContain("bun test");
 });
 
 // --- runWatchLoop: backoff + journal-only-on-change (B-1) --------------------

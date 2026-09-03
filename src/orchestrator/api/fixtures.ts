@@ -28,6 +28,7 @@ import {
   requalifyProject,
   setProjectArmed,
   setProjectCeiling,
+  setProjectGate,
   setProjectProfile,
   type Project,
   type ProjectSource,
@@ -35,6 +36,7 @@ import {
   type QualificationVerdict,
 } from "../projects";
 import type { ExecutionProfile } from "../profile";
+import type { GateContract } from "../gate-contract";
 import type { CostCeiling } from "../budget";
 import { journalViewFromHandle, type ApiDeps, type ControlTarget, type DaemonStatus, type ProjectApi, type ProjectsTarget } from "./server";
 
@@ -306,6 +308,11 @@ export interface FixtureProjectOptions {
   // its own record after registration. Absent leaves the project with no
   // ceiling, which is how every project was driven before 033.
   readonly ceiling?: CostCeiling | null;
+  // 041 B-7: the gate an operator set on this project, appended after
+  // registration exactly as an override would be. Absent leaves the project
+  // with whatever B-2's probe derived from its fixture tree, which for a
+  // world with no manifest is the explicit empty contract.
+  readonly gate?: GateContract;
   // A project with no live run has no controls attached, which is what the
   // daemon reports for one sitting in the registry untouched.
   readonly controls?: boolean;
@@ -372,6 +379,9 @@ export function freshRegistry(prefix: string): FixtureRegistry {
     setCeiling(name: string, ceiling: CostCeiling | null, source: ProjectSource): void {
       setProjectCeiling({ chain, name, ceiling, source });
     },
+    setGate(name: string, gate: GateContract): void {
+      setProjectGate({ chain, name, gate });
+    },
     requalify(name: string, source: ProjectSource): void {
       requalifyProject({ chain, name, qualification: fixtureQualification(true), source });
     },
@@ -422,6 +432,9 @@ export function freshRegistry(prefix: string): FixtureRegistry {
       // given it, exactly as an operator would.
       if (options.ceiling !== undefined) {
         setProjectCeiling({ chain, name, ceiling: options.ceiling, source: "cli" });
+      }
+      if (options.gate !== undefined) {
+        setProjectGate({ chain, name, gate: options.gate });
       }
       return world;
     },

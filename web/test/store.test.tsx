@@ -45,6 +45,7 @@ function projectRow(name: string): ProjectView {
     armed: true,
     qualification: { qualified: true, checks: [], warnings: [], checkedAt: "2026-08-01T00:00:00.000Z" },
     profile: { mode: "bypass", legacy: false },
+    gate: { commands: [], source: "probe", rule: "none", legacy: false },
     budget: FIXTURE_NO_CEILING,
     run: null,
     spec: null,
@@ -146,6 +147,7 @@ function gatedClient(): { client: ApiClient; release(name: string): void } {
     removeProject: registryAnswer,
     setProjectCeiling: registryAnswer,
     setProjectProfile: registryAnswer,
+    setProjectGate: registryAnswer,
     project: scoped,
   };
 

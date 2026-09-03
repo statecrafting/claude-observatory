@@ -22,6 +22,8 @@ import type { Project, ProjectSource, ProjectsSnapshot } from "../projects";
 import { isValidProjectName } from "../projects";
 import type { ExecutionProfile } from "../profile";
 import { parseProfile, profileRefusal } from "../profile";
+import type { GateContract } from "../gate-contract";
+import { gateRefusal } from "../gate-contract";
 import type { CostCeiling } from "../budget";
 import { ceilingRefusal, parseCeiling } from "../budget";
 import {
@@ -162,6 +164,10 @@ export interface ProjectsTarget {
   // 033 B-1: the spend limits this project is driven under. null clears them,
   // which is a journaled decision rather than an absence.
   setCeiling(name: string, ceiling: CostCeiling | null, source: ProjectSource): void;
+  // 041 B-7: the command list this project's stages are judged by after the
+  // universal governance floor. An empty list is the explicit governance-only
+  // contract, not an absent request.
+  setGate(name: string, gate: GateContract, source: ProjectSource): void;
   requalify(name: string, source: ProjectSource): void;
   remove(name: string, source: ProjectSource): void;
 }
@@ -585,6 +591,28 @@ function ceilingFromBody(body: JsonBody | null, field: string): CostCeiling | nu
   return refusal === null ? ceiling : fail("bad-request", refusal);
 }
 
+// A gate contract's command list from a request body, on the same discipline
+// profileFromBody uses: absent is absent, malformed is a refusal naming what
+// was wrong, and an unrunnable command is refused before anything is
+// appended. An empty array is a legal contract and is not treated as absent.
+function gateCommandsFromBody(
+  body: JsonBody | null,
+  field: string
+): readonly (readonly string[])[] | Response | null {
+  const value = body === null ? undefined : body[field];
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) return fail("bad-request", `"${field}" expected an array of argv arrays`);
+  const commands: string[][] = [];
+  for (const raw of value) {
+    if (!Array.isArray(raw) || !raw.every((arg) => typeof arg === "string")) {
+      return fail("bad-request", `"${field}" expected an array of argv arrays of strings`);
+    }
+    commands.push(raw as string[]);
+  }
+  const refusal = gateRefusal({ commands, source: "api", rule: null });
+  return refusal === null ? commands : fail("bad-request", refusal);
+}
+
 function handleRegister(deps: ApiDeps, body: JsonBody | null, source: string, nowMs: number): Response {
   const path = stringFromBody(body, "path");
   if (path === null) {
@@ -738,6 +766,7 @@ const REGISTRY_VERB_FOR_ROUTE: Readonly<Record<string, ProjectControlVerb | unde
   [PROJECT_ROUTES.remove]: "remove",
   [PROJECT_ROUTES.profile]: "profile",
   [PROJECT_ROUTES.ceiling]: "ceiling",
+  [PROJECT_ROUTES.gate]: "gate",
 };
 
 // A fresh Response every time: a body can only be consumed once, so a shared
@@ -899,6 +928,27 @@ async function routeProject(
       return runRegistryControl(deps, registryVerb, name, clock.now(), () =>
         deps.projects.setCeiling(name, ceiling, source)
       );
+    }
+    // 041 B-7: the third registry verb that carries state of its own. An
+    // explicit empty list is the governance-only contract; omitting the field
+    // entirely is a request that says nothing, which is refused rather than
+    // read as either one.
+    if (registryVerb === "gate") {
+      if (body === null || !Object.hasOwn(body, "commands")) {
+        return fail(
+          "bad-request",
+          `POST ${path} expects a JSON body with a "commands" array of argv arrays ([] for governance-only)`
+        );
+      }
+      const commands = gateCommandsFromBody(body, "commands");
+      if (isResponse(commands)) return commands;
+      // Never null: the Object.hasOwn check above already refused an absent
+      // field, and an explicit null is not a list.
+      if (commands === null) return fail("bad-request", `POST ${path} expects "commands" to be an array, not null`);
+      // An operator-set contract answers to no probe rule, so its rule is
+      // null: the record says who asked, and nothing pretends a table did.
+      const gate: GateContract = { commands, source, rule: null };
+      return runRegistryControl(deps, registryVerb, name, clock.now(), () => deps.projects.setGate(name, gate, source));
     }
     return runRegistryControl(deps, registryVerb, name, clock.now(), () => {
       switch (registryVerb) {

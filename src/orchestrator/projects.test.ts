@@ -224,10 +224,11 @@ test("registerProject refuses a duplicate name, a duplicate repoDir, and a non-a
     ).toThrow(/not a valid project name/);
 
     // A refusal appends nothing: the chain still holds only the one
-    // registration, and it verifies. That registration is two records since
-    // 032 B-2, the registration and the posture it consented to, so the head
-    // sits at seq 1 with nothing from the four refusals above.
-    expect(chain.headSeq).toBe(1);
+    // registration, and it verifies. That registration is three records since
+    // 041 B-2, the registration, the posture it consented to (032 B-2) and the
+    // gate its target probed to, so the head sits at seq 2 with nothing from
+    // the four refusals above.
+    expect(chain.headSeq).toBe(2);
     expect(verifyProjectsChain(home).ok).toBe(true);
   } finally {
     chain.close();
@@ -281,12 +282,16 @@ test("the fold carries register, disarm, arm, requalify, remove and re-register 
     const projects = projectsFromChain(chain.fold());
     expect([...projects.keys()]).toEqual(["chancery", "enrahitu"]);
 
-    // AC-2: the chain verifies over the whole history. Ten records, not
-    // seven: each of the three registrations appends its posture beside
-    // itself (032 B-2), and the four mutations are one record each.
+    // AC-2: the chain verifies over the whole history. Thirteen records, not
+    // seven: each of the three registrations appends its posture (032 B-2)
+    // and its probed gate (041 B-2) beside itself, and the four mutations are
+    // one record each. The requalify adds no gate record of its own, because
+    // these fixture paths do not exist and the probe's empty verdict matches
+    // the empty contract already on the chain (041 B-2's "only when the
+    // derived commands differ").
     const verified = verifyProjectsChain(home);
     expect(verified.ok).toBe(true);
-    if (verified.ok) expect(verified.count).toBe(10);
+    if (verified.ok) expect(verified.count).toBe(13);
   } finally {
     chain.close();
   }
@@ -522,11 +527,13 @@ test("an unqualified target registers with its reasons and requalifies in place 
     expect(requalified.project?.qualification.qualified).toBe(true);
     expect(checkOf(requalified.project!.qualification, "default-branch").detail).toBe('default branch is "main"');
 
-    // Three records: the registration, the posture it recorded beside itself
-    // (032 B-2), and this requalification.
+    // Four records: the registration, the posture it recorded beside itself
+    // (032 B-2), the gate it probed to (041 B-2), and this requalification.
+    // The requalify's own re-probe of the same tree derives the same empty
+    // contract, so it appends nothing.
     const verified = verifyProjectsChain(home);
     expect(verified.ok).toBe(true);
-    if (verified.ok) expect(verified.count).toBe(3);
+    if (verified.ok) expect(verified.count).toBe(4);
   } finally {
     chain.close();
   }

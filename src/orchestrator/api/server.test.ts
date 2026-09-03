@@ -343,9 +343,13 @@ test("POST /api/projects registers a target and answers with the chain's own rec
 
     // The API appended nothing itself: exactly the records the registry
     // helper wrote are in the chain (022 D-2), which since 032 B-2 is the
-    // registration plus the posture it consented to.
-    expect(registry.chain.fold().records.length).toBe(before + 2);
-    expect(registry.chain.fold().records.at(-1)?.kind).toBe("project.profile.set");
+    // registration plus the posture it consented to, and since 041 B-2 the
+    // gate its target probed to as well.
+    expect(registry.chain.fold().records.length).toBe(before + 3);
+    expect(registry.chain.fold().records.slice(-2).map((r) => r.kind)).toEqual([
+      "project.profile.set",
+      "project.gate.set",
+    ]);
     expect(registry.projects().has("gamma")).toBe(true);
   });
 });
@@ -439,6 +443,75 @@ test("the ceiling verb sets, clears, and shows on the project payload; no ceilin
     );
     expect(cleared.record?.kind).toBe("project.ceiling.set");
     expect(cleared.snapshot?.budget.ceiling).toBeNull();
+  });
+});
+
+test("041 FR-005: the project payload carries the gate, and the gate verb sets it", async () => {
+  await withServer("projects-gate", async ({ server, registry }) => {
+    // B-6: the contract travels on the row, never omitted. These fixture
+    // worlds carry no language manifest, so B-2's probe found nothing and the
+    // registration recorded that explicitly.
+    const before = expectOk((await getJson<ProjectsView>(server, API_ROUTES.projects)).body);
+    expect(before.projects[0]!.gate).toEqual({ commands: [], source: "probe", rule: "none", legacy: false });
+
+    const set = expectOk(
+      (await getJson<ProjectControlResult>(server, projectRoute("beta", PROJECT_ROUTES.gate), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commands: [["make", "ci"]] }),
+      })).body
+    );
+    expect(set).toMatchObject({ verb: "gate", project: "beta", applied: true });
+    expect(set.record?.kind).toBe("project.gate.set");
+    // B-7: an operator-set contract answers to no probe rule, and says so.
+    expect(set.snapshot?.gate).toEqual({ commands: [["make", "ci"]], source: "api", rule: null, legacy: false });
+
+    // An explicit empty list is the governance-only contract, which is a
+    // decision the chain records rather than an absence it has to infer.
+    const cleared = expectOk(
+      (await getJson<ProjectControlResult>(server, projectRoute("beta", PROJECT_ROUTES.gate), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commands: [] }),
+      })).body
+    );
+    expect(cleared.snapshot?.gate).toEqual({ commands: [], source: "api", rule: null, legacy: false });
+
+    // A body that says nothing is refused rather than read as either one.
+    const silent = await getJson<never>(server, projectRoute("beta", PROJECT_ROUTES.gate), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(silent.status).toBe(400);
+    expect(expectErr(silent.body).message).toContain(`"commands"`);
+
+    // And so is a command that could never be executed.
+    const empty = await getJson<never>(server, projectRoute("beta", PROJECT_ROUTES.gate), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands: [[]] }),
+    });
+    expect(empty.status).toBe(400);
+  });
+});
+
+test("041 B-3: a project registered before this spec serves its gate as legacy", async () => {
+  await withServer("projects-gate-legacy", async ({ server, registry }) => {
+    // The pre-041 registry's one record, appended straight to the chain: a
+    // chain that has never heard of gates is exactly what B-3 is about.
+    const fresh = registry.world("delta");
+    registry.chain.append("project.registered", {
+      name: "delta",
+      repoDir: fresh.repoDir,
+      armed: true,
+      qualification: { qualified: true, checks: [], warnings: [], adoptable: false },
+      source: "cli",
+    });
+
+    const view = expectOk((await getJson<ProjectsView>(server, API_ROUTES.projects)).body);
+    const delta = view.projects.find((p) => p.name === "delta")!;
+    expect(delta.gate).toEqual({ commands: [], source: null, rule: null, legacy: true });
   });
 });
 

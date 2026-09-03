@@ -77,6 +77,8 @@ import {
   requalifyProject,
   setProjectArmed,
   setProjectCeiling,
+  migrateProjectGate,
+  setProjectGate,
   setProjectProfile,
   slugifyProjectName,
   type Project,
@@ -127,6 +129,7 @@ import {
   renderProfile,
   type ExecutionProfile,
 } from "../orchestrator/profile";
+import { gateRefusal, renderGate, renderGateDetail, type GateContract } from "../orchestrator/gate-contract";
 import { renderSessionModels, sessionModelsRefusal, type SessionModels } from "../orchestrator/models";
 import { API_VERSION, API_VERSION_HEADER, projectRoute } from "../orchestrator/api/types";
 import { ECONOMICS_ROUTE, type RunEconomics, type SpecEconomics } from "../orchestrator/economics";
@@ -170,11 +173,13 @@ function exitCodeFor(kind: ApiErrorKind): number {
 export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--json] [--url <base>]
 
   status                       daemon state, quota, and one row per project
-  projects                     the registry: name, armed, posture, qualification, run
+  projects                     the registry: name, armed, posture, gate, qualification, run
   projects add <path>          register a project [--name <slug>] [--disarmed]
   projects arm|disarm <name>   let the scheduler drive it, or hold it back
   projects profile <name> <mode>  set the execution posture: bypass | guarded
                                   and, with both model flags, the model pair
+  projects gate <name> -- <argv>  set the language gate run after the spec-spine
+                                  floor; "--" with nothing after it is governance-only
   projects ceiling <name>      spend limits: --per-run/--per-day <usd>, or "none"
   projects requalify <name>    re-run the preflight and journal the verdict
   projects remove <name>       drop it from the registry (a tombstone)
@@ -346,6 +351,9 @@ interface ParsedArgs {
   readonly corpus: string | null;
   // 035's proposal source: a document path or a sha256 content hash (B-1).
   readonly proposal: string | null;
+  // 041 B-7's gate argv: everything after a bare `--`, unparsed. null when no
+  // separator was given.
+  readonly passthrough: readonly string[] | null;
   readonly rest: readonly string[];
 }
 
@@ -376,6 +384,13 @@ function parseArgs(argv: readonly string[]): ParseResult {
   let exclude: string | null = null;
   let corpus: string | null = null;
   let proposal: string | null = null;
+  // 041 B-7: everything after a bare `--`, verbatim. Nothing before this spec
+  // used the separator, and flag parsing stops at it entirely, so a gate
+  // command that itself starts with a dash (`cargo clippy -- -D warnings`)
+  // reaches the registry as the operator typed it instead of being refused as
+  // an unknown flag. null means no separator was given at all, which is a
+  // different thing from `--` with nothing after it (the empty contract).
+  let passthrough: string[] | null = null;
   const rest: string[] = [];
 
   const valued: Readonly<Record<string, (value: string) => void>> = {
@@ -437,6 +452,10 @@ function parseArgs(argv: readonly string[]): ParseResult {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
+    if (arg === "--") {
+      passthrough = argv.slice(i + 1);
+      break;
+    }
     if (arg === "--json") {
       json = true;
       continue;
@@ -464,7 +483,7 @@ function parseArgs(argv: readonly string[]): ParseResult {
 
   return {
     ok: true,
-    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, modelStrong, modelFast, perRun, perDay, out, bundle, exclude, corpus, proposal, rest },
+    args: { json, url, dataDir, repoDir, project, dir, name, disarmed, profile, allow, deny, modelStrong, modelFast, perRun, perDay, out, bundle, exclude, corpus, proposal, passthrough, rest },
   };
 }
 
@@ -506,6 +525,9 @@ const PROJECTS_PROFILE_FLAGS: readonly string[] = ["--allow", "--deny", "--model
 // 033 B-1: the ceiling verb's two limits. Neither belongs to any other verb,
 // and the posture flags do not belong to this one.
 const PROJECTS_CEILING_FLAGS: readonly string[] = ["--per-run", "--per-day"];
+// 041 B-7: the gate verb's whole payload arrives after a bare `--`, so it
+// takes no flags of its own; every named flag is a stray here.
+const PROJECTS_GATE_FLAGS: readonly string[] = [];
 // 031 B-4: `journal export` takes its own flag set, exactly as `projects add`
 // does; `--dir` and `--bundle` belong to verify alone and are refused here.
 const JOURNAL_EXPORT_FLAGS: readonly string[] = ["--project", "--out"];
@@ -527,6 +549,7 @@ function acceptedFlags(command: string, sub: string | undefined): readonly strin
   if (command === "projects" && sub === "add") return PROJECTS_ADD_FLAGS;
   if (command === "projects" && sub === "profile") return PROJECTS_PROFILE_FLAGS;
   if (command === "projects" && sub === "ceiling") return PROJECTS_CEILING_FLAGS;
+  if (command === "projects" && sub === "gate") return PROJECTS_GATE_FLAGS;
   if (command === "journal" && sub === "export") return JOURNAL_EXPORT_FLAGS;
   if (command === "adopt" && sub === "preflight") return ADOPT_PREFLIGHT_FLAGS;
   if (command === "adopt" && sub === "validate") return ADOPT_VALIDATE_FLAGS;
@@ -717,13 +740,18 @@ function projectRunCell(view: ProjectView): string {
 // bypass reads differently from one an operator chose. Never blank: the fold
 // always produces a profile, so a missing column would be this surface's
 // omission rather than the registry's.
+// 041 B-6: the gate takes the next column on the same reasoning. What a target
+// is judged by after its session ends is not a detail an operator should have
+// to open the project to learn.
 function renderProjectRows(projects: readonly ProjectView[]): string[] {
   if (projects.length === 0) return ["no projects are registered with this daemon"];
   const nameWidth = projects.reduce((max, view) => Math.max(max, view.name.length), 0);
   const postureWidth = projects.reduce((max, view) => Math.max(max, renderProfile(view.profile).length), 0);
+  const gateWidth = projects.reduce((max, view) => Math.max(max, renderGate(view.gate).length), 0);
   return projects.map((view) =>
     `${view.name.padEnd(nameWidth)}  ${(view.armed ? "armed" : "disarmed").padEnd(8)}  ` +
     `${renderProfile(view.profile).padEnd(postureWidth)}  ` +
+    `${renderGate(view.gate).padEnd(gateWidth)}  ` +
     `${qualificationCell(view.qualification).padEnd(11)}  ${projectRunCell(view)}`.trimEnd()
   );
 }
@@ -748,6 +776,10 @@ function renderProjectDetail(view: ProjectView): string[] {
     lines.push(`         allowed${origin}: ${allowed.join(", ")}`);
     if (profile.disallowedTools?.length) lines.push(`         denied: ${profile.disallowedTools.join(", ")}`);
   }
+  // 041 B-6: the gate spelled out command by command, for the same reason the
+  // allowlist is: "cargo" is a summary, and a gate is a thing you check item
+  // by item before you let it certify a merge.
+  lines.push(...renderGateDetail(view.gate));
   // 033 B-7: the ceiling and the spend evaluated against it, on the surface an
   // operator reads before deciding anything. Both floors are named even when
   // there is no ceiling, because "what has this cost so far" is the question
@@ -1135,6 +1167,31 @@ const PROJECT_REGISTRY_CALLS: Readonly<
   remove: (client, name) => client.removeProject(name),
 };
 
+// 041 B-7: the argv after `--`, split into one argv array per gate command on
+// a standalone `;` token, the `find -exec` idiom. Not on a second `--`: the
+// probe's own Rust rule contains `cargo clippy --workspace --all-targets --
+// -D warnings`, so `--` has to survive inside a command for an operator to be
+// able to type the thing they are correcting. A `;` is never a program name
+// or a flag, and a shell already makes anyone quote it. An empty run between
+// two separators is dropped rather than recorded as a command that could
+// never be executed.
+export const GATE_COMMAND_SEPARATOR = ";";
+
+export function splitGateCommands(passthrough: readonly string[]): readonly (readonly string[])[] {
+  const commands: string[][] = [];
+  let current: string[] = [];
+  for (const token of passthrough) {
+    if (token === GATE_COMMAND_SEPARATOR) {
+      if (current.length > 0) commands.push(current);
+      current = [];
+      continue;
+    }
+    current.push(token);
+  }
+  if (current.length > 0) commands.push(current);
+  return commands;
+}
+
 // 032 B-2: a posture an operator typed, assembled into the profile that
 // travels to the registry, or the reason it is not one. A comma-separated
 // list is split and trimmed here so the wire carries the array the chain
@@ -1359,11 +1416,35 @@ async function cmdProjects(
     return respond(deps, args.json, await client.setProjectCeiling(name, limits.ceiling), renderProjectControl);
   }
 
+  // 041 B-7's one write verb. The command list arrives after a bare `--`,
+  // unparsed, because a gate command is argv and argv is exactly what a flag
+  // parser is entitled to mangle: `cargo clippy --workspace -- -D warnings`
+  // has to reach the chain as the operator typed it. A standalone `;`
+  // separates one command from the next, and `--` with nothing after it is
+  // the explicit governance-only contract, which is a decision rather than a
+  // typo.
+  if (sub === "gate") {
+    const name = rest[1];
+    if (name === undefined) return usage(deps, "projects gate needs a project name");
+    if (rest.length > 2) return usage(deps, `unexpected argument "${rest[2]}" after projects gate`);
+    if (args.passthrough === null) {
+      return usage(
+        deps,
+        'projects gate needs the commands after "--" (for example: projects gate rahi -- make ci), ' +
+          'a standalone ";" between commands, or "--" with nothing after it for governance-only'
+      );
+    }
+    const commands = splitGateCommands(args.passthrough);
+    const refusal = gateRefusal({ commands, source: "cli", rule: null });
+    if (refusal !== null) return usage(deps, refusal);
+    return respond(deps, args.json, await client.setProjectGate(name, commands), renderProjectControl);
+  }
+
   const call = Object.hasOwn(PROJECT_REGISTRY_CALLS, sub) ? PROJECT_REGISTRY_CALLS[sub] : undefined;
   if (call === undefined) {
     return usage(
       deps,
-      `unknown projects subcommand "${sub}" (expected add, arm, disarm, profile, ceiling, requalify, or remove)`
+      `unknown projects subcommand "${sub}" (expected add, arm, disarm, profile, ceiling, gate, requalify, or remove)`
     );
   }
   const name = rest[1];
@@ -2594,6 +2675,9 @@ function standbyProjects(standby: StandbyDaemon, probe: ProjectProbe): ProjectsT
     setCeiling(name: string, ceiling: CostCeiling | null, source: ProjectSource): void {
       setProjectCeiling({ chain: chain(), name, ceiling, source });
     },
+    setGate(name: string, gate: GateContract): void {
+      setProjectGate({ chain: chain(), name, gate });
+    },
     requalify(name: string, source: ProjectSource): void {
       const project = live(name);
       requalifyProject({ chain: chain(), name, qualification: qualifyProject(probe, project.repoDir), source });
@@ -2661,6 +2745,19 @@ async function cmdDaemonRun(deps: OrchestratorCliDeps, url: string): Promise<num
         // read once when the seams were built could not carry that release to
         // the boundary that is waiting for it.
         ceiling: () => standby.projects.get(project.name)?.ceiling ?? project.ceiling,
+        // 041 B-4: read at every stage boundary for the same reason, and one
+        // more besides. A gate that refuses a build at the base commit is
+        // corrected by the operator through `projects gate`, and that
+        // correction has to reach the stage that is waiting for it.
+        gate: () => standby.projects.get(project.name)?.gate ?? project.gate,
+        // 041 B-8: a project registered before this spec has no gate record
+        // and folds to governance-only; the first daemon to service it probes
+        // its tree and writes the record it was missing, before any stage of
+        // that run is scheduled. The scheduler holds the chain's one writer
+        // handle (026 B-6), so the write goes through it.
+        migrateGateContract: () => {
+          migrateProjectGate(standby.projectsChain, project.name);
+        },
       }),
     // 021 B-6, D-19: SIGTERM severs the live session child; without this a
     // mid-build stop waits out the child's own 30-minute deadline.
@@ -2809,6 +2906,13 @@ async function dispatch(
   if (accepted !== undefined) {
     const stray = strayFlag(args, accepted);
     if (stray !== null) return usage(scoped, `${stray} is not a flag of "${command}"`);
+  }
+  // 041 B-7's `--` belongs to `projects gate` alone. Every other verb refuses
+  // it rather than ignoring what follows: silently swallowing arguments is
+  // the defect 023 D-6 refuses, and a separator that means nothing to the
+  // verb at hand is the same defect wearing a dash.
+  if (args.passthrough !== null && !(command === "projects" && rest[0] === "gate")) {
+    return usage(scoped, `"--" and everything after it means nothing to "${command}"`);
   }
 
   // The two offline commands (B-4 and the daemon lifecycle) are dispatched

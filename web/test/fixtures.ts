@@ -219,6 +219,17 @@ export const FIXTURE_PROJECT_VIEW: ProjectView = {
   // too. An operator-set bypass here, because the legacy variant is a
   // distinct rendering a test should have to ask for.
   profile: { mode: "bypass", legacy: false },
+  // 041 B-6: the served row always carries a gate too, for the same reason.
+  // The Bun pair, because this fixture stands in for the self-hosted project.
+  gate: {
+    commands: [
+      ["bun", "run", "typecheck"],
+      ["bun", "test"],
+    ],
+    source: "probe",
+    rule: "typescript",
+    legacy: false,
+  },
   budget: FIXTURE_NO_CEILING,
   run: FIXTURE_RUN.run,
   spec: FIXTURE_RUN.spec,
@@ -245,6 +256,7 @@ export function fixtureProjectView(name: string, overrides: Partial<ProjectView>
       checkedAt: "2026-08-01T09:00:00.000Z",
     },
     profile: { mode: "bypass", legacy: false },
+    gate: { commands: [["make", "ci"]], source: "probe", rule: "make-ci", legacy: false },
     budget: FIXTURE_NO_CEILING,
     run: null,
     spec: null,
@@ -397,6 +409,7 @@ const REGISTRY_KIND: Readonly<Record<ProjectControlVerb, string>> = {
   remove: "project.removed",
   profile: "project.profile.set",
   ceiling: "project.ceiling.set",
+  gate: "project.gate.set",
 };
 
 export function registryAnswerFor(verb: ProjectControlVerb, name: string | null, seq: number = 12): ProjectControlResult {
@@ -485,6 +498,7 @@ export function fixtureApiClient(options: FixtureClientOptions = {}): FixtureCli
     removeProject: (name) => registryAnswer("remove", name),
     setProjectProfile: (name) => registryAnswer("profile", name),
     setProjectCeiling: (name) => registryAnswer("ceiling", name),
+    setProjectGate: (name) => registryAnswer("gate", name),
     project: (name) => projectClient(name, calls, options),
   };
 }

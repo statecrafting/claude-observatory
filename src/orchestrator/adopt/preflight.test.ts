@@ -446,6 +446,10 @@ function projectWith(qualified: boolean, adoptable: boolean): Project {
     },
     profile: { mode: "bypass", legacy: true },
     ceiling: null,
+    // 041 B-3: the fold always produces a gate, so a hand-built Project
+    // carries one too. Legacy here, because this fixture stands in for a
+    // registration that predates every later registry field.
+    gate: { commands: [], source: null, rule: null, legacy: true },
   };
 }
 
