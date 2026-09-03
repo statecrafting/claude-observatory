@@ -173,12 +173,13 @@ function exitCodeFor(kind: ApiErrorKind): number {
 export const ORCHESTRATOR_USAGE = `usage: observatory orchestrator <command> [--json] [--url <base>]
 
   status                       daemon state, quota, and one row per project
-  projects                     the registry: name, armed, posture, qualification, run
+  projects                     the registry: name, armed, posture, gate, qualification, run
   projects add <path>          register a project [--name <slug>] [--disarmed]
   projects arm|disarm <name>   let the scheduler drive it, or hold it back
   projects profile <name> <mode>  set the execution posture: bypass | guarded
-  projects gate <name> -- <argv>  set the language gate run after the spec-spine floor
                                   and, with both model flags, the model pair
+  projects gate <name> -- <argv>  set the language gate run after the spec-spine
+                                  floor; "--" with nothing after it is governance-only
   projects ceiling <name>      spend limits: --per-run/--per-day <usd>, or "none"
   projects requalify <name>    re-run the preflight and journal the verdict
   projects remove <name>       drop it from the registry (a tombstone)
