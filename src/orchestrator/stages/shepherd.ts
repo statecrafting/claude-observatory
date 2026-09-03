@@ -23,7 +23,8 @@
 // convention.
 import type { JournalHandle, JsonValue } from "../journal";
 import { sha256Hex } from "../journal";
-import { GATE_COMMANDS, DEFAULT_BASE_BRANCH, gateCommandsFor, type Runner } from "./build";
+import { GATE_COMMANDS, DEFAULT_BASE_BRANCH, type Runner } from "./build";
+import { gateSuiteFor, resolveGateBinding, type GateBinding } from "../gate-contract";
 import type { GitHubClient, CheckRun, MergeMethod } from "./ship";
 
 // --- clock seam (B-1: no real sleeps in unit tests) --------------------------
@@ -188,8 +189,9 @@ export interface ShepherdRemediationPromptParams {
   readonly attemptNumber: number;
   readonly maxRemediations: number;
   readonly failing: readonly ShepherdFailureDetail[];
-  // 016 D-10 carried through (D-8): the target's own gate program, so a
-  // remediation session on a non-TypeScript target is not told to run bun.
+  // 041 B-4 (016 D-10's intent carried through D-8, now contract-derived):
+  // the target's own gate suite, so a remediation session on a Rust target is
+  // told to run cargo rather than this repo's bun.
   readonly gateCommands?: readonly (readonly string[])[];
 }
 
@@ -327,6 +329,9 @@ export interface RunShepherdStageOptions {
   readonly remediationDeadlineMs?: number;
   readonly maxTurns?: number;
   readonly model?: string;
+  // 041 B-4: the owning project's gate contract, or a late-bound read of it.
+  // The remediation prompt lists the project's gate, not this repo's.
+  readonly gate?: GateBinding;
 }
 
 export async function runShepherdStage(options: RunShepherdStageOptions): Promise<ShepherdResult> {
@@ -342,6 +347,7 @@ export async function runShepherdStage(options: RunShepherdStageOptions): Promis
   const logTailBytes = options.logTailBytes ?? DEFAULT_LOG_TAIL_BYTES;
   const remediationDeadlineMs = options.remediationDeadlineMs ?? DEFAULT_SHEPHERD_REMEDIATION_DEADLINE_MS;
   const maxTurns = options.maxTurns ?? DEFAULT_SHEPHERD_MAX_TURNS;
+  const gate = resolveGateBinding(options.gate);
 
   const branch = runner.currentBranch();
   const specPath = `specs/${specId}/spec.md`;
@@ -467,7 +473,7 @@ export async function runShepherdStage(options: RunShepherdStageOptions): Promis
       attemptNumber,
       maxRemediations,
       failing: failureDetails,
-      gateCommands: gateCommandsFor(runner),
+      gateCommands: gateSuiteFor(gate),
     });
     journal.append("stage.shepherd.prompt", { specId, attempt: attemptNumber, promptVersion: SHEPHERD_PROMPT_VERSION });
 

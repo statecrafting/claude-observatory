@@ -637,9 +637,12 @@ test("projects lists the registry, one row per project", async () => {
     expect(human.code).toBe(EXIT_OK);
     // 032 B-6: the posture sits between the arm state and the qualification,
     // on every row, because the two consents are read together or not at all.
-    expect(human.out).toContain("alpha  armed     bypass  qualified    running  003-gamma/build");
+    // 041 B-6: the gate follows the posture, on the same reasoning. These
+    // fixture worlds carry no language manifest, so B-2's probe finds nothing
+    // and the contract is an explicit, non-legacy governance-only.
+    expect(human.out).toContain("alpha  armed     bypass  governance-only  qualified    running  003-gamma/build");
     // 025 B-4: an unqualified project stays listed, with what failed named.
-    expect(human.out).toContain("beta   disarmed  bypass  unqualified (origin-remote)  no run yet");
+    expect(human.out).toContain("beta   disarmed  bypass  governance-only  unqualified (origin-remote)  no run yet");
 
     const asJson = await run(["projects", "--json", "--url", url], { dataDir });
     expect(asJson.code).toBe(EXIT_OK);
@@ -647,6 +650,68 @@ test("projects lists the registry, one row per project", async () => {
     expect(data.projects.map((project) => project.name)).toEqual(["alpha", "beta"]);
     expect(data.projects[1]!.armed).toBe(false);
     expect(data.projects[1]!.qualification.qualified).toBe(false);
+  });
+});
+
+test("041 AC-3, FR-005: every project row renders a gate, legacy marked as such", async () => {
+  await withFixtureDaemon("projects-gate-render", async ({ registry, url, dataDir }) => {
+    // A pre-041 chain: the registration alone, no gate record, exactly what a
+    // project registered before this spec carries.
+    const legacy = registry.world("legacy-target");
+    registry.chain.append("project.registered", {
+      name: "legacy-target",
+      repoDir: legacy.repoDir,
+      armed: true,
+      qualification: { qualified: true, checks: [], warnings: [], adoptable: false },
+      source: "cli",
+    });
+
+    const listed = await run(["projects", "--url", url], { dataDir });
+    expect(listed.code).toBe(EXIT_OK);
+    // AC-3: a gate on every row, and the legacy one reads distinguishably
+    // from a probed or operator-set one.
+    expect(listed.out).toContain("governance-only (legacy)");
+    for (const line of listed.out.trim().split("\n")) {
+      expect(line).toMatch(/governance-only/);
+    }
+
+    // B-7: the operator override, and the detail that spells it out.
+    const set = await run(["projects", "gate", "alpha", "--url", url, "--", "make", "ci"], { dataDir });
+    expect(set.code).toBe(EXIT_OK);
+    expect(set.out).toContain("gate alpha: applied");
+    expect(set.out).toContain("project.gate.set");
+    expect(set.out).toContain("gate:    make ci");
+    expect(set.out).toContain("set by cli");
+    expect(registry.projects().get("alpha")!.gate.commands).toEqual([["make", "ci"]]);
+
+    // A standalone ";" separates one command from the next, and a "--" inside
+    // a command survives to the chain as the operator typed it.
+    const many = await run(
+      ["projects", "gate", "alpha", "--url", url, "--", "cargo", "clippy", "--", "-D", "warnings", ";", "cargo", "test"],
+      { dataDir }
+    );
+    expect(many.code).toBe(EXIT_OK);
+    expect(registry.projects().get("alpha")!.gate.commands).toEqual([
+      ["cargo", "clippy", "--", "-D", "warnings"],
+      ["cargo", "test"],
+    ]);
+
+    // "--" with nothing after it is the explicit governance-only contract.
+    const cleared = await run(["projects", "gate", "alpha", "--url", url, "--"], { dataDir });
+    expect(cleared.code).toBe(EXIT_OK);
+    expect(cleared.out).toContain("gate:    governance-only");
+    expect(registry.projects().get("alpha")!.gate).toMatchObject({ commands: [], source: "cli", legacy: false });
+
+    // And no separator at all is a usage error, not an empty contract.
+    const noSeparator = await run(["projects", "gate", "alpha", "--url", url], { dataDir });
+    expect(noSeparator.code).toBe(EXIT_USAGE);
+    expect(noSeparator.err).toContain('projects gate needs the commands after "--"');
+
+    // 023 D-6: `--` belongs to this verb alone; anywhere else it is refused
+    // rather than swallowing everything after it.
+    const stray = await run(["projects", "arm", "alpha", "--url", url, "--", "make", "ci"], { dataDir });
+    expect(stray.code).toBe(EXIT_USAGE);
+    expect(stray.err).toContain('"--" and everything after it means nothing to "projects"');
   });
 });
 
@@ -776,8 +841,12 @@ test("the projects controls journal their records with the cli as the source", a
 
     // B-4: every control the CLI issues carries X-Control-Source: cli, so the
     // registry chain names the terminal rather than defaulting to the API.
+    // 041 B-2 is the one exception, and it is not one: the gate record a
+    // registration appends was authored by the probe rather than by the
+    // terminal that asked for the registration, and its source says so.
     for (const record of registry.chain.fold().records.slice(1)) {
-      expect((record.payload as { source: string }).source).toBe("cli");
+      const source = (record.payload as { source: string }).source;
+      expect(source).toBe(record.kind === "project.gate.set" ? "probe" : "cli");
     }
 
     const remove = await run(["projects", "remove", "alpha", "--url", url], { dataDir });

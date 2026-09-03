@@ -1,19 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [
-      {
-        "code": "I-004",
-        "message": "spec '041-project-gate-contract' file unit 'src/orchestrator/gate-contract.ts' does not exist",
-        "path": "src/orchestrator/gate-contract.ts"
-      },
-      {
-        "code": "I-004",
-        "message": "spec '041-project-gate-contract' file unit 'src/orchestrator/gate-contract.test.ts' does not exist",
-        "path": "src/orchestrator/gate-contract.test.ts"
-      }
-    ],
-    "warnings": []
-  },
   "mapping": {
     "dependsOn": [
       "016-stage-build",
@@ -31,6 +16,10 @@
       },
       {
         "path": "src/commands/orchestrator.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/adopt/preflight.test.ts",
         "source": "spec-edge"
       },
       {
@@ -63,6 +52,18 @@
       },
       {
         "path": "src/orchestrator/daemon.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/gate-contract.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/gate-contract.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/orchestrator/profile.test.ts",
         "source": "spec-edge"
       },
       {
@@ -100,7 +101,11 @@
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/gate-contract.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -109,7 +114,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/orchestrator/gate-contract.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -141,6 +150,19 @@
         "unit": {
           "kind": "file",
           "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/adopt/preflight.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/adopt/preflight.test.ts"
         }
       },
       {
@@ -245,6 +267,19 @@
         "unit": {
           "kind": "file",
           "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/orchestrator/profile.test.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/profile.test.ts"
         }
       },
       {
@@ -369,5 +404,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "adf1b261f513624e06cf74106ad2720de4165717d58484dc8e4c15cef681b194"
+  "shardHash": "7260df49f84640c71ecd313308983324cb944a09fd1a1e17cb6ebfccae880f8b"
 }

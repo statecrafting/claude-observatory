@@ -163,10 +163,26 @@
           "kind": "file",
           "path": "web/test/store.test.tsx"
         }
+      },
+      {
+        "nature": "additive",
+        "spec": "032-execution-profiles",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/profile.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "034-adoption-preflight",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/adopt/preflight.test.ts"
+        }
       }
     ],
     "id": "041-project-gate-contract",
-    "implementation": "in-progress",
+    "implementation": "complete",
     "kind": "feature",
     "references": [
       {
@@ -194,6 +210,6 @@
     "summary": "The post-session gate a driven target is judged by is hardcoded to this repo's conventions: four spec-spine commands plus `bun run typecheck` and `bun test`, with the Bun pair dropped whenever the target has no root tsconfig.json (016 D-10). A Rust target therefore passes the build stage on governance alone; cargo correctness reaches the pipeline only through whatever the session ran for itself and through CI in the shepherd stage. With two Rust targets about to be armed (rahi, then aicortex and hqgit on top of it), that gap is a claim the orchestrator makes without evidence. This spec makes the language gate per-project registry state, like the execution profile: a journaled gate contract (an ordered command list run after the universal spec-spine four), folded from the projects chain, probed to a default at registration (a `make ci` target if the repo declares one, else the lint-and-test gate for TypeScript, Rust, Go or a Python project's declared tools, else governance-only), derived into the stage's gate suite by one pure function every stage uses, and displayed wherever the project is named. Projects registered before this spec are migrated by the same probe on first service, so the window in which they would fold to governance-only closes itself.\n",
     "title": "Project gate contract: per-project language gates as registry state"
   },
-  "shardHash": "c5fe5d0d91e0b1a22d5e7cbd685691d7616ec40fbcac68fefc619e204275a75b",
+  "shardHash": "be1bf7131c504b7fbaee620fa322360d85721a49bc6e3843404325797a5965ca",
   "specVersion": "1.1.0"
 }

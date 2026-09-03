@@ -237,10 +237,15 @@ test("the fold: registration records its posture beside itself, so legacy only d
       qualification: verdict(true),
       source: "cli",
     });
-    // Two records, and the posture is the second: a mutation only applies to
-    // a project that is already live (025 D-5).
+    // Three records, and the posture is the second: a mutation only applies to
+    // a project that is already live (025 D-5). The third is 041 B-2's probed
+    // gate contract, appended beside the posture on the same reasoning.
     const records = chain.fold().records;
-    expect(records.map((record) => record.kind)).toEqual([PROJECT_KINDS.registered, PROJECT_KINDS.profileSet]);
+    expect(records.map((record) => record.kind)).toEqual([
+      PROJECT_KINDS.registered,
+      PROJECT_KINDS.profileSet,
+      PROJECT_KINDS.gateSet,
+    ]);
     expect(records[1]!.payload).toMatchObject({ name: "enrahitu", source: "cli" });
     // D-1: registration without an explicit posture records bypass, chosen
     // rather than inherited, so `legacy` is false from the first record on.

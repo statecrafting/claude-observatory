@@ -101,6 +101,11 @@ export interface ApiClient {
   // the profile does: what the chain records is what the operator asked for,
   // not the result of merging a patch into state nobody saw.
   setProjectCeiling(name: string, ceiling: CostCeiling | null): Promise<ApiResponse<ProjectControlResult>>;
+  // 041 B-7: sets the command list this project's stages are judged by after
+  // the universal governance floor. The whole list travels, and an empty one
+  // is the explicit governance-only contract rather than a request that says
+  // nothing.
+  setProjectGate(name: string, commands: readonly (readonly string[])[]): Promise<ApiResponse<ProjectControlResult>>;
   project(name: string): ProjectClient;
 }
 
@@ -223,6 +228,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.profile), { profile }),
     setProjectCeiling: (name, ceiling) =>
       post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.ceiling), { ceiling }),
+    setProjectGate: (name, commands) =>
+      post<ProjectControlResult>(projectRoute(name, PROJECT_ROUTES.gate), { commands }),
     project: projectClient,
   };
 }

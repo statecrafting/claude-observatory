@@ -490,6 +490,9 @@ export function projectsView(rows: readonly ProjectRowInput[], nowMs: number): P
       // 032 B-6: the posture travels with every row, on the read path that
       // cannot fail, so no client ever renders a project without one.
       profile: project.profile,
+      // 041 B-6: and the gate beside it, for the same reason and on the same
+      // path. Registry state, so an unreadable state root does not lose it.
+      gate: project.gate,
     };
     try {
       const records = row.records();

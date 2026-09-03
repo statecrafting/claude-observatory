@@ -20,6 +20,7 @@ import type { ShippedSource } from "../dag";
 import type { DecisionRecord } from "../decisions";
 import type { RecordedQualification } from "../projects";
 import type { ExecutionProfile, RecordedProfile } from "../profile";
+import type { RecordedGateContract } from "../gate-contract";
 import type { CostCeiling, ProjectBudgetView } from "../budget";
 
 // --- version (B-1) ----------------------------------------------------------
@@ -92,6 +93,9 @@ export const PROJECT_ROUTES = {
   // 033 B-1: the one write verb a cost ceiling needs. Setting and clearing are
   // the same route; the body says which.
   ceiling: "ceiling",
+  // 041 B-7: the operator override. Setting and clearing are the same route;
+  // an empty command list is the explicit governance-only contract.
+  gate: "gate",
   runStart: "run/start",
   runPause: "run/pause",
   runResume: "run/resume",
@@ -114,7 +118,7 @@ export type SpecControlVerb = (typeof SPEC_CONTROL_VERBS)[number];
 
 export type ControlVerbToken = "start" | "pause" | "resume" | SpecControlVerb;
 
-export const PROJECT_CONTROL_VERBS = ["register", "arm", "disarm", "requalify", "remove", "profile", "ceiling"] as const;
+export const PROJECT_CONTROL_VERBS = ["register", "arm", "disarm", "requalify", "remove", "profile", "ceiling", "gate"] as const;
 export type ProjectControlVerb = (typeof PROJECT_CONTROL_VERBS)[number];
 
 // --- /api/meta (B-4) --------------------------------------------------------
@@ -210,6 +214,11 @@ export interface ProjectView {
   // Never omitted: a project with no ceiling says so (FR-004), which is a
   // different fact from a ceiling of zero.
   readonly budget: ProjectBudgetView;
+  // 041 B-6: the language gate this project's stages are judged by, on the
+  // same row. Never omitted, and a legacy-derived gate reads distinguishably
+  // from a probed or operator-set one, so a client never has to guess whether
+  // an empty gate was chosen or never asked about.
+  readonly gate: RecordedGateContract;
   // null when this project has no run yet, or when `readError` says its state
   // root could not be read. Never a fabricated idle run (022 B-6).
   readonly run: RunSummary | null;
@@ -246,6 +255,15 @@ export interface SetProjectProfileRequest {
 // absence it has to infer.
 export interface SetProjectCeilingRequest {
   readonly ceiling: CostCeiling | null;
+}
+
+// The body of 041 B-7's write verb (POST /api/projects/<name>/gate): the whole
+// command list, never a patch, for the same reason a profile travels whole. An
+// empty list is the explicit governance-only contract, which is a decision the
+// chain records rather than an absence it has to infer. The source is the
+// calling surface, so it is not in the body.
+export interface SetProjectGateRequest {
+  readonly commands: readonly (readonly string[])[];
 }
 
 // The answer to a registry control (B-2): spec 022 D-2's pattern applied to

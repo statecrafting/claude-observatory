@@ -13,12 +13,12 @@ import {
   readImplementationStatus,
   parseFrontmatterListField,
   extractBacklogStep,
-  gateCommandsFor,
   BUILD_PROMPT_VERSION,
   GATE_COMMANDS,
   type Runner,
   type RunnerSessionOptions,
 } from "./build";
+import { gateSuiteFor, LEGACY_GATE_CONTRACT, type GateContract } from "../gate-contract";
 
 // --- fixture repo -----------------------------------------------------------
 
@@ -241,29 +241,14 @@ test("createProcessRunner: statusClean/currentBranch/headSha reflect real git st
   expect(runner.headSha()).toMatch(/^[0-9a-f]{40}$/);
 });
 
-test("gateCommandsFor: a root tsconfig.json earns the full six-command gate (D-10)", () => {
-  const { dir } = initFixtureRepo();
-  const runner = createProcessRunner({ repoDir: dir });
-  expect(gateCommandsFor(runner)).toEqual(GATE_COMMANDS);
-});
-
-test("gateCommandsFor: a target without tsconfig.json runs only the spec-spine four (D-10)", () => {
-  const { dir } = initFixtureRepo();
-  rmSync(join(dir, "tsconfig.json"));
-  const runner = createProcessRunner({ repoDir: dir });
-  const commands = gateCommandsFor(runner);
-  expect(commands).toEqual(GATE_COMMANDS.filter((cmd) => cmd[0] === "spec-spine"));
-  expect(commands.some((cmd) => cmd[0] === "bun")).toBe(false);
-});
-
-test("the build prompt lists the target's own gate program, not the constant (D-10)", () => {
+test("the build prompt lists the target's own gate program, not the constant (041 B-4, 016 D-10's intent)", () => {
   const prompt = buildPrompt({
     specId: "900-x",
     specBody: "# spec body",
     backlogStep: "1. step",
     decisions: { included: [], overflowCount: 0 },
     dropboxDir: "/tmp/dropbox",
-    gateCommands: GATE_COMMANDS.filter((cmd) => cmd[0] === "spec-spine"),
+    gateCommands: GATE_COMMANDS,
   });
   expect(prompt).toContain("spec-spine compile");
   expect(prompt).not.toContain("bun run typecheck");
@@ -408,6 +393,144 @@ test("B-1: refuses with spec-not-ready when the injected readiness predicate say
 
   journal.close();
   decisionsChain.close();
+});
+
+// --- FR-004: the stage is judged by the owning project's contract -------------
+
+// Records every gate command the stage asks for, in order, so a test can say
+// what ran in the preflight and what ran after the session rather than only
+// what the evidence summarized.
+function recordingGate(log: string[][]): Runner["runGate"] {
+  return (cmd) => {
+    log.push([...cmd]);
+    return { exitCode: 0, stdoutTail: "", stderrTail: "" };
+  };
+}
+
+const MAKE_CI_CONTRACT: GateContract = { commands: [["make", "ci"]], source: "probe", rule: "make-ci" };
+
+test("FR-004: under a `make ci` contract, `make ci` runs in the preflight and again after the session", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const asked: string[][] = [];
+  const runner: Runner = {
+    ...createProcessRunner({ repoDir: dir }),
+    runGate: recordingGate(asked),
+    runSession: fakeWritingSession(dir, specId),
+  };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+    gate: MAKE_CI_CONTRACT,
+  });
+
+  expect(result.outcome).toBe("passed");
+
+  // Two full sweeps, plus the bracket's own compile and index regeneration
+  // between them (016 D-8), which are not gate commands.
+  const suite = gateSuiteFor(MAKE_CI_CONTRACT).map((cmd) => cmd.join(" "));
+  const sweeps = asked
+    .map((cmd) => cmd.join(" "))
+    .filter((cmd) => cmd === "make ci" || cmd.startsWith("spec-spine"));
+  expect(sweeps.slice(0, suite.length)).toEqual(suite);
+  // The preflight's sweep and the post-session evidence both ran it.
+  expect(asked.filter((cmd) => cmd.join(" ") === "make ci").length).toBe(2);
+  expect(result.evidence.gates.map((g) => g.cmd.join(" "))).toEqual(suite);
+
+  journal.close();
+  decisionsChain.close();
+});
+
+test("FR-004: the same fixture under a legacy empty contract runs exactly the spec-spine floor", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const asked: string[][] = [];
+  const runner: Runner = {
+    ...createProcessRunner({ repoDir: dir }),
+    runGate: recordingGate(asked),
+    runSession: fakeWritingSession(dir, specId),
+  };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+    gate: LEGACY_GATE_CONTRACT,
+  });
+
+  expect(result.outcome).toBe("passed");
+  // The fixture repo does carry a tsconfig.json, and 016 D-10 would have run
+  // the Bun pair against it. 041 B-3 does not: what a target is judged by is
+  // what its chain says, and a chain that says nothing earns the floor.
+  expect(result.evidence.gates.map((g) => g.cmd.join(" "))).toEqual(GATE_COMMANDS.map((cmd) => cmd.join(" ")));
+  expect(asked.some((cmd) => cmd[0] === "bun")).toBe(false);
+
+  journal.close();
+  decisionsChain.close();
+});
+
+test("FR-004: a red contract command at the base branch refuses the stage by name", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const runner: Runner = {
+    ...createProcessRunner({ repoDir: dir }),
+    runGate: (cmd) =>
+      cmd[0] === "make"
+        ? { exitCode: 1, stdoutTail: "", stderrTail: "make: *** No rule to make target `ci'" }
+        : { exitCode: 0, stdoutTail: "", stderrTail: "" },
+    runSession: async () => {
+      throw new Error("no session may be driven when the gate is red at the base commit");
+    },
+  };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+    gate: MAKE_CI_CONTRACT,
+  });
+
+  // D-3's safety net: a probe that guessed wrong surfaces as a named refusal
+  // with the failing command in it, before anything is driven.
+  expect(result.outcome).toBe("refused");
+  expect(result.evidence.refusal?.kind).toBe("gate-red-at-base");
+  expect(result.evidence.refusal?.message).toContain("make ci");
+
+  journal.close();
+  decisionsChain.close();
+});
+
+test("FR-004: the build prompt promises the session the project's suite, floor included", () => {
+  const prompt = buildPrompt({
+    specId: "900-x",
+    specBody: "# spec body",
+    backlogStep: "1. step",
+    decisions: { included: [], overflowCount: 0 },
+    dropboxDir: "/tmp/dropbox",
+    gateCommands: gateSuiteFor(MAKE_CI_CONTRACT),
+  });
+  for (const cmd of gateSuiteFor(MAKE_CI_CONTRACT)) expect(prompt).toContain(cmd.join(" "));
+  expect(prompt).not.toContain("bun run typecheck");
 });
 
 // --- AC-2: full fixture flow --------------------------------------------------

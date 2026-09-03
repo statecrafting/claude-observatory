@@ -5,6 +5,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { DEFAULT_SESSION_MODELS, type SessionModels } from "./models";
 import type { ProfileSource } from "./profile";
+import type { GateBinding } from "./gate-contract";
+import { LEGACY_GATE_CONTRACT, type GateContract } from "./gate-contract";
 import { openJournal, verifyChain, appendIntent, type JsonValue } from "./journal";
 import { createRun, createSpecExec, createStageExec, transition } from "./state";
 import type { DagReader } from "./dag";
@@ -253,6 +255,11 @@ interface MakeDepsParams {
   // 040 B-1: the project's profile, which callStage reads for the model pair.
   // Absent resolves to the default pair, which is how every test above spawns.
   readonly profile?: ProfileSource;
+  // 041 B-4, B-8: the project's gate contract, and the one write that gives a
+  // pre-041 chain one. Absent is the legacy fold and a no-op migration, which
+  // is how every test above is driven.
+  readonly gate?: GateBinding;
+  readonly migrateGateContract?: () => void;
 }
 
 // Real clock and real (small-chunk) sleep by default: most tests exercise
@@ -290,6 +297,8 @@ function makeDeps(p: MakeDepsParams): DaemonDeps {
     killLiveSession: p.killLiveSession,
     ceiling: p.ceiling,
     profile: p.profile,
+    gate: p.gate,
+    migrateGateContract: p.migrateGateContract,
   };
 }
 
@@ -1963,6 +1972,161 @@ test("040 B-4: a project's pair overrides the default at the spawn, read per cal
   pair = undefined;
   const defaults = await recordStageModels(() => ({ mode: "bypass" }));
   expect(defaults.build).toBe(DEFAULT_SESSION_MODELS.strong);
+});
+
+// --- spec 041: the gate contract a stage is judged under --------------------
+
+test("041 B-8: the migration runs before any stage of the run is scheduled", async () => {
+  const dataDir = freshDir("gate-migrate-data");
+  const repoDir = freshDir("gate-migrate-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+  const order: string[] = [];
+
+  const stageFns: DaemonStageFns = {
+    build: async (options) => {
+      order.push("build");
+      return buildResult(options.specId, "passed");
+    },
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const daemon = new Daemon(
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns,
+      migrateGateContract: () => order.push("migrate"),
+    })
+  );
+  await daemon.start();
+  await daemon.join();
+  await daemon.shutdown();
+
+  expect(order[0]).toBe("migrate");
+  expect(order).toContain("build");
+});
+
+test("041 B-8: a migration that throws is journaled, never fatal to the run", async () => {
+  const dataDir = freshDir("gate-migrate-fail-data");
+  const repoDir = freshDir("gate-migrate-fail-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+
+  const stageFns: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const daemon = new Daemon(
+    makeDeps({
+      dataDir,
+      repoDir,
+      dagReader,
+      stageFns,
+      migrateGateContract: () => {
+        throw new Error("the registry chain is held by another writer");
+      },
+    })
+  );
+  await daemon.start();
+  await daemon.join();
+  expect(daemon.runStatus).toBe("completed");
+  await daemon.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const failed = journal.fold().byKind["project.gate.migration-failed"] ?? [];
+    expect(failed.length).toBe(1);
+    expect((failed[0]!.payload as { detail: string }).detail).toContain("another writer");
+    expect(verifyChain(dataDir).ok).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+test("041 B-4, B-5: build and shepherd are handed the contract, and it is journaled with the stage", async () => {
+  const dataDir = freshDir("gate-thread-data");
+  const repoDir = freshDir("gate-thread-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+  const contract: GateContract = { commands: [["make", "ci"]], source: "cli", rule: null };
+  const seen: Record<string, unknown> = {};
+
+  const stageFns: DaemonStageFns = {
+    build: async (options) => {
+      seen.build = options.gate;
+      return buildResult(options.specId, "passed");
+    },
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => {
+      seen.shepherd = options.gate;
+      return shepherdResult(options.specId, "passed", `${options.specId}-merge`);
+    },
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const daemon = new Daemon(makeDeps({ dataDir, repoDir, dagReader, stageFns, gate: () => contract }));
+  await daemon.start();
+  await daemon.join();
+  await daemon.shutdown();
+
+  // The seam itself travels, so the stage reads the contract when it runs.
+  expect(typeof seen.build).toBe("function");
+  expect(typeof seen.shepherd).toBe("function");
+
+  const journal = openJournal(dataDir);
+  try {
+    const records = journal.fold().byKind["stage.gate.contract"] ?? [];
+    // One per gate-bearing stage attempt, and no more: ship and verify are
+    // judged by neither.
+    expect(records.map((r) => (r.payload as { stage: string }).stage)).toEqual(["build", "shepherd"]);
+    expect(records[0]!.payload).toMatchObject({
+      specId: "900-fixture",
+      stage: "build",
+      attempt: 1,
+      commands: [["make", "ci"]],
+      source: "cli",
+      rule: null,
+      legacy: false,
+    });
+    expect(verifyChain(dataDir).ok).toBe(true);
+  } finally {
+    journal.close();
+  }
+});
+
+test("041 B-3: a daemon with no contract journals the legacy fold rather than inventing one", async () => {
+  const dataDir = freshDir("gate-legacy-data");
+  const repoDir = freshDir("gate-legacy-repo");
+  const dagReader = fixtureDagReader({ "900-fixture": {} });
+
+  const stageFns: DaemonStageFns = {
+    build: async (options) => buildResult(options.specId, "passed"),
+    ship: async (options) => shipResult(options.specId, "passed"),
+    shepherd: async (options) => shepherdResult(options.specId, "passed", `${options.specId}-merge`),
+    verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
+  };
+
+  const daemon = new Daemon(makeDeps({ dataDir, repoDir, dagReader, stageFns }));
+  await daemon.start();
+  await daemon.join();
+  await daemon.shutdown();
+
+  const journal = openJournal(dataDir);
+  try {
+    const records = journal.fold().byKind["stage.gate.contract"] ?? [];
+    expect(records.length).toBe(2);
+    expect(records[0]!.payload).toMatchObject({
+      commands: [],
+      source: LEGACY_GATE_CONTRACT.source,
+      legacy: true,
+    });
+  } finally {
+    journal.close();
+  }
 });
 
 // 016 D-13: the retry budget is for a flaky or partial failure, not a

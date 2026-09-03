@@ -29,6 +29,8 @@ import { openJournal, verifyChain } from "./journal";
 import type { HoldbackScore } from "./adopt/holdback";
 import type { ExecutionProfile, RecordedProfile } from "./profile";
 import { DEFAULT_REGISTRATION_PROFILE, LEGACY_BYPASS_PROFILE, parseProfile, profilePayload } from "./profile";
+import type { GateContract, RecordedGateContract } from "./gate-contract";
+import { LEGACY_GATE_CONTRACT, gatePayload, parseGateContract, probeGateContract, sameGateCommands } from "./gate-contract";
 import type { CostCeiling } from "./budget";
 import { ceilingPayload, parseCeiling } from "./budget";
 
@@ -92,6 +94,12 @@ export interface Project {
   // no ceiling, and that project is driven exactly as it was before ceilings
   // existed, so no default is invented for it here.
   readonly ceiling: CostCeiling | null;
+  // The language gate this project's stages are judged by after the universal
+  // spec-spine floor (spec 041 B-3), folded exactly as `profile` is. Never
+  // absent: a chain with no gate record folds to the empty contract flagged
+  // legacy, which is honestly weaker than 016 D-10's live probe and is what
+  // B-8's migration exists to replace.
+  readonly gate: RecordedGateContract;
 }
 
 // Keyed by name, in registration order (a project re-registered after removal
@@ -118,6 +126,11 @@ export const PROJECT_KINDS = {
   removed: "project.removed",
   profileSet: "project.profile.set",
   ceilingSet: "project.ceiling.set",
+  // 041 B-2: the language gate is registry state on the same reasoning, so it
+  // arrives as an eighth appended kind: probed at registration, re-probed at
+  // requalification, overridable by an operator, and migrated onto a pre-041
+  // chain by B-8 rather than inferred by the fold.
+  gateSet: "project.gate.set",
 } as const;
 
 // The projects chain lives in the daemon home: projects.jsonl plus its own
@@ -275,6 +288,10 @@ export function foldProjects(records: readonly JournalRecord[]): ProjectsSnapsho
           // 033 B-1: likewise for the ceiling, except that its absence needs no
           // legacy flag. No ceiling is a complete, current answer.
           ceiling: null,
+          // 041 B-3: and likewise for the gate, which does need the flag. A
+          // registration read on its own has no language gate, and saying so
+          // is different from saying it has none to run.
+          gate: LEGACY_GATE_CONTRACT,
         });
         break;
       }
@@ -308,6 +325,15 @@ export function foldProjects(records: readonly JournalRecord[]): ProjectsSnapsho
         const name = asString(o, "name", kind);
         const current = projects.get(name);
         if (current) projects.set(name, { ...current, ceiling: parseCeiling(o.ceiling, kind) });
+        break;
+      }
+      case PROJECT_KINDS.gateSet: {
+        const o = asObject(record.payload, kind);
+        const name = asString(o, "name", kind);
+        const current = projects.get(name);
+        if (current) {
+          projects.set(name, { ...current, gate: { ...parseGateContract(o, kind), legacy: false } });
+        }
         break;
       }
       case PROJECT_KINDS.removed: {
@@ -351,6 +377,11 @@ export interface RegisterProjectParams {
   // D-1). Recorded as its own record beside the registration, so `legacy`
   // can only ever describe a chain written before spec 032 existed (B-2).
   readonly profile?: ExecutionProfile;
+  // The language gate this target is judged by (041 B-2), defaulting to the
+  // read-only probe of the target itself. Recorded as its own record beside
+  // the registration, on the same reasoning the profile is, so `legacy` can
+  // only ever describe a chain written before spec 041 existed.
+  readonly gate?: GateContract;
 }
 
 export interface SetProjectArmedParams {
@@ -365,6 +396,16 @@ export interface SetProjectProfileParams {
   readonly name: string;
   readonly profile: ExecutionProfile;
   readonly source: ProjectSource;
+}
+
+// 041 B-7: the whole contract travels, never a patch. `gate.source` is who
+// asked (an operator through the CLI or the API, or the probe itself at
+// registration, requalification, or B-8's migration), so this needs no second
+// source of its own.
+export interface SetProjectGateParams {
+  readonly chain: JournalHandle;
+  readonly name: string;
+  readonly gate: GateContract;
 }
 
 export interface SetProjectCeilingParams {
@@ -442,6 +483,15 @@ export function registerProject(params: RegisterProjectParams): ProjectMutation 
     profile: profilePayload(params.profile ?? DEFAULT_REGISTRATION_PROFILE),
     source: params.source,
   });
+  // 041 B-2: the gate is probed here, at write time, and appended as its own
+  // record for the same reason the posture is. Probing inside this function
+  // rather than at each caller is what makes every registration path (the
+  // API, the CLI through it, and 026 D-3's bootstrap of the checkout the
+  // daemon was pointed at) produce a real contract with no wiring, which is
+  // the difference between "nothing to run" and "never asked". The probe is
+  // read-only and tolerates a target that does not exist yet, which is a
+  // legal registration (it qualifies as unqualified).
+  params.chain.append(PROJECT_KINDS.gateSet, { name, ...gatePayload(params.gate ?? probeGateContract(repoDir)) });
   // The registration record is the mutation's answer; the posture it settled
   // on travels on the returned project, which is what every surface renders.
   return mutationOf(params.chain, record, name);
@@ -459,6 +509,35 @@ export function setProjectProfile(params: SetProjectProfileParams): ProjectMutat
     source: params.source,
   });
   return mutationOf(params.chain, record, params.name);
+}
+
+// Sets the command list this project's stages are judged by after the
+// universal governance floor (041 B-7). Appended even when the contract is
+// unchanged, exactly as arm and disarm are, with one exception that is not an
+// exception at all: the probe's own re-derivation at requalification appends
+// only on a difference (B-2), because nobody asked for it.
+//
+// An override that drops a command the probe found is allowed and journaled.
+// The orchestrator records the choice; it does not second-guess it.
+export function setProjectGate(params: SetProjectGateParams): ProjectMutation {
+  requireLive(params.chain, params.name);
+  const record = params.chain.append(PROJECT_KINDS.gateSet, { name: params.name, ...gatePayload(params.gate) });
+  return mutationOf(params.chain, record, params.name);
+}
+
+// 041 B-8: the migration. The first time the daemon services a project whose
+// chain holds no gate record, the same B-2 probe runs against that project's
+// tree and its verdict is appended, before any stage of that project's run is
+// scheduled. Three properties make this a window that closes itself rather
+// than a backlog item: the probe runs at write time, so the fold stays a pure
+// function of the chain (D-2); the record's own existence is the idempotence
+// guard, so it happens once per project and never again; and no operator
+// action is required. Returns null when there was nothing to migrate, which
+// is the ordinary answer on every service after the first.
+export function migrateProjectGate(chain: JournalHandle, name: string): ProjectMutation | null {
+  const project = projectsFromChain(chain.fold()).get(name);
+  if (project === undefined || !project.gate.legacy) return null;
+  return setProjectGate({ chain, name, gate: probeGateContract(project.repoDir) });
 }
 
 // Sets (or, with a null ceiling, clears) the spend limits every run against
@@ -486,12 +565,24 @@ export function setProjectArmed(params: SetProjectArmedParams): ProjectMutation 
 }
 
 export function requalifyProject(params: RequalifyProjectParams): ProjectMutation {
-  requireLive(params.chain, params.name);
+  const before = requireLive(params.chain, params.name);
   const record = params.chain.append(PROJECT_KINDS.requalified, {
     name: params.name,
     qualification: qualificationPayload(params.qualification),
     source: params.source,
   });
+  // 041 B-2: requalification re-runs the gate probe and appends a new record
+  // only when the derived commands differ from the current fold. A target
+  // that grew a Makefile since it was registered is now judged by it; one
+  // that has not changed adds no record, so the chain does not accumulate a
+  // restatement of itself on every requalify. An operator's B-7 override is
+  // not exempt from this: a requalify is a fresh reading of the target, and
+  // a probe that disagrees with the override says so in a record the operator
+  // can see and correct.
+  const gate = probeGateContract(before.repoDir);
+  if (!sameGateCommands(gate, before.gate)) {
+    params.chain.append(PROJECT_KINDS.gateSet, { name: params.name, ...gatePayload(gate) });
+  }
   return mutationOf(params.chain, record, params.name);
 }
 

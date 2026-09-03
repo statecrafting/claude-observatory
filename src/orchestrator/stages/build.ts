@@ -21,6 +21,13 @@ import type { JournalHandle, JsonValue } from "../journal";
 import { runSession as driveClaudeSession, type SessionResult } from "../session";
 import { resolveProfileSource, type ProfileSource } from "../profile";
 import {
+  GATE_COMMANDS,
+  gateSuiteFor,
+  resolveGateBinding,
+  type AnyGateContract,
+  type GateBinding,
+} from "../gate-contract";
+import {
   decisionRecordsFromChain,
   decisionsFor,
   sealDropbox,
@@ -215,31 +222,20 @@ export type ReadinessCheck = (specId: string) => boolean;
 
 // --- gate commands (B-5, reused for the B-1 "gate green at base" check) ----
 
-export const GATE_COMMANDS: readonly (readonly string[])[] = [
-  ["spec-spine", "compile"],
-  ["spec-spine", "index", "check"],
-  ["spec-spine", "lint", "--fail-on-warn"],
-  ["spec-spine", "couple", "--base", "origin/main", "--head", "HEAD"],
-  ["bun", "run", "typecheck"],
-  ["bun", "test"],
-];
-
-// D-10: the four spec-spine commands are the universal governance gate; the
-// two bun commands are this repo's Bun + TypeScript conventions and run only
-// where a root tsconfig.json says the target shares them. Found live on the
-// first driven family-repo build (tenant-tail, a Rust workspace): "bun run
-// typecheck" exited 1 at a clean base and the preflight refused a target
-// whose language verification lives in its own CI, which shepherd (018)
-// already watches. The probe is the Runner's own readFile, so fixtures and
-// production answer it the same way.
-export function gateCommandsFor(runner: Runner): readonly (readonly string[])[] {
-  try {
-    runner.readFile("tsconfig.json");
-    return GATE_COMMANDS;
-  } catch {
-    return GATE_COMMANDS.filter((cmd) => cmd[0] === "spec-spine");
-  }
-}
+// 041 B-4 supersedes 016 D-10 here. The floor itself is unchanged and stays
+// 016's four spec-spine commands; it simply lives in gate-contract.ts now,
+// because that is where the one derivation that consumes it lives, and it is
+// re-exported from this module so every 016-era caller keeps reading it where
+// 016 put it.
+//
+// What is gone is 016 D-10's per-target derivation. It answered "which
+// language gate does this target run" by probing for a root tsconfig.json on
+// every stage run, which made a Rust workspace's post-session verdict
+// "governance green" and said nothing about whether the crate compiled. The
+// answer is now the owning project's journaled contract (041 B-3), derived
+// into a suite by gateSuiteFor(), and the two Bun commands 016 kept here
+// reach this repo's own suite through this repo's own contract.
+export { GATE_COMMANDS };
 
 // The bracket's index REGENERATION (D-8): distinct from GATE_COMMANDS[1],
 // which only checks staleness. The gate list stays read-only; only the
@@ -251,8 +247,8 @@ export interface GateEvidence extends GateResult {
   readonly cmd: readonly string[];
 }
 
-function runGateSuite(runner: Runner): GateEvidence[] {
-  return gateCommandsFor(runner).map((cmd) => ({ cmd, ...runner.runGate(cmd) }));
+function runGateSuite(runner: Runner, gate: AnyGateContract): GateEvidence[] {
+  return gateSuiteFor(gate).map((cmd) => ({ cmd, ...runner.runGate(cmd) }));
 }
 
 // D-13: whether two gate sweeps are the same answer, tails included. The
@@ -276,7 +272,8 @@ function preflightRefusal(
   runner: Runner,
   specId: string,
   defaultBranch: string,
-  isSpecReady: ReadinessCheck
+  isSpecReady: ReadinessCheck,
+  gate: AnyGateContract
 ): Refusal | null {
   if (!runner.statusClean()) {
     return { kind: "dirty-tree", message: "the target repo's working tree is not clean; refusing to start" };
@@ -310,7 +307,7 @@ function preflightRefusal(
     }
   }
 
-  const gates = runGateSuite(runner);
+  const gates = runGateSuite(runner, gate);
   const failing = gates.find((g) => g.exitCode !== 0);
   if (failing) {
     return {
@@ -427,8 +424,9 @@ export interface BuildPromptParams {
   readonly backlogStep: string;
   readonly decisions: DecisionsForResult;
   readonly dropboxDir: string;
-  // D-10: the target's own gate program, so the prompt never promises the
-  // session a command the evaluation will not run. Defaults to the full list.
+  // 041 B-4 (016 D-10's intent, now contract-derived): the target's own gate
+  // suite, so the prompt never promises the session a command the evaluation
+  // will not run. Defaults to the governance floor alone.
   readonly gateCommands?: readonly (readonly string[])[];
 }
 
@@ -537,8 +535,8 @@ interface Completion {
   readonly passing: boolean;
 }
 
-function evaluateCompletion(runner: Runner, specPath: string): Completion {
-  const gates = runGateSuite(runner);
+function evaluateCompletion(runner: Runner, specPath: string, gate: AnyGateContract): Completion {
+  const gates = runGateSuite(runner, gate);
   const allGreen = gates.every((g) => g.exitCode === 0);
   const frontmatterComplete = readImplementationStatus(runner.readFile(specPath)) === "complete";
   return { gates, frontmatterComplete, passing: allGreen && frontmatterComplete };
@@ -642,17 +640,26 @@ export interface RunBuildStageOptions {
   readonly deadlineMs?: number;
   readonly maxTurns?: number;
   readonly model?: string;
+  // 041 B-4: the owning project's gate contract, or a late-bound read of it.
+  // Absent is 041 B-3's legacy fold, which runs the spec-spine floor and
+  // nothing else, and is what a fixture world that never registered a project
+  // is honestly judged by.
+  readonly gate?: GateBinding;
 }
 
 export async function runBuildStage(options: RunBuildStageOptions): Promise<BuildResult> {
   const { runner, specId, journal, decisionsChain, dropboxDir, knownSpecIds, isSpecReady } = options;
   const defaultBranch = options.defaultBranch ?? DEFAULT_BASE_BRANCH;
+  // Resolved once per stage run rather than per gate sweep: a stage must be
+  // judged at the end by the same list it was preflighted against, or the
+  // "gate green at base" evidence is about a different gate than the verdict.
+  const gate = resolveGateBinding(options.gate);
   const timeoutMs = options.deadlineMs ?? DEFAULT_BUILD_DEADLINE_MS;
   const maxTurns = options.maxTurns ?? DEFAULT_BUILD_MAX_TURNS;
   const specPath = `specs/${specId}/spec.md`;
 
   // --- B-1: preflight refusals ---
-  const refusal = preflightRefusal(runner, specId, defaultBranch, isSpecReady);
+  const refusal = preflightRefusal(runner, specId, defaultBranch, isSpecReady, gate);
   if (refusal) {
     const payload: Record<string, JsonValue> = { specId, kind: refusal.kind, message: refusal.message };
     journal.append("stage.build.refused", payload);
@@ -749,7 +756,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     backlogStep,
     decisions: decisionSelection,
     dropboxDir,
-    gateCommands: gateCommandsFor(runner),
+    gateCommands: gateSuiteFor(gate),
   });
 
   const promptPayload: Record<string, JsonValue> = {
@@ -769,7 +776,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
   let blocked = first.classification.kind === "hook-blocked";
   let completion: Completion = blocked
     ? { gates: [], frontmatterComplete: false, passing: false }
-    : evaluateCompletion(runner, specPath);
+    : evaluateCompletion(runner, specPath, gate);
 
   if (!blocked) {
     const gatePayload: Record<string, JsonValue> = {
@@ -801,7 +808,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
 
     blocked = second.classification.kind === "hook-blocked";
     if (!blocked) {
-      completion = evaluateCompletion(runner, specPath);
+      completion = evaluateCompletion(runner, specPath, gate);
       stalled = !completion.passing && runner.headSha() === beforeSha && sameGateAnswer(beforeGates, completion.gates);
       const gatePayload: Record<string, JsonValue> = {
         specId,

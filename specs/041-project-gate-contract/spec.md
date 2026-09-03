@@ -5,7 +5,7 @@ status: approved
 created: "2026-09-03"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: in-progress
+implementation: complete
 risk: medium
 depends_on:
   - "016-stage-build"
@@ -72,6 +72,12 @@ extends:
   - { spec: "028-cli-projects", unit: "src/commands/orchestrator.test.ts", nature: additive }
   - { spec: "029-ui-projects", unit: "web/test/fixtures.ts", nature: additive }
   - { spec: "029-ui-projects", unit: "web/test/store.test.tsx", nature: additive }
+  # Two colocated tests outside the list above construct a `Project` or count
+  # the records one registration appends, so the new fold field and the new
+  # record kind reach them the moment they exist. Declared here for the same
+  # reason the rest are: the edit belongs to this spec, not to theirs.
+  - { spec: "032-execution-profiles", unit: "src/orchestrator/profile.test.ts", nature: additive }
+  - { spec: "034-adoption-preflight", unit: "src/orchestrator/adopt/preflight.test.ts", nature: additive }
 references:
   - { unit: { kind: file, path: "docs/design/00-ecosystem-analysis.md" }, role: context }
 ---

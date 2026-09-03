@@ -71,6 +71,8 @@ import {
 import { killLiveSession, runSession } from "./session";
 import type { ProfileSource } from "./profile";
 import { resolveProfileSource } from "./profile";
+import type { AnyGateContract, GateBinding } from "./gate-contract";
+import { resolveGateBinding } from "./gate-contract";
 import { modelForStage } from "./models";
 import type {
   BuildResult,
@@ -254,6 +256,21 @@ export interface DaemonDeps {
   // pair: a fixture dep that never set a profile keeps working and still
   // spawns under an explicit model.
   readonly profile?: ProfileSource;
+  // 041 B-4: this project's gate contract, read at every stage boundary. A
+  // function rather than a value for the reason the profile is one: the
+  // scheduler builds a project's seams once and reuses them, and a gate an
+  // operator corrected after a `gate-red-at-base` refusal has to reach the
+  // next stage rather than the next daemon. Absent is 041 B-3's legacy fold,
+  // which is the spec-spine floor and nothing else.
+  readonly gate?: GateBinding;
+  // 041 B-8: append this project's missing gate record, probing its tree, if
+  // and only if its chain holds none. Called once at start(), before any
+  // stage of this run is scheduled; the record's existence is the idempotence
+  // guard, so calling it on every run costs one fold. A seam rather than a
+  // direct chain write because the projects chain has exactly one writer
+  // (026 B-6: the scheduler holds it), and a per-project run holds none of
+  // it. Absent is a no-op, which is what a fixture dep with no registry is.
+  readonly migrateGateContract?: () => void;
   // Defaults to process.pid; injectable so a test can exercise identity
   // logic without needing a second real OS process.
   readonly pid?: number;
@@ -324,6 +341,10 @@ export interface CreateProductionDaemonDepsParams {
   // 033 B-2: this project's spend limits, late-bound for the same reason the
   // profile is (see DaemonDeps.ceiling).
   readonly ceiling?: CeilingSource;
+  // 041 B-4 and B-8: this project's gate contract, and the one write that
+  // gives a pre-041 chain one (see DaemonDeps.gate, DaemonDeps.migrateGateContract).
+  readonly gate?: GateBinding;
+  readonly migrateGateContract?: () => void;
 }
 
 export function createProductionDaemonDeps(params: CreateProductionDaemonDepsParams): DaemonDeps {
@@ -335,6 +356,8 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
     profile,
     supervised: params.supervised,
     ceiling: params.ceiling,
+    gate: params.gate,
+    migrateGateContract: params.migrateGateContract,
     dagReader: createProcessDagReader(),
     runner,
     readCheckoutBranch: () => {
@@ -620,6 +643,17 @@ export class Daemon {
     }
     if (lock) {
       this.workJournal.append("daemon.lock.acquired", { pid: lock.self.pid, procStartMs: lock.self.procStartMs });
+    }
+
+    // 041 B-8: before anything of this run is scheduled, a project whose
+    // chain holds no gate record gets one, probed from its own tree. A
+    // failure here is reported and never fatal: a daemon that cannot write
+    // the migration still drives the project, under the legacy contract it
+    // already had, which is exactly today's behavior.
+    try {
+      this.deps.migrateGateContract?.();
+    } catch (err) {
+      this.workJournal.append("project.gate.migration-failed", { detail: (err as Error).message });
     }
 
     this.recover();
@@ -1532,6 +1566,7 @@ export class Daemon {
 
       let stageExec = { ...createStageExec(this.workJournal, specExec.id, stage, attempt), needsReconcile: false };
       stageExec = { ...transition(this.workJournal, stageExec, "running"), needsReconcile: false };
+      this.journalGateContract(stage, specExec.specId, attempt);
 
       // A stage implementation throwing is a failed attempt with the error
       // as evidence, never a dead daemon: the loop must outlive any single
@@ -1644,6 +1679,30 @@ export class Daemon {
     this.run = { ...transition(this.workJournal, this.run, "paused"), needsReconcile: false };
   }
 
+  // 041 B-5: what list this stage is about to be judged by, journaled beside
+  // the stage's own intent, before the stage runs. Each command's exit code
+  // and bounded output are journaled by the stage as they always were (016
+  // B-5); this is the record that makes "which list produced them" a journal
+  // fact rather than a rerun of today's probe against a tree that has moved.
+  //
+  // Its own record kind rather than a field on `stageexec.created`: that one
+  // is spec 013's state machine, whose fold is about status transitions, and
+  // widening it would put evidence inside a state entity. Only the two stages
+  // a gate suite exists for write it; ship and verify are judged by neither.
+  private journalGateContract(stage: Stage, specId: string, attempt: number): void {
+    if (stage !== "build" && stage !== "shepherd") return;
+    const gate: AnyGateContract = resolveGateBinding(this.deps.gate);
+    this.workJournal.append("stage.gate.contract", {
+      specId,
+      stage,
+      attempt,
+      commands: gate.commands.map((cmd) => [...cmd]),
+      source: gate.source,
+      rule: gate.rule,
+      legacy: "legacy" in gate ? gate.legacy : false,
+    });
+  }
+
   private async callStage(
     stage: Stage,
     specExec: FoldedSpecExec,
@@ -1669,6 +1728,10 @@ export class Daemon {
           knownSpecIds: new Set(snapshot.keys()),
           isSpecReady: this.makeReadinessCheck(snapshot, shipped, pinOf),
           defaultBranch: this.deps.defaultBranch,
+          // 041 B-4: the seam itself, not a resolved value, so the stage's
+          // preflight and its post-session evidence read the same contract at
+          // the moment they run.
+          gate: this.deps.gate,
         };
         const result = await this.deps.stageFns.build(options);
         return { stage, result };
@@ -1693,6 +1756,9 @@ export class Daemon {
           journal: this.workJournal,
           clock: { now: () => this.deps.clock.now(), sleep: (ms: number) => this.deps.sleep(ms) },
           defaultBranch: this.deps.defaultBranch,
+          // 041 B-4: the remediation prompt lists the project's gate, not
+          // this repo's.
+          gate: this.deps.gate,
         };
         const result = await this.deps.stageFns.shepherd(options);
         return { stage, result };
