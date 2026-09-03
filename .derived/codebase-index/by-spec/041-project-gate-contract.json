@@ -366,8 +366,8 @@
       }
     ],
     "specId": "041-project-gate-contract",
-    "specStatus": "draft"
+    "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "79aabbdfd1725518d5fa13adcff66cb2c876a3fac146e84bbc9f109da47bd71a"
+  "shardHash": "d8fa04a7eb4e7fd19f4dbb2ab33de96fc5a1ecfb0793a1981df38b636b02a70a"
 }

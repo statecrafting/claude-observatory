@@ -190,10 +190,10 @@
       "7. Resolved decisions"
     ],
     "specPath": "specs/041-project-gate-contract/spec.md",
-    "status": "draft",
+    "status": "approved",
     "summary": "The post-session gate a driven target is judged by is hardcoded to this repo's conventions: four spec-spine commands plus `bun run typecheck` and `bun test`, with the Bun pair dropped whenever the target has no root tsconfig.json (016 D-10). A Rust target therefore passes the build stage on governance alone; cargo correctness reaches the pipeline only through whatever the session ran for itself and through CI in the shepherd stage. With two Rust targets about to be armed (rahi, then aicortex and hqgit on top of it), that gap is a claim the orchestrator makes without evidence. This spec makes the language gate per-project registry state, like the execution profile: a journaled gate contract (an ordered command list run after the universal spec-spine four), folded from the projects chain, probed to a default at registration (Makefile `ci` target, root tsconfig.json, or governance-only), derived into the stage's gate suite by one pure function every stage uses, and displayed wherever the project is named.\n",
     "title": "Project gate contract: per-project language gates as registry state"
   },
-  "shardHash": "0b103792b5db4ec099addd433e862cfe40b6813c0cdf2ae9a6224030e0b6dd8f",
+  "shardHash": "617be000c4c8299a2dc44180ff84b29d0b71e0a54cb5d61d426f5b8ce8d21f42",
   "specVersion": "1.1.0"
 }

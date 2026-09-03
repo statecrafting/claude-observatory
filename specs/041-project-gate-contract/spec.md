@@ -1,7 +1,7 @@
 ---
 id: "041-project-gate-contract"
 title: "Project gate contract: per-project language gates as registry state"
-status: draft
+status: approved
 created: "2026-09-03"
 authors: ["Bartek Kus"]
 kind: feature
