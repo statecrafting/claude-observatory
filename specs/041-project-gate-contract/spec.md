@@ -5,7 +5,7 @@ status: approved
 created: "2026-09-03"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: pending
+implementation: in-progress
 risk: medium
 depends_on:
   - "016-stage-build"

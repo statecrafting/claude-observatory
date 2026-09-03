@@ -1,18 +1,18 @@
 {
   "diagnostics": {
-    "errors": [],
-    "warnings": [
+    "errors": [
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '041-project-gate-contract' file unit 'src/orchestrator/gate-contract.ts' does not exist",
         "path": "src/orchestrator/gate-contract.ts"
       },
       {
-        "code": "W-001",
+        "code": "I-004",
         "message": "spec '041-project-gate-contract' file unit 'src/orchestrator/gate-contract.test.ts' does not exist",
         "path": "src/orchestrator/gate-contract.test.ts"
       }
-    ]
+    ],
+    "warnings": []
   },
   "mapping": {
     "dependsOn": [
@@ -369,5 +369,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "3552594d2e51870653e7c812c0edf93504c55bb246cf44a2f647034c8e902109"
+  "shardHash": "adf1b261f513624e06cf74106ad2720de4165717d58484dc8e4c15cef681b194"
 }
