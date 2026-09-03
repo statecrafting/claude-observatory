@@ -19,6 +19,32 @@
         "path": "src/orchestrator/stages/build.test.ts"
       }
     ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "021-orchestrator-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "021-orchestrator-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "026-standby-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/standby.test.ts"
+        }
+      }
+    ],
     "id": "016-stage-build",
     "implementation": "complete",
     "kind": "stage",
@@ -38,6 +64,6 @@
     "summary": "The first pipeline stage: assemble the context a fresh session needs (the target spec verbatim, the backlog protocol, relevant decision-ledger entries, dependency pins), flip the spec to in-progress on a fresh feature branch, drive one session to implement exactly that spec's territory, and judge completion from evidence (gate commands green, spec acceptance criteria addressed, working tree state) rather than the session's own claim.\n",
     "title": "Build stage: implement one spec in one fresh session"
   },
-  "shardHash": "8fd46fdd8e81e1648ac535f38b9ce4609a1d679b81f66d1ebe90ea36b6beadf6",
+  "shardHash": "5e1f03e1b303ee6d860229cb003359486fcbe14225fcc424c369c245fc99d132",
   "specVersion": "1.1.0"
 }

@@ -255,6 +255,23 @@ function runGateSuite(runner: Runner): GateEvidence[] {
   return gateCommandsFor(runner).map((cmd) => ({ cmd, ...runner.runGate(cmd) }));
 }
 
+// D-13: whether two gate sweeps are the same answer, tails included. The
+// tails are what makes this a statement about the diagnostic rather than
+// just the shape of the failure: two different coupling violations both
+// exit 1 on the same command, and only one of them is the same wall.
+function sameGateAnswer(a: readonly GateEvidence[], b: readonly GateEvidence[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((g, i) => {
+    const h = b[i]!;
+    return (
+      g.cmd.join(" ") === h.cmd.join(" ") &&
+      g.exitCode === h.exitCode &&
+      g.stdoutTail === h.stdoutTail &&
+      g.stderrTail === h.stderrTail
+    );
+  });
+}
+
 function preflightRefusal(
   runner: Runner,
   specId: string,
@@ -399,9 +416,13 @@ function safeReadAgentsMd(runner: Runner): string {
 // template has no callers outside this stage, so a second file would only
 // add a coupling surface with nothing to couple to (see Resolved decisions).
 
-export const BUILD_PROMPT_VERSION = 1;
+// Bumped to 2 with D-11's typed drop-box contract: the version is journaled
+// with every use, so a prompt whose text changed under a frozen version
+// would make `stage.build.prompt` unable to answer which text a session saw.
+export const BUILD_PROMPT_VERSION = 2;
 
 export interface BuildPromptParams {
+  readonly specId: string;
   readonly specBody: string;
   readonly backlogStep: string;
   readonly decisions: DecisionsForResult;
@@ -412,7 +433,7 @@ export interface BuildPromptParams {
 }
 
 export function buildPrompt(params: BuildPromptParams): string {
-  const { specBody, backlogStep, decisions, dropboxDir } = params;
+  const { specId, specBody, backlogStep, decisions, dropboxDir } = params;
 
   const gateList = (params.gateCommands ?? GATE_COMMANDS).map((cmd) => `  - \`${cmd.join(" ")}\``).join("\n");
 
@@ -444,6 +465,25 @@ ${decisionLines}${overflowLine}
 
 ${gateList}
 
+## When the coupling gate fails on a path this spec does not own
+
+\`couple\` requires every changed path to have an authoring edit to a spec
+that owns it. If your implementation must touch a unit another spec owns,
+declare that in THIS spec's own frontmatter and recompile:
+
+  extends:
+    - { spec: "<the owning spec id>", unit: "<the path>", nature: additive }
+
+That is an authoring edit to the spec you are building, which is what the
+gate asks for, and it is permanent and self-documenting. Do NOT amend the
+other spec to match code you just wrote: that is the coherence guard, and
+it is forbidden. A \`Spec-Drift-Waiver:\` line is not available to you
+either; it is read only from a PR body, which does not exist yet.
+
+If the owning spec actually contradicts the change, \`extends\` is the wrong
+answer: stop, leave the branch inspectable, and report the contradiction
+for a human.
+
 ## Recording new decisions
 
 Where this spec is silent and you must choose, write one JSON file per
@@ -451,9 +491,33 @@ decision into the decision drop-box at:
 
   ${dropboxDir}
 
-Each file holds one DecisionRecord: {id, specId, scope, title, decision,
-rationale, alternatives?, supersedes?}. Do not append to the decision ledger
-directly; the orchestrator seals the drop-box after this session ends.
+Each file holds one DecisionRecord. The field types are exact and are
+validated; a record that fails validation is quarantined, never sealed, so
+it reaches neither the ledger nor any later session.
+
+  id            string, unique, conventionally "<specId>-d<n>"
+  specId        string, this spec's id
+  scope         ARRAY of strings, never a bare string: the spec ids and/or
+                repo path prefixes this decision touches
+  title         string
+  decision      string
+  rationale     string
+  alternatives  array of strings (optional)
+  supersedes    string, the id of the decision this one replaces (optional)
+
+No other fields are accepted, and no non-integer numbers anywhere. An
+optional field you are not using is left out entirely; writing it as null
+is accepted but says nothing. A complete example:
+
+  {"id": "${specId}-d1",
+   "specId": "${specId}",
+   "scope": ["${specId}", "src/some/territory/"],
+   "title": "one line naming the choice",
+   "decision": "what was chosen, in full",
+   "rationale": "why, and what it costs"}
+
+Do not append to the decision ledger directly; the orchestrator seals the
+drop-box after this session ends.
 
 ## House style
 
@@ -527,6 +591,10 @@ export interface BuildEvidence {
   readonly gates: readonly GateEvidence[];
   readonly frontmatterComplete: boolean | null;
   readonly decisions: SealDropboxResult | null;
+  // D-13: true when the remediation session left the branch head untouched
+  // and the gate answered identically, so another attempt would re-ask a
+  // question already answered twice. Null when no remediation session ran.
+  readonly stalled: boolean | null;
 }
 
 export interface BuildResult {
@@ -600,6 +668,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
         gates: [],
         frontmatterComplete: null,
         decisions: null,
+        stalled: null,
       },
     };
   }
@@ -656,6 +725,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
         gates: bracketEvidence,
         frontmatterComplete: false,
         decisions: null,
+        stalled: null,
       },
     };
   }
@@ -674,6 +744,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     budgetChars: DECISION_BUDGET_CHARS,
   });
   const promptBase = buildPrompt({
+    specId,
     specBody,
     backlogStep,
     decisions: decisionSelection,
@@ -710,7 +781,14 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     journal.append("stage.build.gate", gatePayload);
   }
 
+  // D-13: what the remediation session was given, and what it changed, so a
+  // stage that cannot move can say so instead of being retried blind.
+  let stalled: boolean | null = null;
+
   if (!blocked && !completion.passing) {
+    const beforeSha = runner.headSha();
+    const beforeGates = completion.gates;
+
     const secondPrompt = remediationPrompt(promptBase, completion);
     const second = await runner.runSession({
       prompt: secondPrompt,
@@ -724,6 +802,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     blocked = second.classification.kind === "hook-blocked";
     if (!blocked) {
       completion = evaluateCompletion(runner, specPath);
+      stalled = !completion.passing && runner.headSha() === beforeSha && sameGateAnswer(beforeGates, completion.gates);
       const gatePayload: Record<string, JsonValue> = {
         specId,
         round: 2,
@@ -750,6 +829,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     gates: completion.gates,
     frontmatterComplete: completion.frontmatterComplete,
     decisions: sealResult,
+    stalled,
   };
 
   const resultPayload: Record<string, JsonValue> = {
@@ -761,6 +841,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
     sessionIds: sessions.map((s) => s.sessionId),
     decisionsSealed: sealResult.sealed.map((d) => d.id),
     decisionsInvalid: sealResult.invalid.map((i) => i.file),
+    stalled,
   };
   journal.append("stage.build.result", resultPayload);
 

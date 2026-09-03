@@ -22,6 +22,14 @@ summary: >
 establishes:
   - "src/orchestrator/stages/build.ts"
   - "src/orchestrator/stages/build.test.ts"
+extends:
+  # D-13: the stall signal is produced here and consumed by the daemon's
+  # stage-retry loop, which is spec 021's unit. One predicate and one early
+  # pause, additive to the existing failure branch.
+  - { spec: "021-orchestrator-daemon", unit: "src/orchestrator/daemon.ts", nature: additive }
+  - { spec: "021-orchestrator-daemon", unit: "src/orchestrator/daemon.test.ts", nature: additive }
+  # The standby fixture builds a BuildEvidence, which gained the field.
+  - { spec: "026-standby-daemon", unit: "src/orchestrator/standby.test.ts", nature: additive }
 ---
 
 # 016: Build stage
@@ -195,3 +203,66 @@ per PR. The session prompts carry the computed program rather than the
 constant, so a session is never promised a command the evaluation will
 not run; the earlier family corpus (tenant-emit) never noticed because
 it was wholly adopted, never built.
+
+D-11 (2026-09-02, operator). B-3's drop-box instruction states the record's
+field types, not just its field names. The prompt named the shape as
+`{id, specId, scope, title, decision, rationale, alternatives?,
+supersedes?}` and left every type to be guessed; spec 020 B-1 defines
+`scope` as a list, and `validateDecisionRecord` enforces `string[]`. Found
+live on butler-ai: 25 of 25 decisions written across four sessions and two
+stages used `"scope": "reducer"`, every one was rejected, and the project's
+`decisions.jsonl` was still 0 bytes after a full spec had been built. The
+loss is silent to the session and compounding, because B-4's injection then
+has nothing to inject: a later session cannot read what an earlier one
+decided, and rediscovers the same wall at full session cost (four sessions
+and $17.44 spent re-deriving one unresolvable coupling violation that the
+first session had already recorded correctly). The prompt now gives the
+type of every field, states that `scope` is an array and never a bare
+string, says that a rejected record reaches neither the ledger nor a later
+session, and carries a complete copyable example built from the spec's own
+id, which is why `buildPrompt` now takes `specId`. `BUILD_PROMPT_VERSION`
+goes to 2 in the same change: the version is journaled with every use, so
+holding it at 1 across a changed template would leave
+`stage.build.prompt` unable to answer which text a session actually saw.
+
+D-12 (2026-09-02, operator). B-3's prompt tells the session which gate
+commands must exit 0 and never tells it how to satisfy the one that most
+often cannot be satisfied by writing code. `couple` requires every changed
+path to carry an authoring edit to an owning spec; when a spec's territory
+legitimately needs a change to a unit another spec owns, the corpus
+mechanism is an `extends:` entry in the frontmatter of the spec being
+built, which is an authoring edit to that spec and amends nobody else's.
+The prompt now says so, and says what the two forbidden or unavailable
+answers are: amending the owning spec is the coherence guard's own
+prohibition, and a `Spec-Drift-Waiver:` line is read only from a PR body,
+which does not exist during build. Found live on butler-ai, where spec 009
+needed a five-line `proptest` pin in the root `Cargo.toml` that spec 001
+section 3.1 positively requires, and the sessions correctly refused to
+amend 001, correctly ruled out a commit-message waiver by experiment, and
+then concluded that no branch-side fix existed. They were wrong, and the
+gap was this prompt: a single declared `extends` entry took `couple` from
+1 to 0 with no waiver and no amendment to any other spec. Four sessions and
+$17.44 were spent proving a wall that one line of prompt would have
+avoided. The prompt also states the case where `extends` is the wrong
+answer, so this never becomes a way to declare away a real contradiction:
+if the owning spec actually contradicts the change, the session stops and
+reports, exactly as before.
+
+D-13 (2026-09-02, operator). A stage that cannot move says so, instead of
+being retried blind. B-4 already bounds the work inside one attempt (one
+session, at most one remediation), but nothing carried that attempt's
+answer outward, so the daemon's retry budget spent a second full attempt
+whenever the first failed, whatever it failed on. When the remediation
+session leaves the branch head untouched and the gate answers identically,
+tails included, the stage has asked the same question twice and got the
+same answer against unchanged inputs; a third and fourth session cannot
+change it. `BuildEvidence.stalled` carries that judgment (null when no
+remediation session ran, so "not asked" is never read as "not stalled"),
+`stage.build.result` journals it, and the daemon pauses on it instead of
+retrying. The comparison includes the gate tails deliberately: two
+different coupling violations both exit 1 on the same command, and only
+one of them is the same wall. Found live on butler-ai, where attempt 2 of
+009's build spent $3.16 and two sessions re-deriving one coupling
+violation verbatim, and the remediation session had already reported that
+no branch-side fix existed. This narrows what the retry budget is for: a
+flaky or partial failure, not a deterministic one.

@@ -11,7 +11,7 @@
 // decisions.jsonl and its own anchor live alongside journal.jsonl in the
 // same directory without colliding files or a second implementation.
 import * as fs from "fs";
-import { join } from "path";
+import { extname, join } from "path";
 import type { FoldedState, JournalHandle, JsonValue } from "./journal";
 import { openJournal, sha256Hex, stableStringify } from "./journal";
 
@@ -150,10 +150,18 @@ export function validateDecisionRecord(raw: unknown, knownSpecIds: ReadonlySet<s
   if (typeof obj.title !== "string") return { ok: false, reason: `field "title" must be a string` };
   if (typeof obj.decision !== "string") return { ok: false, reason: `field "decision" must be a string` };
   if (typeof obj.rationale !== "string") return { ok: false, reason: `field "rationale" must be a string` };
-  if (obj.alternatives !== undefined && !isStringArray(obj.alternatives)) {
+  // D-7: an explicit null on an optional field reads as absent, not as a
+  // malformed value. JSON writers spell "no value" both ways, and FR-001's
+  // rejection classes do not include this one; rejecting it discarded three
+  // whole butler-ai decisions over an encoding choice that loses no meaning.
+  if (obj.alternatives !== null && obj.alternatives !== undefined && !isStringArray(obj.alternatives)) {
     return { ok: false, reason: `field "alternatives" must be an array of strings` };
   }
-  if (obj.supersedes !== undefined && (typeof obj.supersedes !== "string" || obj.supersedes.length === 0)) {
+  if (
+    obj.supersedes !== null &&
+    obj.supersedes !== undefined &&
+    (typeof obj.supersedes !== "string" || obj.supersedes.length === 0)
+  ) {
     return { ok: false, reason: `field "supersedes" must be a non-empty string` };
   }
 
@@ -173,8 +181,11 @@ export function validateDecisionRecord(raw: unknown, knownSpecIds: ReadonlySet<s
     title: obj.title,
     decision: obj.decision,
     rationale: obj.rationale,
-    ...(obj.alternatives !== undefined ? { alternatives: obj.alternatives as string[] } : {}),
-    ...(obj.supersedes !== undefined ? { supersedes: obj.supersedes as string } : {}),
+    // D-7: null is absent, so it must not survive into the record either;
+    // carried through, it would put a null in the canonical payload the
+    // content hash is taken over.
+    ...(obj.alternatives != null ? { alternatives: obj.alternatives as string[] } : {}),
+    ...(obj.supersedes != null ? { supersedes: obj.supersedes as string } : {}),
   };
   return { ok: true, record };
 }
@@ -183,6 +194,11 @@ export function validateDecisionRecord(raw: unknown, knownSpecIds: ReadonlySet<s
 
 const CHAIN_KIND = "decision.sealed";
 const OUTCOME_KIND = "decision.sealed.outcome";
+
+// D-6: where a rejected drop-box file is preserved. A subdirectory of the
+// drop-box itself, so the operator finds it next to the records it failed
+// to join, and so nothing needs a second configured path.
+export const QUARANTINE_DIRNAME = "invalid";
 
 // Opens the decision chain: decisions.jsonl + its own anchor, in `dir`,
 // through journal.ts's parameterized opener (basename "decisions"). Reused
@@ -257,11 +273,20 @@ export interface SealDropboxResult {
 // Validates every *.json file in the drop-box against the schema, seals
 // valid ones into the chain, and journals a summary of the sweep into the
 // work journal handle passed in (not the decisions chain itself), kind
-// "decision.sealed.outcome". Invalid files are preserved in place; a valid
-// file is unlinked only after its chain append has fsynced (append() is
-// fully synchronous, so by the time it returns the record is durable) or,
-// on a re-run after a crash between a prior seal and unlink, once its
-// content hash is found already sealed (dedup, FR-003).
+// "decision.sealed.outcome". A valid file is unlinked only after its chain
+// append has fsynced (append() is fully synchronous, so by the time it
+// returns the record is durable) or, on a re-run after a crash between a
+// prior seal and unlink, once its content hash is found already sealed
+// (dedup, FR-003).
+//
+// D-6: an invalid file is preserved, as B-3 requires, but preserved in the
+// quarantine subdirectory rather than in place. Left in place it is re-read,
+// re-rejected and re-reported by every later sweep in the same project,
+// without bound and with no path to resolution: found live on butler-ai,
+// where eight files rejected on 2026-09-01 were still being re-reported in
+// every build two days later. Quarantine keeps the session's work (the
+// operator can repair a file and move it back) while making the sweep
+// report only what this sweep found.
 export function sealDropbox(params: SealDropboxParams): SealDropboxResult {
   const { dropboxDir, chain, knownSpecIds, journal } = params;
 
@@ -274,6 +299,28 @@ export function sealDropbox(params: SealDropboxParams): SealDropboxResult {
         .sort()
     : [];
 
+  // Created lazily, so a project that never writes a bad record never grows
+  // an empty directory.
+  const quarantineDir = join(dropboxDir, QUARANTINE_DIRNAME);
+  // The drop-box is one directory shared by every spec and every attempt,
+  // and the prompt fixes the record id, not the filename, so two sweeps can
+  // quarantine the same basename. A bare rename would replace the earlier
+  // file silently, which is the one thing D-6 undertakes not to do, so a
+  // taken name takes the first free numeric suffix instead.
+  const quarantinePathFor = (file: string): string => {
+    const ext = extname(file);
+    const stem = file.slice(0, file.length - ext.length);
+    let candidate = join(quarantineDir, file);
+    for (let n = 2; fs.existsSync(candidate); n++) {
+      candidate = join(quarantineDir, `${stem}-${n}${ext}`);
+    }
+    return candidate;
+  };
+  const quarantine = (file: string): void => {
+    fs.mkdirSync(quarantineDir, { recursive: true });
+    fs.renameSync(join(dropboxDir, file), quarantinePathFor(file));
+  };
+
   const sealed: DecisionRecord[] = [];
   const invalid: SealDropboxInvalid[] = [];
 
@@ -284,12 +331,14 @@ export function sealDropbox(params: SealDropboxParams): SealDropboxResult {
       parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
     } catch (err) {
       invalid.push({ file, reason: `malformed JSON: ${(err as Error).message}` });
+      quarantine(file);
       continue;
     }
 
     const result = validateDecisionRecord(parsed, knownSpecIds);
     if (!result.ok) {
       invalid.push({ file, reason: result.reason });
+      quarantine(file);
       continue;
     }
 
@@ -304,10 +353,14 @@ export function sealDropbox(params: SealDropboxParams): SealDropboxResult {
     sealed.push(result.record);
   }
 
-  journal.append(OUTCOME_KIND, {
+  const outcome: Record<string, JsonValue> = {
     sealedIds: sealed.map((r) => r.id),
     invalidFiles: invalid.map((i) => ({ file: i.file, reason: i.reason })),
-  });
+  };
+  // Named only when it exists, so the record points an operator at the files
+  // without asserting a directory that was never created.
+  if (invalid.length > 0) outcome.quarantineDir = quarantineDir;
+  journal.append(OUTCOME_KIND, outcome);
 
   return { sealed, invalid };
 }

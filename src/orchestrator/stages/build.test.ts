@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import { openJournal } from "../journal";
-import { openDecisionsChain } from "../decisions";
+import { openDecisionsChain, validateDecisionRecord } from "../decisions";
 import type { SessionResult } from "../session";
 import {
   runBuildStage,
@@ -195,6 +195,7 @@ test("extractBacklogStep falls back to a built-in summary when AGENTS.md has no 
 
 test("buildPrompt embeds the spec body, backlog step, gate commands, drop-box path, and the house style rules", () => {
   const prompt = buildPrompt({
+    specId: "900-x",
     specBody: "SPEC BODY MARKER",
     backlogStep: "BACKLOG STEP MARKER",
     decisions: { included: [], overflowCount: 0 },
@@ -215,6 +216,7 @@ test("buildPrompt embeds the spec body, backlog step, gate commands, drop-box pa
 
 test("buildPrompt lists included decisions and states the overflow count, never silently dropping either", () => {
   const prompt = buildPrompt({
+    specId: "900-x",
     specBody: "body",
     backlogStep: "step",
     decisions: {
@@ -256,6 +258,7 @@ test("gateCommandsFor: a target without tsconfig.json runs only the spec-spine f
 
 test("the build prompt lists the target's own gate program, not the constant (D-10)", () => {
   const prompt = buildPrompt({
+    specId: "900-x",
     specBody: "# spec body",
     backlogStep: "1. step",
     decisions: { included: [], overflowCount: 0 },
@@ -752,6 +755,174 @@ test("B-1 normalization: a clean tree on a stale feature branch checks out an up
   // advanced origin commit is in its history.
   const mergeBase = gitOut(dir, ["merge-base", specId, originHead]);
   expect(mergeBase).toBe(originHead);
+
+  journal.close();
+  decisionsChain.close();
+});
+
+// D-11: the drop-box contract in the prompt is typed. Untyped, every session
+// on butler-ai guessed `scope` as a bare string and all 25 of its decisions
+// were rejected, leaving the project's ledger empty after a full spec build.
+test("buildPrompt states the drop-box field types and gives a copyable example with an array scope (D-11)", () => {
+  const prompt = buildPrompt({
+    specId: "016-stage-build",
+    specBody: "body",
+    backlogStep: "step",
+    decisions: { included: [], overflowCount: 0 },
+    dropboxDir: "/tmp/dropbox",
+  });
+
+  // The field that was actually getting guessed wrong, named as an array.
+  expect(prompt).toContain("ARRAY of strings, never a bare string");
+  // The example is built from this spec's own id, so it is copyable as-is.
+  expect(prompt).toContain('"specId": "016-stage-build"');
+  expect(prompt).toContain('"scope": ["016-stage-build"');
+  // The consequence is stated, so a session knows silence is not success.
+  expect(prompt).toContain("neither the ledger nor any later session");
+
+  // The example must itself pass the validator it is teaching.
+  const example = {
+    id: "016-stage-build-d1",
+    specId: "016-stage-build",
+    scope: ["016-stage-build", "src/some/territory/"],
+    title: "one line naming the choice",
+    decision: "what was chosen, in full",
+    rationale: "why, and what it costs",
+  };
+  const result = validateDecisionRecord(example, new Set(["016-stage-build"]));
+  expect(result.ok).toBe(true);
+});
+
+// D-12: butler-ai's 009 sessions concluded "no branch-side fix exists" for a
+// coupling violation that one declared extends entry cleared. The prompt now
+// names that mechanism, and names the two answers that are not available.
+test("buildPrompt tells the session how to couple a change to a unit another spec owns (D-12)", () => {
+  const prompt = buildPrompt({
+    specId: "016-stage-build",
+    specBody: "body",
+    backlogStep: "step",
+    decisions: { included: [], overflowCount: 0 },
+    dropboxDir: "/tmp/dropbox",
+  });
+  expect(prompt).toContain("extends:");
+  expect(prompt).toContain("nature: additive");
+  // The coherence guard, restated where it actually bites.
+  expect(prompt).toContain("other spec to match code you just wrote");
+  // And the dead end that cost butler-ai a session to rule out by experiment.
+  expect(prompt).toContain("read only from a PR body");
+  // extends must not become a way to declare away a real contradiction.
+  expect(prompt).toContain("If the owning spec actually contradicts the change");
+});
+
+// --- D-13: the stall signal ---------------------------------------------------
+
+test("D-13: a remediation that changes nothing against an identical gate answer reports stalled", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const state = { sessionCalls: 0 };
+  const runSession: Runner["runSession"] = async (opts) => {
+    state.sessionCalls++;
+    return fakeWritingSession(dir, specId)(opts);
+  };
+  // Byte-identical failure both rounds: the same wall, twice.
+  const runGate: Runner["runGate"] = (cmd) => {
+    if (state.sessionCalls === 0) return { exitCode: 0, stdoutTail: "", stderrTail: "" };
+    if (cmd.join(" ").includes("couple")) {
+      return { exitCode: 1, stdoutTail: "", stderrTail: "C-001 'Cargo.toml' changed without an authoring edit" };
+    }
+    return { exitCode: 0, stdoutTail: "", stderrTail: "" };
+  };
+  const runner: Runner = { ...createProcessRunner({ repoDir: dir }), runGate, runSession };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+  });
+
+  expect(result.outcome).toBe("failed");
+  expect(result.evidence.sessions.length).toBe(2);
+  expect(result.evidence.stalled).toBe(true);
+
+  // FR-002: the judgment is journaled, not only returned.
+  const resultRecord = journal.fold().byKind["stage.build.result"]?.at(-1)?.payload as Record<string, unknown>;
+  expect(resultRecord.stalled).toBe(true);
+
+  journal.close();
+  decisionsChain.close();
+});
+
+test("D-13: a remediation that moves the branch head is not stalled, even though the stage still fails", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const state = { sessionCalls: 0 };
+  const runSession: Runner["runSession"] = async (opts) => {
+    state.sessionCalls++;
+    await fakeWritingSession(dir, specId)(opts);
+    // The remediation session actually tries something: a new commit.
+    if (state.sessionCalls === 2) {
+      writeFileSync(join(dir, "src", "attempt.ts"), "export const attempt = 2;\n");
+      git(dir, ["add", "-A"]);
+      git(dir, ["commit", "-q", "-m", "remediation attempt"]);
+    }
+    return fakeSessionResult(`fake-session-${state.sessionCalls}`);
+  };
+  const runGate: Runner["runGate"] = (cmd) => {
+    if (state.sessionCalls === 0) return { exitCode: 0, stdoutTail: "", stderrTail: "" };
+    if (cmd.join(" ").includes("lint")) return { exitCode: 1, stdoutTail: "", stderrTail: "still red" };
+    return { exitCode: 0, stdoutTail: "", stderrTail: "" };
+  };
+  const runner: Runner = { ...createProcessRunner({ repoDir: dir }), runGate, runSession };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+  });
+
+  expect(result.outcome).toBe("failed");
+  expect(result.evidence.stalled).toBe(false);
+
+  journal.close();
+  decisionsChain.close();
+});
+
+test("D-13: a stage that never needed a remediation reports stalled as null, not false", async () => {
+  const { dir, specId } = initFixtureRepo();
+  const runner: Runner = {
+    ...createProcessRunner({ repoDir: dir }),
+    runGate: greenGate(),
+    runSession: fakeWritingSession(dir, specId),
+  };
+  const { journalDir } = openHandles(dir);
+  const journal = openJournal(journalDir);
+  const decisionsChain = openDecisionsChain(journalDir);
+
+  const result = await runBuildStage({
+    runner,
+    specId,
+    journal,
+    decisionsChain,
+    dropboxDir: join(journalDir, "decision-dropbox"),
+    knownSpecIds: new Set([specId]),
+    isSpecReady: () => true,
+  });
+
+  expect(result.outcome).toBe("passed");
+  // "Not asked" must never read as "asked and not stalled".
+  expect(result.evidence.stalled).toBeNull();
 
   journal.close();
   decisionsChain.close();
