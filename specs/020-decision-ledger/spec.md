@@ -139,9 +139,14 @@ drop-box (`invalid/`, `QUARANTINE_DIRNAME`), created lazily so a project
 that never writes a bad record never grows an empty directory. B-3's
 substance is kept, since nothing the session wrote is deleted and an
 operator can repair a file and move it back, while each sweep reports only
-what it found. The `decision.sealed.outcome` record names `quarantineDir`
-when, and only when, something was quarantined, so the record points at the
-files without asserting a directory that was never created.
+what it found. The drop-box is one directory shared by every spec and every
+attempt, and the prompt fixes the record id rather than the filename, so a
+basename can arrive twice; the second one takes the first free numeric
+suffix rather than replacing the file already there, since a rename that
+overwrites is the deletion this decision undertakes not to do. The
+`decision.sealed.outcome` record names `quarantineDir` when, and only when,
+something was quarantined, so the record points at the files without
+asserting a directory that was never created.
 
 D-7. B-1 marks `alternatives` and `supersedes` optional without saying how a
 writer spells "not used". The validator accepted only an absent key, so an

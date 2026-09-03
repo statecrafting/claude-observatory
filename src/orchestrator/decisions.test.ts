@@ -390,6 +390,35 @@ test("sealDropbox reports an invalid file once: a second sweep no longer sees it
 });
 
 // D-7: null on an optional field is how JSON writers often spell "unused".
+test("sealDropbox keeps both files when the same basename is quarantined twice (D-6)", () => {
+  const dir = freshDir();
+  const dropboxDir = join(dir, "decision-dropbox");
+  fs.mkdirSync(dropboxDir, { recursive: true });
+
+  const chain = openDecisionsChain(dir);
+  const journal = openJournal(dir);
+  const knownSpecIds = new Set(["020-decision-ledger"]);
+
+  // The drop-box is one directory for every spec and every attempt, so the
+  // same basename arrives again with different content.
+  const first = { ...validDecisionRaw(), scope: "reducer", title: "first attempt" };
+  fs.writeFileSync(join(dropboxDir, "d1.json"), JSON.stringify(first));
+  expect(sealDropbox({ dropboxDir, chain, knownSpecIds, journal }).invalid.length).toBe(1);
+
+  const second = { ...validDecisionRaw(), scope: "reducer", title: "second attempt" };
+  fs.writeFileSync(join(dropboxDir, "d1.json"), JSON.stringify(second));
+  expect(sealDropbox({ dropboxDir, chain, knownSpecIds, journal }).invalid.length).toBe(1);
+
+  // Neither is destroyed: the second takes the first free numeric suffix.
+  const quarantined = fs.readdirSync(join(dropboxDir, QUARANTINE_DIRNAME)).sort();
+  expect(quarantined).toEqual(["d1-2.json", "d1.json"]);
+
+  const titles = quarantined
+    .map((f) => JSON.parse(fs.readFileSync(join(dropboxDir, QUARANTINE_DIRNAME, f), "utf8")).title)
+    .sort();
+  expect(titles).toEqual(["first attempt", "second attempt"]);
+});
+
 test("validateDecisionRecord reads an explicit null on an optional field as absent (D-7)", () => {
   const raw = { ...validDecisionRaw(), alternatives: null, supersedes: null };
   const result = validateDecisionRecord(raw, new Set(["020-decision-ledger"]));

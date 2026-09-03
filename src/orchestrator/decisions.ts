@@ -11,7 +11,7 @@
 // decisions.jsonl and its own anchor live alongside journal.jsonl in the
 // same directory without colliding files or a second implementation.
 import * as fs from "fs";
-import { join } from "path";
+import { extname, join } from "path";
 import type { FoldedState, JournalHandle, JsonValue } from "./journal";
 import { openJournal, sha256Hex, stableStringify } from "./journal";
 
@@ -302,9 +302,23 @@ export function sealDropbox(params: SealDropboxParams): SealDropboxResult {
   // Created lazily, so a project that never writes a bad record never grows
   // an empty directory.
   const quarantineDir = join(dropboxDir, QUARANTINE_DIRNAME);
+  // The drop-box is one directory shared by every spec and every attempt,
+  // and the prompt fixes the record id, not the filename, so two sweeps can
+  // quarantine the same basename. A bare rename would replace the earlier
+  // file silently, which is the one thing D-6 undertakes not to do, so a
+  // taken name takes the first free numeric suffix instead.
+  const quarantinePathFor = (file: string): string => {
+    const ext = extname(file);
+    const stem = file.slice(0, file.length - ext.length);
+    let candidate = join(quarantineDir, file);
+    for (let n = 2; fs.existsSync(candidate); n++) {
+      candidate = join(quarantineDir, `${stem}-${n}${ext}`);
+    }
+    return candidate;
+  };
   const quarantine = (file: string): void => {
     fs.mkdirSync(quarantineDir, { recursive: true });
-    fs.renameSync(join(dropboxDir, file), join(quarantineDir, file));
+    fs.renameSync(join(dropboxDir, file), quarantinePathFor(file));
   };
 
   const sealed: DecisionRecord[] = [];
