@@ -30,7 +30,7 @@ declared, non-self-assertable autonomy grade called `posture`
 
 ## 2. The family, one paragraph each
 
-- **spec-spine** (Rust, 0.10.0, crates.io/npm/PyPI): a typed, hash-verifiable
+- **spec-spine** (Rust, 0.14.0, crates.io/npm/PyPI): a typed, hash-verifiable
   authority ledger over a markdown spec corpus. Verbs: `compile`, `registry`,
   `index`, `lint`, `couple` (the PR-time drift gate), `init`, `attest`,
   `verify-attestation`. Governs every repo in the family. The kit under
@@ -101,7 +101,7 @@ takes the next spec"). This product is the executor for that protocol.
 
 Three tiers, dependency direction enforced downward only:
 
-1. **Substrate (depend on, never fork):** spec-spine 0.10.0; the four
+1. **Substrate (depend on, never fork):** spec-spine 0.14.0; the four
    primitive crates; `@statecrafting/kernel-native` if/when the orchestrator
    needs runtime adjudication. Substrate names are stable.
 2. **Patterns (re-derive, cite the source):** stage-machine-as-data,
@@ -118,8 +118,11 @@ Three tiers, dependency direction enforced downward only:
   purposes, means `status: approved` AND `implementation: complete` AND the
   spec's PR merged with the coupling gate green.
 - spec-spine has **no contract-hash pinning and no downstream invalidation**.
-  `depends_on` is existence-checked data (`V-010` warning), with no cycle
-  detection and no readiness semantics. The registry shard's `shardHash`
+  `depends_on` is existence-checked data (`V-010` warning). Since spec-spine
+  0.13/0.14 it also refuses a cycle at compile time (`V-014`, spec-spine 033)
+  and `registry plan` emits the ready set in dependency order (038); the
+  orchestrator's own DAG (spec 012) predates both and stays as the pinning and
+  invalidation half. The registry shard's `shardHash`
   (sha256 over the spec's own `spec.md`) is the natural contract hash for the
   orchestrator to pin at build time and to compare for invalidation.
 - spec-spine has **no decision-ledger mechanism**. Body conventions exist
