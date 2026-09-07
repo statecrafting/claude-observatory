@@ -10,7 +10,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
-      - run: npm install -g spec-spine@0.14.0
+      - run: npm install -g spec-spine@0.15.0
       - run: bun install --frozen-lockfile
       - run: spec-spine compile
       - run: spec-spine index check

@@ -30,9 +30,10 @@ declared, non-self-assertable autonomy grade called `posture`
 
 ## 2. The family, one paragraph each
 
-- **spec-spine** (Rust, 0.14.0, crates.io/npm/PyPI): a typed, hash-verifiable
+- **spec-spine** (Rust, 0.15.0, crates.io/npm/PyPI): a typed, hash-verifiable
   authority ledger over a markdown spec corpus. Verbs: `compile`, `registry`,
-  `index`, `lint`, `couple` (the PR-time drift gate), `init`, `attest`,
+  `index`, `lint`, `verify` (runs a spec's declared acceptance; spec-spine
+  049), `couple` (the PR-time drift gate), `init`, `attest`,
   `verify-attestation`. Governs every repo in the family. The kit under
   `kit/` supplies AGENTS.md protocol, skills, agents, rules, hooks.
 - **Four extracted primitives** (Apache-2.0, crates.io, frozen at 0.1.0):
@@ -101,7 +102,7 @@ takes the next spec"). This product is the executor for that protocol.
 
 Three tiers, dependency direction enforced downward only:
 
-1. **Substrate (depend on, never fork):** spec-spine 0.14.0; the four
+1. **Substrate (depend on, never fork):** spec-spine 0.15.0; the four
    primitive crates; `@statecrafting/kernel-native` if/when the orchestrator
    needs runtime adjudication. Substrate names are stable.
 2. **Patterns (re-derive, cite the source):** stage-machine-as-data,
@@ -145,8 +146,9 @@ Recorded here for traceability; each is formalized in the owning spec.
   Amending a spec changes its shardHash and invalidates downstream pins;
   invalidated specs require re-verification before they count as shipped.
 - **D3 (readiness):** ready(spec) = every `depends_on` target is shipped
-  (D5 sense) and its pinned shardHash still matches. Cycle detection is the
-  orchestrator's job because spec-spine deliberately has none.
+  (D5 sense) and its pinned shardHash still matches. Cycle detection stays the
+  orchestrator's job over its own pinned DAG; since 0.13 spec-spine refuses a
+  cycle at compile time (`V-014`) but knows nothing about pins or invalidation.
 - **D4 (journal before ledger):** the work journal is a durable, fsynced,
   hash-linked JSONL (attest-ledger record envelope) written before and after
   every state transition; state is derived by fold, never trusted from memory.
