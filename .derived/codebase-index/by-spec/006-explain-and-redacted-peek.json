@@ -6,10 +6,6 @@
     ],
     "implementingPaths": [
       {
-        "path": "FINDINGS.md",
-        "source": "spec-edge"
-      },
-      {
         "path": "src/commands/explain.ts",
         "source": "spec-edge"
       },
