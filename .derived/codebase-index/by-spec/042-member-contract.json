@@ -1,0 +1,157 @@
+{
+  "diagnostics": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "W-001",
+        "message": "spec '042-member-contract' file unit 'src/members/manifest.ts' does not exist",
+        "path": "src/members/manifest.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '042-member-contract' file unit 'src/members/manifest.test.ts' does not exist",
+        "path": "src/members/manifest.test.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '042-member-contract' file unit 'src/members/entrypoints.test.ts' does not exist",
+        "path": "src/members/entrypoints.test.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '042-member-contract' file unit 'src/members/sensor.ts' does not exist",
+        "path": "src/members/sensor.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '042-member-contract' file unit 'src/members/engine.ts' does not exist",
+        "path": "src/members/engine.ts"
+      },
+      {
+        "code": "W-001",
+        "message": "spec '042-member-contract' file unit 'src/members/driver.ts' does not exist",
+        "path": "src/members/driver.ts"
+      }
+    ]
+  },
+  "mapping": {
+    "dependsOn": [
+      "005-cli-surface",
+      "023-orchestrator-cli"
+    ],
+    "implementingPaths": [
+      {
+        "path": "package.json",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/index.ts",
+        "source": "spec-edge"
+      }
+    ],
+    "resolvedUnits": [
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/driver.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/engine.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/entrypoints.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/manifest.test.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/manifest.ts"
+        }
+      },
+      {
+        "locations": [],
+        "ownership": true,
+        "sourceField": "establishes",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/sensor.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "src/index.ts"
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "kind": "file",
+          "path": "src/index.ts"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "package.json",
+            "span": {
+              "endLine": 16,
+              "startLine": 10
+            }
+          }
+        ],
+        "ownership": true,
+        "sourceField": "extends",
+        "unit": {
+          "anchor": "scripts",
+          "file": "package.json",
+          "kind": "section"
+        }
+      },
+      {
+        "locations": [
+          {
+            "file": "docs/design/01-umbrella-cli-and-member-seams.md"
+          }
+        ],
+        "ownership": false,
+        "sourceField": "references",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/01-umbrella-cli-and-member-seams.md"
+        }
+      }
+    ],
+    "specId": "042-member-contract",
+    "specStatus": "draft"
+  },
+  "schemaVersion": "1.1.0",
+  "shardHash": "224bf2404324b6654dcb54b1755b14e70d5bff35ad57ca0ae080a5d3225262ba"
+}
