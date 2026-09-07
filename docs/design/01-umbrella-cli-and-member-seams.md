@@ -194,15 +194,24 @@ Four specs across two governed corpora, each bounded to one driven session.
 
 | Repo | Spec | Territory |
 |---|---|---|
-| claude-observatory | 042 | Member decomposition: three build targets, the manifest each emits, and the engine losing its provider-specific contract (D13, D14, D19) |
-| claude-observatory | 043 | The member side of the dispatch contract: verdict envelope on stdout, exit-code taxonomy, no-shell invariant (D16, D17, D18) |
+| claude-observatory | 042 | The member contract: three build targets, the manifest each emits, the verdict envelope on stdout, and the exit-code taxonomy (D13, D14, D16, D17, D18, D19) |
+| claude-observatory | 043 | The driver seam: the engine loses its provider-specific contract and `statecraft-driver-claude` becomes the only member that knows Claude (D13, D22) |
 | statecraft-cli | 008 | Umbrella dispatch: discovery order, the managed member directory, `members list`, and the account-less local face (D15, D20, D21) |
 | statecraft-cli | 009 | The engine and sensor verbs as first-class umbrella surface, including the MCP face over dispatched members |
+
+The line between 042 and 043 is deliberate. 042 is packaging and protocol: it
+adds entrypoints, manifests and an output contract without moving a function
+between layers, so it is mechanically testable and safe to land while the engine
+is still internally Claude-aware. 043 is the refactor that split buys. Putting
+both in one spec would exceed a single driven session's territory, which is the
+bound this corpus holds every spec to.
 
 Sequencing note: 042 and 008 are the pair that must agree, and they live in
 different corpora with different coupling gates. They are written together and
 land in either order; neither is shippable while the other's contract is only
-prose.
+prose. 008 states the contract from the umbrella side and 042 from the member
+side, and each cites the other by id so a later reader can tell that the two
+halves were authored as one decision.
 
 ## 10. Sources
 
