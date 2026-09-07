@@ -1,11 +1,6 @@
 {
   "mapping": {
-    "implementingPaths": [
-      {
-        "path": "docs/design/00-ecosystem-analysis.md",
-        "source": "spec-edge"
-      }
-    ],
+    "implementingPaths": [],
     "resolvedUnits": [
       {
         "locations": [

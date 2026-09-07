@@ -6,10 +6,6 @@
     ],
     "implementingPaths": [
       {
-        "path": "docs/design/00-ecosystem-analysis.md",
-        "source": "spec-edge"
-      },
-      {
         "path": "src/orchestrator/projects.test.ts",
         "source": "spec-edge"
       },
