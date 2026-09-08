@@ -150,8 +150,8 @@
       }
     ],
     "specId": "042-member-contract",
-    "specStatus": "draft"
+    "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "224bf2404324b6654dcb54b1755b14e70d5bff35ad57ca0ae080a5d3225262ba"
+  "shardHash": "5ff394001a484088f78cbd838cb517be0ef3f98f678e502bae398b753f18676e"
 }
