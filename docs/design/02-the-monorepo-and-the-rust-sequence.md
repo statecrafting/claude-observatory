@@ -230,11 +230,55 @@ when it is not.
   family is the strongest available evidence that the seam is real rather than
   nominal.
 
-One cheap check precedes all of it and is worth doing before any port is
-scheduled: whether `stableStringify` in `journal.ts` and the
-`canonical-keysort-json` crate agree byte for byte on the corpus of records
-already written. If they agree, the journal port is mechanical. If they do not,
-there is a latent problem today, in TypeScript, independent of any rewrite.
+### The canonicalization check, run
+
+This document first listed the check as open. It has since been run, and the
+result changes what D30's journal gate has to cover.
+
+On the corpus that exists, the two implementations agree completely. All 1,696
+work records and 70 decision records were recomputed from the original `.jsonl`
+bytes, with no JavaScript in the path: parsed with `serde_json`, canonicalized
+through `canonical-keysort-json`, hashed with sha256, and compared to the stored
+`recordHash`. All 1,766 reproduced, zero mismatches. Comparing canonical output
+directly, 695,206 bytes are byte-identical between `stableStringify` and
+`to_canonical_string`. The committed evidence bundle also still verifies under
+the shipped verifier: both chains intact, 1038 work and 52 decision records.
+
+So the journal port is mechanical for every record written so far. Four
+divergences exist outside that corpus, and one of them is a defect in this
+repository today rather than a property of the port.
+
+**The defect.** `canonicalizeValue` sorts keys lexicographically and then
+inserts them into a plain object, but JavaScript enumerates array-index-like
+keys (the canonical decimal form of an integer in `[0, 2**32-2]`) first, in
+ascending numeric order, regardless of insertion order. For those keys the sort
+is silently discarded, so `{"9": _, "10": _}` canonicalizes in numeric order
+rather than lexicographic order, and the function's own contract, stated in its
+header comment as a "recursive lexicographic key-sort", does not hold. The
+existing chain is unaffected because the writer and the verifier share the same
+behavior, which is exactly why it has gone unnoticed: it is invisible to
+everything except a second implementation. `canonical-keysort-json` sorts by
+UTF-8 bytes and has no such carve-out. A scan of all 1,810 available records,
+the bundle included, finds zero objects that would trigger it.
+
+**Three narrower ones.** A lone surrogate, which `JSON.stringify` emits as a
+`\udXXX` escape and `serde_json` refuses to parse at all; this one is more
+plausible here than it looks, because the journal carries agent output and a
+truncated stream can split a surrogate pair. An integer above `2**53`, which
+JavaScript parses lossily and silently, since `Number.isInteger` passes after
+the precision is already gone. And number-shape differences in the other
+direction, where the Rust crate accepts floats that `journal.ts` rejects by
+design and re-emits exponent form and negative zero as `100.0` and `-0.0`;
+these are only reachable through foreign input, since `JSON.stringify` never
+writes those forms.
+
+The consequence for D30 is that the journal gate is not only "reproduce the
+stored hashes", which is now known to pass. It is also "decide which
+lexicographic order is the canonical one" before a second implementation
+exists, because the two currently define different canonical forms for a class
+of input the corpus does not yet contain. Changing `journal.ts` is a change to
+shipped behavior owned by spec 011 and has to be coupled there rather than
+fixed in passing.
 
 ## 7. Decisions from 01 that this document supersedes
 
@@ -275,9 +319,6 @@ just been renumbered.
 
 ## 9. Not verified
 
-- Whether `stableStringify` and `canonical-keysort-json` actually agree byte
-  for byte. Stated in §6 as the check to run, precisely because it has not been
-  run.
 - Whether spec-spine's coupling gate behaves correctly when `--repo` points at
   a subdirectory of a git repository rather than its root. The plan in §8 does
   not depend on it, since D28 merges the corpora into one root, but a future
