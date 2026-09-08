@@ -1,7 +1,7 @@
 ---
 id: "042-member-contract"
 title: "The member contract: build targets, manifests, and the shape the umbrella dispatches to"
-status: draft
+status: approved
 created: "2026-09-07"
 authors: ["Bartek Kus"]
 kind: feature
