@@ -10,7 +10,7 @@
 import * as fs from "fs";
 import { join } from "path";
 import type { JournalHandle, JsonValue } from "../journal";
-import type { SessionResult } from "../session";
+import type { SessionResult } from "../driver";
 import { evaluateBudget, type CeilingScope, type CostCeiling } from "../budget";
 import { proposalHash } from "./preflight";
 // A value import against defects' type-only import of this module: no cycle

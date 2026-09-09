@@ -3,7 +3,7 @@ import * as fs from "fs";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { DEFAULT_SESSION_MODELS, type SessionModels } from "./models";
+import { STAGE_MODEL_TIERS, type ModelTier, type SessionModels } from "./models";
 import type { ProfileSource } from "./profile";
 import type { GateBinding } from "./gate-contract";
 import { LEGACY_GATE_CONTRACT, type GateContract } from "./gate-contract";
@@ -1916,23 +1916,29 @@ test("FR-003: a per-day ceiling parks to next UTC midnight, and a restart recove
 // AC-1's daemon half. The verify stage spawns no session of its own (its only
 // model session is the browser verifier's, resolved at that seam, 040 D-6), so
 // the three stages that do take a model are the three asserted here.
-async function recordStageModels(profile?: ProfileSource): Promise<Record<string, string | undefined>> {
+async function recordStageModels(
+  profile?: ProfileSource
+): Promise<{ seen: Record<string, string | undefined>; tiers: Record<string, ModelTier | undefined> }> {
   const dataDir = freshDir("models-data");
   const repoDir = freshDir("models-repo");
   const dagReader = fixtureDagReader({ "900-fixture": {} });
   const seen: Record<string, string | undefined> = {};
+  const tiers: Record<string, ModelTier | undefined> = {};
 
   const stageFns: DaemonStageFns = {
     build: async (options) => {
       seen.build = options.model;
+      tiers.build = options.tier;
       return buildResult(options.specId, "passed");
     },
     ship: async (options) => {
       seen.ship = options.model;
+      tiers.ship = options.tier;
       return shipResult(options.specId, "passed");
     },
     shepherd: async (options) => {
       seen.shepherd = options.model;
+      tiers.shepherd = options.tier;
       return shepherdResult(options.specId, "passed", `${options.specId}-merge`);
     },
     verify: async (options) => verifyResult(options.specId, options.sha, "not-declared"),
@@ -1943,35 +1949,39 @@ async function recordStageModels(profile?: ProfileSource): Promise<Record<string
   await daemon.join();
   expect(daemon.runStatus).toBe("completed");
   await daemon.shutdown();
-  return seen;
+  return { seen, tiers };
 }
 
-test("040 AC-1: every stage spawn carries an explicit model, tiered by stage", async () => {
-  const seen = await recordStageModels();
+test("040 AC-1: every stage spawn carries an explicit tier, tiered by stage (043 B-1)", async () => {
+  const { seen, tiers } = await recordStageModels();
   // Not merely non-null: the exact tier each stage is assigned. A regression
-  // that passed the fast model to build would still be "explicit".
-  expect(seen.build).toBe(DEFAULT_SESSION_MODELS.strong);
-  expect(seen.ship).toBe(DEFAULT_SESSION_MODELS.strong);
-  expect(seen.shepherd).toBe(DEFAULT_SESSION_MODELS.fast);
-  // B-1 admits no spawn without one, which is the whole difference from the
-  // pre-040 behavior where this field was undefined at every stage.
-  expect(seen.build).toBeDefined();
-  expect(seen.ship).toBeDefined();
-  expect(seen.shepherd).toBeDefined();
+  // that passed the fast tier to build would still be "explicit". Since 043
+  // the engine names the tier and the driver resolves the id, so with no
+  // project pair the id is absent and the tier is what the spawn carries.
+  expect(tiers.build).toBe(STAGE_MODEL_TIERS.build);
+  expect(tiers.ship).toBe(STAGE_MODEL_TIERS.ship);
+  expect(tiers.shepherd).toBe(STAGE_MODEL_TIERS.shepherd);
+  expect(tiers.build).toBe("strong");
+  expect(tiers.shepherd).toBe("fast");
+  expect(seen.build).toBeUndefined();
+  expect(seen.ship).toBeUndefined();
+  expect(seen.shepherd).toBeUndefined();
 });
 
 test("040 B-4: a project's pair overrides the default at the spawn, read per call", async () => {
   let pair: SessionModels | undefined = { strong: "over-strong", fast: "over-fast" };
   // Late-bound exactly as the posture is (032 B-4): the daemon reads the
   // profile at each stage, so a pair set mid-run reaches the next stage.
-  const seen = await recordStageModels(() => ({ mode: "bypass", ...(pair === undefined ? {} : { models: pair }) }));
+  const { seen } = await recordStageModels(() => ({ mode: "bypass", ...(pair === undefined ? {} : { models: pair }) }));
   expect(seen.build).toBe("over-strong");
   expect(seen.ship).toBe("over-strong");
   expect(seen.shepherd).toBe("over-fast");
 
   pair = undefined;
   const defaults = await recordStageModels(() => ({ mode: "bypass" }));
-  expect(defaults.build).toBe(DEFAULT_SESSION_MODELS.strong);
+  // 043 D-7: no pair means no id from the engine; the driver's default applies.
+  expect(defaults.seen.build).toBeUndefined();
+  expect(defaults.tiers.build).toBe("strong");
 });
 
 // --- spec 041: the gate contract a stage is judged under --------------------

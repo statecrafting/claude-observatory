@@ -14,7 +14,6 @@ import * as fs from "fs";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { DEFAULT_SESSION_MODELS } from "../orchestrator/models";
 import { openJournal } from "../orchestrator/journal";
 import { foldOrchestratorState, transition } from "../orchestrator/state";
 import { openDecisionsChain } from "../orchestrator/decisions";
@@ -1917,7 +1916,8 @@ test("040 AC-3/AC-4: the profile verb records a model pair, and every detail nam
     const newcomer = registry.world("newcomer");
     const added = await run(["projects", "add", newcomer.repoDir, "--name", "gamma", "--url", url], { dataDir });
     expect(added.code).toBe(EXIT_OK);
-    expect(added.out).toContain(`models:  ${DEFAULT_SESSION_MODELS.strong} / ${DEFAULT_SESSION_MODELS.fast} (default)`);
+    // 043 D-7: the engine cannot name the driver's pair; it says whose it is.
+    expect(added.out).toContain("models:  (driver default)");
 
     // AC-4: the pair travels on the posture verb, whole.
     const set = await run(

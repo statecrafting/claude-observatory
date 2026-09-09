@@ -8,7 +8,7 @@
 // runs. No verb moves between layers here; the entrypoints reuse the spec 005
 // dispatcher (D-4) so a verb behaves identically through `observatory` and
 // through its member binary.
-import { dispatch, type DispatchScope } from "../index";
+import { dispatch, type DispatchScope, type VerbTable } from "./dispatch";
 import pkg from "../../package.json";
 import { EXIT_USAGE } from "../commands/orchestrator";
 
@@ -94,7 +94,7 @@ export const DRIVER_MANIFEST: MemberManifest = {
   name: "statecraft-driver-claude",
   version: pkg.version,
   contract: MEMBER_CONTRACT,
-  verbs: ["models"],
+  verbs: ["models", "session"],
   capabilityTier: "reference",
   exitCodes: ENGINE_EXIT_CODES,
   envelope: "ok-data",
@@ -127,10 +127,13 @@ export function scopeOf(manifest: MemberManifest): DispatchScope {
   };
 }
 
-export async function runMember(manifest: MemberManifest, argv: readonly string[]): Promise<void> {
+// `table` is the member's own verbs (043 D-8): the same functions
+// `observatory` routes, imported by the entrypoint rather than through
+// src/index.ts, so a member bundles only what it claims.
+export async function runMember(manifest: MemberManifest, argv: readonly string[], table: VerbTable): Promise<void> {
   if (argv.includes(MANIFEST_FLAG)) {
     process.stdout.write(serializeManifest(manifest));
     process.exit(0);
   }
-  await dispatch(argv, scopeOf(manifest));
+  await dispatch(argv, table, scopeOf(manifest));
 }

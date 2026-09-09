@@ -1,0 +1,227 @@
+{
+  "record": {
+    "authors": [
+      "Bartek Kus"
+    ],
+    "created": "2026-09-09",
+    "dependsOn": [
+      "014-session-driver",
+      "016-stage-build",
+      "019-stage-verify",
+      "021-orchestrator-daemon",
+      "032-execution-profiles",
+      "040-session-models",
+      "042-member-contract"
+    ],
+    "establishes": [
+      {
+        "kind": "file",
+        "path": "src/orchestrator/driver.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/orchestrator/driver.test.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/members/dispatch.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/members/driver-session.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/members/driver-session.test.ts"
+      },
+      {
+        "kind": "file",
+        "path": "src/members/engine-bundle.test.ts"
+      }
+    ],
+    "extends": [
+      {
+        "nature": "additive",
+        "spec": "042-member-contract",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/driver.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "042-member-contract",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/manifest.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "042-member-contract",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/sensor.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "042-member-contract",
+        "unit": {
+          "kind": "file",
+          "path": "src/members/engine.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "005-cli-surface",
+        "unit": {
+          "kind": "file",
+          "path": "src/index.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "040-session-models",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/models.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "016-stage-build",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/build.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "019-stage-verify",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/verify.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "021-orchestrator-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "026-standby-daemon",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/standby.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "035-corpus-synthesis",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/adopt/synthesis.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "023-orchestrator-cli",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "017-stage-ship",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/ship.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "018-stage-shepherd",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/stages/shepherd.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "040-session-models",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/models.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "040-session-models",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/daemon.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "040-session-models",
+        "unit": {
+          "kind": "file",
+          "path": "src/commands/orchestrator.test.ts"
+        }
+      },
+      {
+        "nature": "additive",
+        "spec": "032-execution-profiles",
+        "unit": {
+          "kind": "file",
+          "path": "src/orchestrator/profile.test.ts"
+        }
+      }
+    ],
+    "id": "043-driver-seam",
+    "implementation": "complete",
+    "kind": "feature",
+    "references": [
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/01-umbrella-cli-and-member-seams.md"
+        }
+      },
+      {
+        "role": "context",
+        "unit": {
+          "kind": "file",
+          "path": "docs/design/02-the-monorepo-and-the-rust-sequence.md"
+        }
+      }
+    ],
+    "risk": "high",
+    "sectionHeadings": [
+      "043: The driver seam",
+      "1. Purpose",
+      "2. Territory",
+      "3. Behavior",
+      "4. Functional requirements",
+      "5. Acceptance criteria",
+      "Verification",
+      "6. Out of scope",
+      "Status (2026-09-09)",
+      "7. Resolved decisions"
+    ],
+    "specPath": "specs/043-driver-seam/spec.md",
+    "status": "approved",
+    "summary": "Spec 042 packaged three members without moving a function; the engine member still imports the Claude driver directly and its compiled binary carries every Claude invocation string session.ts knows. This spec is the surgery 042 deferred. The engine gains one provider-neutral seam, `src/orchestrator/driver.ts`: a request the engine writes, an event stream it reads, and a result it journals, none of which names a provider. The Claude driver member gains the `session run` verb that speaks that protocol over stdio, wrapping spec 014's runSession unchanged. Every engine path that drove a session (the build runner that ship and shepherd share, the verify stage's browser verifier, the synthesis sessions, the daemon's shutdown kill) drives it through the seam by spawning the driver member as a process, which is the boundary doc 02 D25 keeps. The proof is mechanical: the compiled statecraft-engine contains no Claude invocation string, and the session.init and session.result records the engine journals are byte-identical to the ones the in-process path wrote. A second driver is then two small files and no engine change (doc 02 D26), which is what \"ready for a Codex driver\" means.\n",
+    "title": "The driver seam: the engine loses its provider-specific contract"
+  },
+  "shardHash": "674341e6f751b1118c2936b4edba87d1cc86aa2f387033e755990f9d4a74f582",
+  "specVersion": "1.2.0"
+}

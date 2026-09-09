@@ -41,6 +41,7 @@ import {
   type QualificationVerdict,
 } from "./projects";
 import { createProductionDaemonDeps } from "./daemon";
+import { createProcessDriver } from "./driver";
 import type { JournalRecord } from "./journal";
 
 // --- fixtures ---------------------------------------------------------------
@@ -373,10 +374,14 @@ test("the spawn path: the daemon's own session seam derives argv from the projec
   // The daemon's own seam factory, wired exactly as `daemon run` wires it:
   // the profile reaches runSession through createProcessRunner, which is the
   // path the build, ship, and shepherd stages all drive.
+  // 043: the seam is a process. The daemon's runner drives the driver member
+  // (resolved from this checkout, 043 B-5), which spawns the recorder as its
+  // provider through STATECRAFT_CLAUDE_BIN; the argv it records is the
+  // member's, so this test now proves the profile crosses the boundary.
   const deps = createProductionDaemonDeps({
     dataDir: dir,
     repoDir: dir,
-    claudeBin: recorder.bin,
+    driver: createProcessDriver({ env: { ...process.env, STATECRAFT_CLAUDE_BIN: recorder.bin } }),
     profile: () => profile,
   });
 
@@ -405,7 +410,7 @@ test("the spawn path: the session records the posture it was spawned under (B-5)
     const deps = createProductionDaemonDeps({
       dataDir: dir,
       repoDir: dir,
-      claudeBin: recorder.bin,
+      driver: createProcessDriver({ env: { ...process.env, STATECRAFT_CLAUDE_BIN: recorder.bin } }),
       profile: { mode: "guarded", allowedTools: ["Read"], disallowedTools: ["WebFetch"] },
     });
     await deps.runner.runSession({ prompt: "hi", journal });

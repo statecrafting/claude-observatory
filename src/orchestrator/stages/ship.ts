@@ -25,7 +25,8 @@
 // claude in tests" convention.
 import type { JournalHandle, JsonValue } from "../journal";
 import type { Runner } from "./build";
-import type { SessionResult } from "../session";
+import type { SessionResult } from "../driver";
+import type { ModelTier } from "../models";
 
 // --- GitHubClient seam (FR-001) --------------------------------------------
 
@@ -428,6 +429,7 @@ export interface RunShipStageOptions {
   readonly journal: JournalHandle;
   readonly deadlineMs?: number;
   readonly maxTurns?: number;
+  readonly tier?: ModelTier;
   readonly model?: string;
 }
 
@@ -487,7 +489,7 @@ export async function runShipStage(options: RunShipStageOptions): Promise<ShipRe
   const promptPayload: Record<string, JsonValue> = { specId, branch, promptVersion: SHIP_PROMPT_VERSION };
   journal.append("stage.ship.prompt", promptPayload);
 
-  const session = await runner.runSession({ prompt, timeoutMs: deadlineMs, maxTurns, model: options.model, journal });
+  const session = await runner.runSession({ prompt, timeoutMs: deadlineMs, maxTurns, tier: options.tier, model: options.model, journal });
   const sessionEvidence = toShipSessionEvidence(session);
 
   // --- B-2: a hook-blocked session is terminal for the stage. No outside

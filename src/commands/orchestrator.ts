@@ -63,7 +63,7 @@ import {
 } from "../orchestrator/api/server";
 import { createProcessInspector, createProductionDaemonDeps, type ProcessInspector } from "../orchestrator/daemon";
 import { StandbyDaemon } from "../orchestrator/standby";
-import { killLiveSession, runSession } from "../orchestrator/session";
+import { createProcessDriver, killLiveSession } from "../orchestrator/driver";
 import { createProcessDagReader } from "../orchestrator/dag";
 import {
   PROJECTS_CHAIN_BASENAME,
@@ -2294,7 +2294,9 @@ async function cmdAdoptSynthesize(deps: OrchestratorCliDeps, json: boolean, proj
       deps.makeSynthesisSession !== undefined
         ? deps.makeSynthesisSession(project, journal)
         : async (request) =>
-            runSession({
+            // 043 B-7: synthesis sessions drive through the same seam every
+            // stage does; the driver is discovered per 043 B-5.
+            createProcessDriver().runSession({
               repo: boundProject.repoDir,
               prompt: request.prompt,
               profile: boundProject.profile,
