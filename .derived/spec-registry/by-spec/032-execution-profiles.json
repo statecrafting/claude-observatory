@@ -169,5 +169,5 @@
     "title": "Execution profiles: per-project session posture as registry state"
   },
   "shardHash": "04f8662612dd32f233d1f9e1e26c2b20b14147da2e18f62c0f3aac90dd7e75a3",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

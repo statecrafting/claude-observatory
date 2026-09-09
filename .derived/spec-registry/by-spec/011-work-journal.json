@@ -45,5 +45,5 @@
     "title": "Durable hash-linked work journal"
   },
   "shardHash": "08a5d4d34135c22b20c834db8db469b90979f154d87ebaa07a604df53388dfc3",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

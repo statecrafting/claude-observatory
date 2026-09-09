@@ -6,8 +6,9 @@ import { cmdDiff, cmdSnapshot } from "./commands/snapshot";
 import { cmdExplain, cmdPeek } from "./commands/explain";
 import { cmdDaemon } from "./commands/daemon";
 import { cmdOrchestrator } from "./commands/orchestrator";
+import { cmdModels } from "./members/driver";
 
-const USAGE = `claude-observatory: filesystem observability for ~/.claude
+export const USAGE = `claude-observatory: filesystem observability for ~/.claude
 
 usage: observatory <command> [options]
 
@@ -20,40 +21,60 @@ usage: observatory <command> [options]
   peek <path> [--bytes N] [--tail]    redacted content view (opt-in, read-only)
   daemon start|stop|status|plist      background watcher management
   orchestrator <command>              orchestrator control plane (status, dag, daemon, ...)
+  models [--json]                     the session model each stage runs on (spec 040)
 `;
 
-assertLayout();
-
-const [cmd, ...args] = process.argv.slice(2);
-switch (cmd) {
-  case "watch":
-    cmdWatch(args);
-    break;
-  case "log":
-    cmdLog(args);
-    break;
-  case "stats":
-    cmdStats(args);
-    break;
-  case "snapshot":
-    cmdSnapshot(args);
-    break;
-  case "diff":
-    cmdDiff(args);
-    break;
-  case "explain":
-    cmdExplain(args);
-    break;
-  case "peek":
-    cmdPeek(args);
-    break;
-  case "daemon":
-    cmdDaemon(args);
-    break;
-  case "orchestrator":
-    await cmdOrchestrator(args);
-    break;
-  default:
-    console.log(USAGE);
-    process.exit(cmd ? 1 : 0);
+// Spec 042 B-2: a member entrypoint hands the dispatcher the verb set it
+// claims, and a verb outside that set is reported as unknown in the usual
+// usage form with the member's own usage exit code. No scope means the
+// `observatory` binary, which claims everything and keeps its exit 1.
+export interface DispatchScope {
+  readonly verbs: ReadonlySet<string>;
+  readonly usageExit: number;
 }
+
+export async function dispatch(argv: readonly string[], scope?: DispatchScope): Promise<void> {
+  assertLayout();
+  const [cmd, ...args] = argv;
+  if (scope !== undefined && cmd !== undefined && !scope.verbs.has(cmd)) {
+    console.log(USAGE);
+    process.exit(scope.usageExit);
+  }
+  switch (cmd) {
+    case "watch":
+      cmdWatch(args);
+      break;
+    case "log":
+      cmdLog(args);
+      break;
+    case "stats":
+      cmdStats(args);
+      break;
+    case "snapshot":
+      cmdSnapshot(args);
+      break;
+    case "diff":
+      cmdDiff(args);
+      break;
+    case "explain":
+      cmdExplain(args);
+      break;
+    case "peek":
+      cmdPeek(args);
+      break;
+    case "daemon":
+      cmdDaemon(args);
+      break;
+    case "orchestrator":
+      await cmdOrchestrator(args);
+      break;
+    case "models":
+      cmdModels(args);
+      break;
+    default:
+      console.log(USAGE);
+      process.exit(cmd ? 1 : 0);
+  }
+}
+
+if (import.meta.main) await dispatch(process.argv.slice(2));

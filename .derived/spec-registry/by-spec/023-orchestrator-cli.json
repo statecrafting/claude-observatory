@@ -52,5 +52,5 @@
     "title": "Orchestrator CLI: the primary control plane"
   },
   "shardHash": "4db512fbb8f17f2a3f93828dc7b8e5f3dfe1741353a493c13369cdb7690d8b54",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

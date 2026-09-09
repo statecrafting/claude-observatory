@@ -58,5 +58,5 @@
     "title": "Journal export: a redacted, offline-verifiable evidence bundle"
   },
   "shardHash": "ceaeea8f7f9778abf15a50d573a0521f07dfa7f87abfdd0380c6b8fd001b8736",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

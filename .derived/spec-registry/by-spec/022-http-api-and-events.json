@@ -34,5 +34,5 @@
     "title": "Typed HTTP API and event stream (the only interface)"
   },
   "shardHash": "760aee7f369e88f4bf84324a4e34660382d86b43ec953d2672dffaf12e6a8914",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

@@ -1,39 +1,4 @@
 {
-  "diagnostics": {
-    "errors": [],
-    "warnings": [
-      {
-        "code": "W-001",
-        "message": "spec '042-member-contract' file unit 'src/members/manifest.ts' does not exist",
-        "path": "src/members/manifest.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '042-member-contract' file unit 'src/members/manifest.test.ts' does not exist",
-        "path": "src/members/manifest.test.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '042-member-contract' file unit 'src/members/entrypoints.test.ts' does not exist",
-        "path": "src/members/entrypoints.test.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '042-member-contract' file unit 'src/members/sensor.ts' does not exist",
-        "path": "src/members/sensor.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '042-member-contract' file unit 'src/members/engine.ts' does not exist",
-        "path": "src/members/engine.ts"
-      },
-      {
-        "code": "W-001",
-        "message": "spec '042-member-contract' file unit 'src/members/driver.ts' does not exist",
-        "path": "src/members/driver.ts"
-      }
-    ]
-  },
   "mapping": {
     "dependsOn": [
       "005-cli-surface",
@@ -47,11 +12,39 @@
       {
         "path": "src/index.ts",
         "source": "spec-edge"
+      },
+      {
+        "path": "src/members/driver.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/members/engine.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/members/entrypoints.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/members/manifest.test.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/members/manifest.ts",
+        "source": "spec-edge"
+      },
+      {
+        "path": "src/members/sensor.ts",
+        "source": "spec-edge"
       }
     ],
     "resolvedUnits": [
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/members/driver.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -60,7 +53,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/members/engine.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -69,7 +66,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/members/entrypoints.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -78,7 +79,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/members/manifest.test.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -87,7 +92,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/members/manifest.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -96,7 +105,11 @@
         }
       },
       {
-        "locations": [],
+        "locations": [
+          {
+            "file": "src/members/sensor.ts"
+          }
+        ],
         "ownership": true,
         "sourceField": "establishes",
         "unit": {
@@ -122,7 +135,7 @@
           {
             "file": "package.json",
             "span": {
-              "endLine": 16,
+              "endLine": 19,
               "startLine": 10
             }
           }
@@ -153,5 +166,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "5ff394001a484088f78cbd838cb517be0ef3f98f678e502bae398b753f18676e"
+  "shardHash": "ee110ead604449e12f46802e9358dfdcd56d03bf7c800e8e4029a42a6737f65b"
 }

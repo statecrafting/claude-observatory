@@ -5,7 +5,7 @@ status: approved
 created: "2026-09-07"
 authors: ["Bartek Kus"]
 kind: feature
-implementation: pending
+implementation: complete
 risk: medium
 depends_on:
   - "005-cli-surface"
@@ -225,6 +225,12 @@ bun run typecheck
 bun run build:member:engine && ./dist/statecraft-engine --member-manifest > /dev/null
 ```
 
+## Status (2026-09-09)
+
+Implemented. `bun test src/members/` covers FR-001 to FR-005 and AC-4
+against an in-process fixture daemon; the govern workflow builds the three
+members (FR-006). D-8 to D-10 record the three choices the spec left open.
+
 ## 6. Out of scope
 
 The driver seam (043 owns it: the engine keeps importing Claude-specific
@@ -291,6 +297,32 @@ renaming verbs in the same change that first packages them would forfeit
 AC-3 and AC-4, which are the only evidence this spec moved nothing. The
 flattening belongs to a later spec, once a member binary is the primary way
 these verbs are reached rather than the new one.
+
+D-8 (2026-09-09, recorded while building). The driver member claims one
+verb, `models`. No verb under `observatory` was driver-owned before this
+spec (doc 01 assigns the driver `session.ts`, `classify-termination.ts` and
+`models.ts`, none of which had a CLI surface), and FR-001 requires a
+non-empty set. `models` is the read-only view of spec 040's default pair and
+per-stage tiers, implemented in `src/members/driver.ts` and routed by the
+005 dispatcher so FR-003 holds for it. It is additive: no existing verb's
+output changes. Its `--json` form emits the family envelope (B-4).
+
+D-9 (2026-09-09, recorded while building). FR-005 names "one verb per
+member" under `--json`, and no sensor verb has ever accepted `--json`;
+giving one that flag would edit `src/commands/`, which AC-5 forbids. The
+sensor's stdout-hygiene case is therefore asserted on its one JSON surface,
+the manifest. The sensor gains `--json` verbs when its Rust port (doc 02
+D30) gives it an envelope to emit.
+
+D-10 (2026-09-09, recorded while building). A compiled member resolves
+`PROJECT_DIR` (and with it the default data directory, the served
+`web/dist`, and the path `daemon start` re-spawns) to the bundle's virtual
+root, because `import.meta.dir` inside a `bun build --compile` binary is not
+a filesystem path. The manifest, every verb that takes `--url` and
+`--data-dir`, and AC-4 are unaffected, which is what this spec proves.
+Making those locations runtime decisions belongs to the spec that makes a
+member binary the primary way its verbs are reached (D-7's successor),
+not to the one that first packages it.
 
 D-6. The spec is authored `status: draft` rather than `approved`, against
 this corpus's habit of authoring straight to approved. D-2 and D-3 resolve

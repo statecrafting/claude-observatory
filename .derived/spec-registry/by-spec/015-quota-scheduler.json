@@ -37,5 +37,5 @@
     "title": "Quota scheduler: detect exhaustion, park, resume at the spec boundary"
   },
   "shardHash": "e607119feba655b6574bcfaeade0bd881731fcb70665535736cbceaed3d40b1d",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

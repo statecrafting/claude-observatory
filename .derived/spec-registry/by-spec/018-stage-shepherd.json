@@ -37,5 +37,5 @@
     "title": "Shepherd stage: watch CI, remediate, merge when green"
   },
   "shardHash": "bc172216ea5218e2931437b76962cad7f3cb5c76393bcfc665d960f27e91539e",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

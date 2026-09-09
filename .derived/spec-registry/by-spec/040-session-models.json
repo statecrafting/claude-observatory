@@ -104,5 +104,5 @@
     "title": "Session models: the model a driven session runs on is chosen per stage, not inherited"
   },
   "shardHash": "6c9b7da4c38ae7e696d45722e9b9d04b57d96522522e62f32dc386a237ad54cb",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }
