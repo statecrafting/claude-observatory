@@ -199,6 +199,7 @@ test("the corpus set is exactly the init scaffold plus derived artifacts and the
     { kind: "dir", path: ".derived" },
     { kind: "dir", path: ".claude/rules" },
     { kind: "file", path: ".gitignore" },
+    { kind: "file", path: "AGENTS.md" },
   ]);
 });
 
