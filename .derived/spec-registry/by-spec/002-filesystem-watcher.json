@@ -35,5 +35,5 @@
     "title": "State-diffing filesystem watcher"
   },
   "shardHash": "a2d8d6629dada36a2e730b4d4dea9811b696b405283d7c888f77e94a259c057a",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

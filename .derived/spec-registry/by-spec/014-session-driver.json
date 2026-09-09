@@ -45,5 +45,5 @@
     "title": "Claude Code session driver (fresh process, stream-json, classified outcomes)"
   },
   "shardHash": "9a7f577d4489b89c743b79f808bc7460dc700f11946eed7c2af33a5bee70c013",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

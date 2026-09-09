@@ -53,5 +53,5 @@
     "title": "CLI surface: watch, log, stats, snapshot, diff"
   },
   "shardHash": "e2c8e405793503e82dd37fb5aea175cd3bfb9df522c40194c0733c7e7d33c341",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

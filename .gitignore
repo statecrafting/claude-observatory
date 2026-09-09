@@ -15,3 +15,7 @@ node_modules/
 # The web UI's build output: produced by `bun run web:build`, served by the
 # daemon from disk, never committed.
 web/dist/
+
+# Member binaries (spec 042 B-1, D-5): produced by `bun run build:member:*`,
+# never committed; the coupling gate polices sources, not artifacts.
+dist/

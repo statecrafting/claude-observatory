@@ -37,5 +37,5 @@
     "title": "Decision ledger: append-only choices, injected forward"
   },
   "shardHash": "9103a5a033d148889caa647b857eb5e00903c8ed6d0f6ecaec3a7f78612275e7",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

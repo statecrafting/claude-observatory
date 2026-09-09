@@ -37,5 +37,5 @@
     "title": "Run and stage state machine (transitions as data)"
   },
   "shardHash": "9b1da865ef4bb887ffa706022aca400f52884d2ad560c4fa7293ddccd0d696a8",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

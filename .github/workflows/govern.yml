@@ -30,6 +30,14 @@ jobs:
       # on the machine that wrote it. The output is never committed (.gitignore).
       - name: Build web UI
         run: bun run web:build
+      # Spec 042 FR-006: the three member binaries build in CI on the same
+      # reasoning. Each answers `--member-manifest`, so a target that compiles
+      # but cannot run standalone is caught here, not by the umbrella.
+      - name: Build members
+        run: |
+          bun run build:member:sensor && ./dist/statecraft-sensor-claude --member-manifest
+          bun run build:member:engine && ./dist/statecraft-engine --member-manifest
+          bun run build:member:driver && ./dist/statecraft-driver-claude --member-manifest
       # Unconditional: `bun test` discovers every test file itself (src/ and
       # web/test/); a conditional glob here silently narrows the contract.
       - name: Tests

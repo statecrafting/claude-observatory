@@ -35,5 +35,5 @@
     "title": "Background watcher daemon (pidfile lifecycle, plist print-only)"
   },
   "shardHash": "c2f4a2b38384e51300eb8fe5bc9ac53607251610191839878c4ac6fe916fb242",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

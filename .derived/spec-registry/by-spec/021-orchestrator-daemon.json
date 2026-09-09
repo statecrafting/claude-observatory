@@ -43,5 +43,5 @@
     "title": "Orchestrator daemon: the serial run loop"
   },
   "shardHash": "bc99c923b38b89486d798c1d11e01368019c8ace197596eabf515963c44aa75f",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

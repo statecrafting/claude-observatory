@@ -73,5 +73,5 @@
     "title": "Holdback validation: score a candidate corpus against real history"
   },
   "shardHash": "e269d8c42ed56f882a8fac5c6207e7511fda0a3018e7f96f87e8dfdd30809378",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

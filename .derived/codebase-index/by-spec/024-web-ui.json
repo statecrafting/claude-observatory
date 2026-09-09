@@ -70,8 +70,8 @@
           {
             "file": "package.json",
             "span": {
-              "endLine": 31,
-              "startLine": 20
+              "endLine": 34,
+              "startLine": 23
             }
           }
         ],
@@ -88,7 +88,7 @@
           {
             "file": "package.json",
             "span": {
-              "endLine": 16,
+              "endLine": 19,
               "startLine": 10
             }
           }
@@ -119,5 +119,5 @@
     "specStatus": "approved"
   },
   "schemaVersion": "1.1.0",
-  "shardHash": "1d2a8112285a519615bbbae06c85249db3a2e9d18403de884bd6955aee9a6ca3"
+  "shardHash": "d953153e25356097c764f1a25c1ff2743ef1c77846ec305d18e84b24121d1028"
 }

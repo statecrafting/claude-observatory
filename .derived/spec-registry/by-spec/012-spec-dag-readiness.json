@@ -37,5 +37,5 @@
     "title": "Spec DAG readiness: pinning, invalidation, cycle refusal"
   },
   "shardHash": "a9226f9a22d02e35628855fb340489ff3e479a78a82584968565ff4b3975ad97",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

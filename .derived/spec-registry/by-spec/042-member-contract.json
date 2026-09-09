@@ -54,7 +54,7 @@
       }
     ],
     "id": "042-member-contract",
-    "implementation": "pending",
+    "implementation": "complete",
     "kind": "feature",
     "references": [
       {
@@ -74,6 +74,7 @@
       "4. Functional requirements",
       "5. Acceptance criteria",
       "Verification",
+      "Status (2026-09-09)",
       "6. Out of scope",
       "7. Resolved decisions"
     ],
@@ -82,6 +83,6 @@
     "summary": "Design doc 01 rules that this repository stops being a product and becomes three members behind one umbrella CLI named `statecraft` (D13, D14). This spec is the packaging and protocol half of that move, and deliberately not the refactor: it adds three build targets, the manifest each one declares itself with, and the output contract the umbrella dispatches against, without moving a single function between layers. The engine stays internally Claude-aware until 043 takes that up. Two collisions found while authoring are resolved here rather than papered over. The envelope is not spec-spine's verdict shape as doc 01 D17 assumed; both this repo and statecraft-cli already emit `{ok, data|error}` and `src/orchestrator/api/types.ts` says so in as many words, so the family dialect wins and D17 is amended. The exit-code taxonomies genuinely differ (023 D-4 reads 2 as an unreachable daemon, while the umbrella's clap hardcodes 2 as usage), and rather than remap at the boundary and break every script that calls a member directly, the manifest declares the member's taxonomy, the umbrella passes codes through verbatim, and umbrella-layer failures move to a reserved range no member uses.\n",
     "title": "The member contract: build targets, manifests, and the shape the umbrella dispatches to"
   },
-  "shardHash": "49d74c48502cfd4425a4c3c6d263748eaecf6cabed0c06f3479a490007a8c7b3",
-  "specVersion": "1.1.0"
+  "shardHash": "36d68375a71289ec49775f06f5ba4504d90bf80632bb9a35e661a8e8b249e142",
+  "specVersion": "1.2.0"
 }

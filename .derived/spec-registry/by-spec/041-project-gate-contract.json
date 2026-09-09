@@ -211,5 +211,5 @@
     "title": "Project gate contract: per-project language gates as registry state"
   },
   "shardHash": "be1bf7131c504b7fbaee620fa322360d85721a49bc6e3843404325797a5965ca",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }

@@ -12,7 +12,10 @@
     "snapshot": "bun src/index.ts snapshot",
     "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p web/tsconfig.json",
     "web:dev": "bunx vite --config web/vite.config.ts",
-    "web:build": "bunx vite build --config web/vite.config.ts"
+    "web:build": "bunx vite build --config web/vite.config.ts",
+    "build:member:sensor": "bun build --compile src/members/sensor.ts --outfile dist/statecraft-sensor-claude",
+    "build:member:engine": "bun build --compile src/members/engine.ts --outfile dist/statecraft-engine",
+    "build:member:driver": "bun build --compile src/members/driver.ts --outfile dist/statecraft-driver-claude"
   },
   "spec-spine": {
     "spec": "000-bootstrap"

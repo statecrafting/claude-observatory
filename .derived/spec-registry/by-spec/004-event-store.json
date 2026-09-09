@@ -34,5 +34,5 @@
     "title": "Append-only SQLite event store and snapshots"
   },
   "shardHash": "2c8617efbcd7c1ee002f004350a9a32f76ad1a25c57ff8493176da422fe53a4b",
-  "specVersion": "1.1.0"
+  "specVersion": "1.2.0"
 }
