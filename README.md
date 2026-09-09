@@ -1,3 +1,10 @@
+> **Moved.** On 2026-09-09 this repository's tree and spec corpus moved into
+> [statecrafting/statecraft-cli](https://github.com/statecrafting/statecraft-cli)
+> (design doc 02 D24, statecraft-cli spec 110): the members live under
+> `members/`, the specs keep their ids under `specs/`, the design docs and
+> the evidence bundle under `docs/`. This repository is retired and kept for
+> its history; open issues and PRs there.
+
 # claude-observatory
 
 One Bun + TypeScript repo, two layers and a governance substrate:
