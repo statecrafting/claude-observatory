@@ -41,6 +41,12 @@ export const CORPUS_SET: readonly CorpusPathRule[] = [
   // non-deterministic build-meta.json) live in the root .gitignore, so that
   // one file is corpus; the scaffold prompt bounds what goes into it.
   { kind: "file", path: ".gitignore" },
+  // spec-spine 0.16.0 and later scaffold the cross-agent session protocol
+  // at the root as part of `init` (its kit is the same three rules plus this
+  // file), so a scaffold session under a current binary writes it whether
+  // the prompt asks or not. It is corpus in the same sense the rules are:
+  // it steers driven sessions and never touches source.
+  { kind: "file", path: "AGENTS.md" },
 ];
 
 function ruleCovers(rule: CorpusPathRule, path: string): boolean {

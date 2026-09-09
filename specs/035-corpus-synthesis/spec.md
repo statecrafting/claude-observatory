@@ -151,8 +151,13 @@ layout adopts by hand and still gets 036's replay, which reads any
 compiling corpus.
 
 D-4 (build session). The corpus set includes `.claude/rules/`,
-`.derived/`, and the root `.gitignore` alongside B-2's named three (the
-specs directory, the spec-spine config, standards). `spec-spine init`
+`.derived/`, the root `.gitignore`, and (since 2026-09-09) the root
+`AGENTS.md` alongside B-2's named three (the specs directory, the
+spec-spine config, standards). spec-spine 0.16.0 began writing `AGENTS.md`
+from plain `init`, so under a current binary every scaffold session on
+the reference layout wrote it and failed confinement, which is the same
+reason the rule seeds are in the set; it steers driven sessions and never
+touches source, and the ratification read is where its content is judged. `spec-spine init`
 writes the rule seeds as part of the scaffold, so a set without them
 would fail every scaffold session on the reference layout (D-3);
 `.derived/` is D-3's committed artifacts; and `.gitignore` is there for
