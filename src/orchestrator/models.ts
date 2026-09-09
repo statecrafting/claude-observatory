@@ -49,21 +49,12 @@ export const STAGE_MODEL_TIERS: Readonly<Record<Stage, ModelTier>> = {
 
 // --- the default pair (B-3) -------------------------------------------------
 
-// Plain ids, deliberately not the long-context variants (D-4). A 1M-context id
-// bills a wider window than any stage session has needed, and inheriting one
-// from an operator's interactive settings is exactly the accident this spec
-// closes. An operator who wants one sets it per project.
-export const DEFAULT_SESSION_MODELS: SessionModels = {
-  strong: "claude-opus-5",
-  fast: "claude-sonnet-5",
-};
-
-// --- the one derivation (B-1) -----------------------------------------------
-
-// The model id a stage spawns under. `models` absent means the project carries
-// no override, which is the common case and resolves to the default pair.
-export function modelForStage(stage: Stage, models?: SessionModels): string {
-  return (models ?? DEFAULT_SESSION_MODELS)[STAGE_MODEL_TIERS[stage]];
+// Moved to the driver member by spec 043 (D-7): the engine never names a
+// model id. It passes a tier, and the driver resolves it against the
+// project's pair or its own default. `tierForStage` is what the engine
+// keeps; the ids live in src/members/driver-session.ts.
+export function tierForStage(stage: Stage): ModelTier {
+  return STAGE_MODEL_TIERS[stage];
 }
 
 // --- payload codec (B-4, B-5) -----------------------------------------------
@@ -124,7 +115,8 @@ export function sessionModelsRefusal(strong: string | null, fast: string | null)
 // project on the defaults says so rather than rendering blank: "nobody chose"
 // is the state this spec exists to end, so no surface may look like it.
 export function renderSessionModels(models: SessionModels | undefined): string {
-  const pair = models ?? DEFAULT_SESSION_MODELS;
-  const origin = models === undefined ? " (default)" : "";
-  return `${pair.strong} / ${pair.fast}${origin}`;
+  // 043 D-7: the default pair is the driver's; the engine can only say that
+  // no override is set. `statecraft driver-claude models` prints the pair.
+  if (models === undefined) return "(driver default)";
+  return `${models.strong} / ${models.fast}`;
 }

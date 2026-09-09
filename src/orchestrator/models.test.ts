@@ -8,10 +8,9 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
-  DEFAULT_SESSION_MODELS,
   MODEL_TIERS,
   STAGE_MODEL_TIERS,
-  modelForStage,
+  tierForStage,
   parseSessionModels,
   renderSessionModels,
   sessionModelsPayload,
@@ -19,6 +18,9 @@ import {
   type SessionModels,
 } from "./models";
 import { parseProfile, profilePayload, type ExecutionProfile } from "./profile";
+// 043 D-7: the default pair and the id derivation live in the driver member.
+import { DEFAULT_SESSION_MODELS, resolveModel } from "../members/driver-session";
+const modelForStage = (stage: Stage, models?: SessionModels): string => resolveModel(tierForStage(stage), null, models)!;
 import {
   openProjectsChain,
   projectsFromChain,
@@ -118,9 +120,9 @@ test("models: a half-set pair is refused by a message that names the missing hal
 // --- rendering (B-6) --------------------------------------------------------
 
 test("models: a project on the defaults says so rather than rendering blank", () => {
-  expect(renderSessionModels(undefined)).toBe(
-    `${DEFAULT_SESSION_MODELS.strong} / ${DEFAULT_SESSION_MODELS.fast} (default)`
-  );
+  // 043 D-7: the engine cannot name the driver's default pair; it says whose
+  // it is. `statecraft driver-claude models` prints the ids.
+  expect(renderSessionModels(undefined)).toBe("(driver default)");
   expect(renderSessionModels(PAIR)).toBe("test-strong / test-fast");
 });
 

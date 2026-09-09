@@ -34,8 +34,8 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID, createHash } from "crypto";
 import type { JournalHandle, JsonValue } from "../journal";
-import { runSession as driveClaudeSession } from "../session";
-import { modelForStage } from "../models";
+import { createProcessDriver, type Driver } from "../driver";
+import { tierForStage } from "../models";
 import { resolveProfileSource, type ProfileSource } from "../profile";
 
 // --- Verification-section parser (B-1, FR-001) ------------------------------
@@ -389,7 +389,11 @@ export const BROWSER_MCP_PACKAGE = "@playwright/mcp@0.0.78";
 
 export interface CreateBrowserMcpVerifierParams {
   readonly repo: string;
-  readonly claudeBin?: string;
+  // 043 B-1: the seam the assertion session is driven through. Absent is
+  // the production process driver (043 B-5). A `basic` driver cannot host
+  // the MCP server set; the seam journals the degradation (043 B-6) and the
+  // assertion is reported as not passed with the feature named.
+  readonly driver?: Driver;
   // 040 B-1: an explicit override for a caller that has one (tests do). Absent
   // resolves the verify tier off the same profile the posture comes from, at
   // spawn time, so a pair set mid-run reaches the next assertion.
@@ -442,7 +446,7 @@ function readNewestScreenshot(outputDir: string): string | undefined {
 // of this function against a real browser session is run manually, not
 // checked into the suite (mirroring spec 014's own AC-2 live smoke).
 export function createBrowserMcpVerifier(params: CreateBrowserMcpVerifierParams): BrowserVerifier {
-  const claudeBin = params.claudeBin ?? "claude";
+  const driver = params.driver ?? createProcessDriver();
 
   return {
     async assert(url: string, assertion: string): Promise<BrowserAssertResult> {
@@ -465,10 +469,10 @@ export function createBrowserMcpVerifier(params: CreateBrowserMcpVerifierParams)
 
         let resultText: string | null = null;
         const profile = resolveProfileSource(params.profile);
-        const session = await driveClaudeSession({
+        const session = await driver.runSession({
           repo: params.repo,
-          claudeBin,
-          model: params.model ?? modelForStage("verify", profile.models),
+          tier: tierForStage("verify"),
+          ...(params.model === undefined ? {} : { model: params.model }),
           maxTurns: params.maxTurns ?? DEFAULT_BROWSER_MAX_TURNS,
           timeoutMs: params.timeoutMs ?? DEFAULT_BROWSER_TIMEOUT_MS,
           mcpConfigPath,

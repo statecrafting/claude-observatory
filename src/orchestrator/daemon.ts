@@ -68,12 +68,12 @@ import {
   ready,
   statusSchedulable,
 } from "./dag";
-import { killLiveSession, runSession } from "./session";
+import { createProcessDriver, killLiveSession, type Driver } from "./driver";
 import type { ProfileSource } from "./profile";
 import { resolveProfileSource } from "./profile";
 import type { AnyGateContract, GateBinding } from "./gate-contract";
 import { resolveGateBinding } from "./gate-contract";
-import { modelForStage } from "./models";
+import { tierForStage } from "./models";
 import type {
   BuildResult,
   ReadinessCheck,
@@ -238,7 +238,7 @@ export interface DaemonDeps {
   // wired here so the production factory can hand the same primitive to
   // every stage-adjacent seam that needs it, and so a test can inject a
   // throwing stub to prove the daemon's own code path never reaches it.
-  readonly runSession: typeof runSession;
+  readonly runSession: Driver["runSession"];
   // B-6, D-19: shutdown severs the live session child through this seam
   // (production: session.ts killLiveSession, process-wide because of the
   // serial invariant). Absent is a no-op, which keeps fixture deps that
@@ -327,7 +327,10 @@ export const DEFAULT_SLEEP_CHUNK_MS = 250;
 export interface CreateProductionDaemonDepsParams {
   readonly dataDir: string;
   readonly repoDir: string;
-  readonly claudeBin?: string;
+  // 043 B-1: the driver every session-spawning seam below drives through.
+  // Absent is the production process driver over the discovered driver
+  // member (043 B-5); tests pass one over a fake driver script.
+  readonly driver?: Driver;
   readonly ghBin?: string;
   // Set by spec 026's scheduler for a project's run; see DaemonDeps.supervised.
   readonly supervised?: boolean;
@@ -348,8 +351,9 @@ export interface CreateProductionDaemonDepsParams {
 }
 
 export function createProductionDaemonDeps(params: CreateProductionDaemonDepsParams): DaemonDeps {
-  const { dataDir, repoDir, claudeBin, ghBin, profile } = params;
-  const runner = createProcessRunner({ repoDir, claudeBin, profile });
+  const { dataDir, repoDir, ghBin, profile } = params;
+  const driver = params.driver ?? createProcessDriver();
+  const runner = createProcessRunner({ repoDir, driver, profile });
   return {
     dataDir,
     repoDir,
@@ -393,8 +397,8 @@ export function createProductionDaemonDeps(params: CreateProductionDaemonDepsPar
     },
     gh: createProcessGitHubClient({ repoDir, ghBin }),
     verifyRunner: createProcessVerifyRunner({ repoDir }),
-    browserVerifier: createBrowserMcpVerifier({ repo: repoDir, claudeBin, profile }),
-    runSession,
+    browserVerifier: createBrowserMcpVerifier({ repo: repoDir, driver, profile }),
+    runSession: (request) => driver.runSession(request),
     killLiveSession,
     processInspector: createProcessInspector(),
     clock: { now: () => Date.now() },
@@ -1715,11 +1719,16 @@ export class Daemon {
     // Read per call rather than per daemon, for the reason 032 B-4 reads the
     // profile per spawn: a pair an operator set mid-run reaches the next
     // stage, not the next daemon.
-    const model = modelForStage(stage, resolveProfileSource(this.deps.profile).models);
+    // 043 B-1: the engine names a tier, never an id; the project's own pair,
+    // when set, is the one explicit id it passes, and the driver resolves
+    // the rest.
+    const tier = tierForStage(stage);
+    const model = resolveProfileSource(this.deps.profile).models?.[tier];
     switch (stage) {
       case "build": {
         const options: RunBuildStageOptions = {
           runner: this.deps.runner,
+          tier,
           model,
           specId: specExec.specId,
           journal: this.workJournal,
@@ -1739,6 +1748,7 @@ export class Daemon {
       case "ship": {
         const options: RunShipStageOptions = {
           runner: this.deps.runner,
+          tier,
           model,
           gh: this.deps.gh,
           specId: specExec.specId,
@@ -1750,6 +1760,7 @@ export class Daemon {
       case "shepherd": {
         const options: RunShepherdStageOptions = {
           runner: this.deps.runner,
+          tier,
           model,
           gh: this.deps.gh,
           specId: specExec.specId,

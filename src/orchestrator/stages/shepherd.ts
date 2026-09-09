@@ -22,6 +22,7 @@
 // `claude` or `gh` process, mirroring spec 014's and spec 017's own
 // convention.
 import type { JournalHandle, JsonValue } from "../journal";
+import type { ModelTier } from "../models";
 import { sha256Hex } from "../journal";
 import { GATE_COMMANDS, DEFAULT_BASE_BRANCH, type Runner } from "./build";
 import { gateSuiteFor, resolveGateBinding, type GateBinding } from "../gate-contract";
@@ -328,6 +329,7 @@ export interface RunShepherdStageOptions {
   readonly logTailBytes?: number;
   readonly remediationDeadlineMs?: number;
   readonly maxTurns?: number;
+  readonly tier?: ModelTier;
   readonly model?: string;
   // 041 B-4: the owning project's gate contract, or a late-bound read of it.
   // The remediation prompt lists the project's gate, not this repo's.
@@ -481,6 +483,7 @@ export async function runShepherdStage(options: RunShepherdStageOptions): Promis
       prompt,
       timeoutMs: remediationDeadlineMs,
       maxTurns,
+      tier: options.tier,
       model: options.model,
       journal,
     });

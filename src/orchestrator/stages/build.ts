@@ -18,7 +18,8 @@
 import * as fs from "fs";
 import { join } from "path";
 import type { JournalHandle, JsonValue } from "../journal";
-import { runSession as driveClaudeSession, type SessionResult } from "../session";
+import { createProcessDriver, type Driver, type SessionResult } from "../driver";
+import type { ModelTier } from "../models";
 import { resolveProfileSource, type ProfileSource } from "../profile";
 import {
   GATE_COMMANDS,
@@ -45,6 +46,8 @@ export interface GateResult {
 
 export interface RunnerSessionOptions {
   readonly prompt: string;
+  // 043 B-1: a tier the driver resolves, or an explicit id that wins.
+  readonly tier?: ModelTier;
   readonly model?: string;
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
@@ -106,7 +109,9 @@ function requireOk(cwd: string, cmd: readonly string[], label: string): void {
 
 export interface CreateProcessRunnerParams {
   readonly repoDir: string;
-  readonly claudeBin?: string;
+  // 043 B-1: the one seam a session is driven through. Absent is the
+  // production process driver over the discovered driver member (043 B-5).
+  readonly driver?: Driver;
   // The owning project's execution posture (spec 032 B-4), read at spawn
   // time when passed as a function. Absent derives 032 D-1's default, which
   // is the argv this runner produced before profiles existed. Ship and
@@ -123,7 +128,7 @@ export interface CreateProcessRunnerParams {
 // against a genuine repository.
 export function createProcessRunner(params: CreateProcessRunnerParams): Runner {
   const { repoDir } = params;
-  const claudeBin = params.claudeBin ?? "claude";
+  const driver = params.driver ?? createProcessDriver();
 
   return {
     statusClean(): boolean {
@@ -201,7 +206,7 @@ export function createProcessRunner(params: CreateProcessRunnerParams): Runner {
       // The profile is applied after the caller's options, not merged with
       // them: a stage asks for a prompt, a model, and a deadline; what the
       // session may do on the operator's machine is not a stage's to name.
-      return driveClaudeSession({ repo: repoDir, claudeBin, ...options, profile: resolveProfileSource(params.profile) });
+      return driver.runSession({ repo: repoDir, ...options, profile: resolveProfileSource(params.profile) });
     },
   };
 }
@@ -639,6 +644,7 @@ export interface RunBuildStageOptions {
   readonly defaultBranch?: string;
   readonly deadlineMs?: number;
   readonly maxTurns?: number;
+  readonly tier?: ModelTier;
   readonly model?: string;
   // 041 B-4: the owning project's gate contract, or a late-bound read of it.
   // Absent is 041 B-3's legacy fold, which runs the spec-spine floor and
@@ -770,7 +776,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
   // --- B-4: drive (one session, at most one remediation) ---
   const sessions: SessionEvidence[] = [];
 
-  const first = await runner.runSession({ prompt: promptBase, timeoutMs, maxTurns, model: options.model, journal });
+  const first = await runner.runSession({ prompt: promptBase, timeoutMs, maxTurns, tier: options.tier, model: options.model, journal });
   sessions.push(toSessionEvidence(first));
 
   let blocked = first.classification.kind === "hook-blocked";
@@ -801,6 +807,7 @@ export async function runBuildStage(options: RunBuildStageOptions): Promise<Buil
       prompt: secondPrompt,
       timeoutMs,
       maxTurns,
+      tier: options.tier,
       model: options.model,
       journal,
     });
